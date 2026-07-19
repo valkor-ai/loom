@@ -1598,13 +1598,7 @@ fn normalize_frontend_ui_surface_decision_contract(
         return false;
     };
     let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
-    let surface_contract_changed =
-        normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed);
-    let removed_legacy = frontend_experience
-        .as_object_mut()
-        .and_then(|object| object.remove("uiQualityContract"))
-        .is_some();
-    surface_contract_changed || removed_legacy
+    normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed)
 }
 
 fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {
@@ -1666,27 +1660,23 @@ fn runtime_endpoint_present(runtime: &Value, field: &str) -> bool {
 }
 
 fn runtime_frontend_is_served_by_integrated_app(runtime: &Value) -> bool {
-    [
-        "/frontend/servedBy",
-        "/frontend/servedByRef",
-        "/deliveryMechanics/staticAssets/servedBy",
-    ]
-    .iter()
-    .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
-    .any(|value| {
-        let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
-        [
-            "springbootstatic",
-            "backendstatic",
-            "serverstatic",
-            "servicestatic",
-            "appstatic",
-            "sameprocess",
-            "sameapp",
-        ]
+    ["/frontend/servedBy", "/frontend/servedByRef"]
         .iter()
-        .any(|needle| normalized.contains(needle))
-    })
+        .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
+        .any(|value| {
+            let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+            [
+                "springbootstatic",
+                "backendstatic",
+                "serverstatic",
+                "servicestatic",
+                "appstatic",
+                "sameprocess",
+                "sameapp",
+            ]
+            .iter()
+            .any(|needle| normalized.contains(needle))
+        })
 }
 
 fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
@@ -1712,16 +1702,20 @@ fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
 
 fn runtime_labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
     let mut labels = Vec::new();
-    for command in [
-        runtime.pointer("/build/command").and_then(Value::as_str),
-        runtime.pointer("/buildCommand").and_then(Value::as_str),
-        runtime.pointer("/start/command").and_then(Value::as_str),
-        runtime.pointer("/startCommand").and_then(Value::as_str),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        labels.extend(runtime_labeled_command_segments(command));
+    for phase in ["development", "verification", "deployment"] {
+        for command in [
+            runtime
+                .pointer(&format!("/commands/{phase}/build/command"))
+                .and_then(Value::as_str),
+            runtime
+                .pointer(&format!("/commands/{phase}/start/command"))
+                .and_then(Value::as_str),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            labels.extend(runtime_labeled_command_segments(command));
+        }
     }
     let has_frontend = labels
         .iter()
@@ -1794,52 +1788,29 @@ fn validate_runtime_rules(
             "content.runtimeDelivery.basis.technicalBaselineRef",
             &mut issues,
         );
-        require_runtime_string(
-            runtime,
-            "/build/command",
-            "content.runtimeDelivery.build.command",
-            &mut issues,
-        );
-        require_runtime_array(
-            runtime,
-            "/build/codeLevelExpectations",
-            "content.runtimeDelivery.build.codeLevelExpectations",
-            &mut issues,
-        );
-        if runtime.get("start").is_some() {
-            require_runtime_array(
+        for phase in ["development", "verification", "deployment"] {
+            require_runtime_string(
                 runtime,
-                "/start/codeLevelExpectations",
-                "content.runtimeDelivery.start.codeLevelExpectations",
+                &format!("/commands/{phase}/build/command"),
+                &format!("content.runtimeDelivery.commands.{phase}.build.command"),
+                &mut issues,
+            );
+            require_runtime_string(
+                runtime,
+                &format!("/commands/{phase}/start/command"),
+                &format!("content.runtimeDelivery.commands.{phase}.start.command"),
                 &mut issues,
             );
             if runtime
-                .pointer("/start/port")
+                .pointer(&format!("/commands/{phase}/start/port"))
                 .is_some_and(|port| !port.is_number())
             {
                 issues.push(issue(
                     "RUNTIME_FIELD_INVALID",
-                    "content.runtimeDelivery.start.port",
-                    "runtime_delivery start.port must be a number when present; omit it when unknown.",
+                    &format!("content.runtimeDelivery.commands.{phase}.start.port"),
+                    &format!("runtime_delivery {phase} start.port must be a number when present; omit it when unknown."),
                 ));
             }
-        }
-        if runtime
-            .pointer("/start/command")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-            && runtime
-                .get("runtimeSurfaces")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-        {
-            issues.push(issue(
-                "RUNTIME_START_OR_SURFACE_REQUIRED",
-                "content.runtimeDelivery.start.command",
-                "runtime_delivery status=modified requires start.command or at least one runtimeSurfaces entry.",
-            ));
         }
         require_runtime_non_empty_array(
             runtime,
@@ -1864,6 +1835,7 @@ fn validate_runtime_rules(
                             field.as_str(),
                             "dependencyId"
                                 | "kind"
+                                | "provider"
                                 | "requiredFor"
                                 | "startupRequirement"
                                 | "failureBehavior"
@@ -2019,14 +1991,6 @@ fn validate_runtime_rules(
                 &mut issues,
             );
         }
-        if runtime.pointer("/deliveryMechanics/codegen").is_some() {
-            require_runtime_array(
-                runtime,
-                "/deliveryMechanics/codegen/codeLevelExpectations",
-                "content.runtimeDelivery.deliveryMechanics.codegen.codeLevelExpectations",
-                &mut issues,
-            );
-        }
     }
     issues
 }
@@ -2058,6 +2022,9 @@ fn validate_runtime_dependency_seed(
             dependency.get("dependencyId").and_then(Value::as_str) == Some(candidate_id)
                 && dependency.get("kind") == candidate.get("kind")
                 && dependency.get("startupRequirement") == candidate.get("startupRequirement")
+                && candidate
+                    .get("provider")
+                    .is_none_or(|provider| dependency.get("provider") == Some(provider))
         });
         if !matched {
             issues.push(issue(
@@ -2088,21 +2055,6 @@ fn require_runtime_string(
             "RUNTIME_FIELD_REQUIRED",
             field_path,
             "runtime_delivery status=modified requires this field for TaskPlan, Execution, Deploy, and Repair.",
-        ));
-    }
-}
-
-fn require_runtime_array(
-    root: &Value,
-    pointer: &str,
-    field_path: &str,
-    issues: &mut Vec<delivery_core::RepairIssue>,
-) {
-    if root.pointer(pointer).and_then(Value::as_array).is_none() {
-        issues.push(issue(
-            "RUNTIME_FIELD_REQUIRED",
-            field_path,
-            "runtime_delivery status=modified requires this array field for code-level verification planning.",
         ));
     }
 }
@@ -4807,10 +4759,6 @@ mod tests {
             Some("collection_workbench"),
             "uiSurfaceDecisionContract pattern must be derived from surfaceDecisionCandidate"
         );
-        assert!(
-            frontend.get("uiQualityContract").is_none(),
-            "submit normalization must not persist legacy uiQualityContract"
-        );
         let issues = validate_ui_surface_decision_contract(frontend);
         assert!(
             issues.is_empty(),
@@ -4971,28 +4919,7 @@ fn assemble_architecture_contract(
         .ok_or_else(|| {
             state::store::StateError::StateCorrupted("missing coverage section".to_string())
         })?;
-    let source = ArchitectureArtifactSource {
-        planning_generation_contract_id: foundation
-            .content
-            .pointer("/source/planningGenerationContractId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        technical_baseline_id: foundation
-            .content
-            .pointer("/source/technicalBaselineId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        brainstorm_contract_ref: source_refs
-            .get("brainstormContractRef")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        repository_context_ref: source_refs
-            .get("repositoryContextRef")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    };
+    let source = canonical_architecture_source(root, source_refs)?;
     let acceptance_matrix: Vec<AcceptanceMatrixEntry> = serde_json::from_value(
         coverage
             .content
@@ -5080,6 +5007,44 @@ fn assemble_architecture_contract(
         handoff,
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
+    })
+}
+
+fn canonical_architecture_source(
+    project_root: &Path,
+    source_refs: &Value,
+) -> Result<ArchitectureArtifactSource, state::store::StateError> {
+    let planning_ref = source_refs
+        .get("planningContractRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "Architecture source requires the accepted planning contract ref.".to_string(),
+            )
+        })?;
+    let baseline_ref = source_refs
+        .get("technicalBaselineRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "Architecture source requires the accepted Technical Baseline ref.".to_string(),
+            )
+        })?;
+    let planning: contracts::PlanningGenerationContract =
+        read_project_json(project_root, planning_ref)?;
+    let baseline: contracts::TechnicalBaselineContract =
+        read_project_json(project_root, baseline_ref)?;
+    Ok(ArchitectureArtifactSource {
+        planning_generation_contract_id: planning.planning_contract_id,
+        technical_baseline_id: baseline.technical_baseline_id,
+        brainstorm_contract_ref: source_refs
+            .get("brainstormContractRef")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        repository_context_ref: source_refs
+            .get("repositoryContextRef")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 

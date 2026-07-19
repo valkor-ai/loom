@@ -2162,14 +2162,19 @@ fn task_owns_frontend_surface(task: &TaskDefinition) -> bool {
 }
 
 fn task_owns_test_implementation(task: &TaskDefinition) -> bool {
-    matches!(task.task_kind, TaskKind::VerificationIncrement)
-        || task.implementation_actions.iter().any(|action| {
-            matches!(
-                action,
-                ImplementationAction::AddOrUpdateTests
-                    | ImplementationAction::AddOrUpdatePersistenceTests
-            )
-        })
+    if matches!(task.task_kind, TaskKind::VerificationIncrement) {
+        return true;
+    }
+    if task_is_frontend_task(task) {
+        return false;
+    }
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::AddOrUpdateTests
+                | ImplementationAction::AddOrUpdatePersistenceTests
+        )
+    })
 }
 
 fn task_is_backend_task(task: &TaskDefinition) -> bool {

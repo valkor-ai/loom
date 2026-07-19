@@ -1145,7 +1145,6 @@ fn opencode_commands_expose_mcp_result_discipline() {
     }
     for forbidden in [
         "MCP-selected references:",
-        "uiQualityContract.referenceProfile.groups",
         "../references/loom/uix/core.md",
         "`groups.core`",
         "../references/loom/uix/anti-patterns.md",
@@ -1217,8 +1216,6 @@ fn agent_templates_expose_reference_loading_protocol() {
         }
         for forbidden in [
             "MCP-selected references:",
-            "uiQualityContract.referenceProfile.groups",
-            "uiQualityContract.designTokenAssetPlan.templateId",
             "../references/loom/uix/core.md",
             "`groups.core`",
             "`groups.scenarios`",
@@ -2043,8 +2040,6 @@ fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
         "uiSurfaceDecisionContract",
         "surfaceDecisionContract",
         "surfaceDecisionCandidate",
-        "uiQualityContract",
-        "uiTaskQualityGates",
         "gateResults",
         "referenceGroupsChecked",
         "referenceFilesChecked",

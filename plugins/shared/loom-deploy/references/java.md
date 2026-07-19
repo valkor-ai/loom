@@ -40,7 +40,7 @@ Use this reference when implementing or repairing loom deploy support for Java-f
 ## Persistence And Migrations
 
 - JDBC URLs using Compose dependency services must use service DNS names, not `localhost`.
-- File database URLs such as SQLite, H2 file, HSQLDB file, and Derby file should point at a writable mounted container path such as `/app/data`.
+- File database URLs such as SQLite, H2 file, HSQLDB file, and Derby file must use the writable `containerPath` selected in `DeploymentSpec.storageFacts`; do not assume a fixed directory.
 - When Flyway or Liquibase is detected, treat migration tooling as the schema owner for local deployment. Framework schema validation that is known to misread file database type affinity should be disabled or downgraded with a safe local generated env override instead of causing container startup failure.
 - Do not assume SQLite for every Java app. Use this path only when repository config or generated env explicitly points at a file database.
 

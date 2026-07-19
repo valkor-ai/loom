@@ -68,7 +68,7 @@ Record boundary, scenario, command, and meaningful widget/state/route/platform a
 
 ## Unsafe Defaults
 
-- Flutter testing reference loaded for implementation-only tasks.
+- Load this reference only when the accepted task owns Flutter test creation, test modification, or test-specific verification.
 - Whole-app widget tests for every pure rule.
 - Private State mutation or mocked state claimed as implementation proof.
 - `pumpAndSettle`/arbitrary sleeps used without understanding pending work.

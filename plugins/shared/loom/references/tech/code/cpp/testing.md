@@ -76,7 +76,7 @@ Name the behavior/invariant, test layer, configuration/compiler/platform, and as
 
 ## Unsafe Defaults
 
-- Testing reference loaded for every C++ implementation task.
+- Load this reference only when the accepted task owns C++ test creation, test modification, or test-specific verification.
 - New test framework added despite repository tooling.
 - Private call order asserted instead of public behavior.
 - Sleep-only concurrency tests or sanitizer-clean claims over unexecuted paths.

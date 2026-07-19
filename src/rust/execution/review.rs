@@ -17,6 +17,7 @@ use delivery_core::{
     LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
     TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
+use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicability};
 use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
@@ -3480,26 +3481,65 @@ fn build_concept_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]
 }
 
 fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Vec<Value> {
-    let satisfied = task_results
-        .iter()
-        .flat_map(|result| {
-            result
-                .requirement_detail_evidence
-                .iter()
-                .filter(|evidence| evidence.status == "satisfied")
-                .map(|evidence| evidence.detail_id.clone())
-        })
-        .collect::<BTreeSet<_>>();
     task_plan
         .tasks
         .iter()
         .flat_map(|task| {
             task.requirement_detail_refs.iter().map(|detail_id| {
-                let ok = satisfied.contains(detail_id);
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == task.task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .requirement_detail_evidence
+                        .iter()
+                        .find(|evidence| evidence.detail_id == *detail_id)
+                });
+                let passed_ids = result
+                    .map(|result| {
+                        result
+                            .verification_results
+                            .iter()
+                            .filter(|verification| verification.status == "passed")
+                            .map(|verification| verification.verification_id.as_str())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let verification_supported = evidence
+                    .map(|evidence| {
+                        !evidence.verification_ids.is_empty()
+                            && evidence
+                                .verification_ids
+                                .iter()
+                                .all(|id| passed_ids.contains(id.as_str()))
+                    })
+                    .unwrap_or(false);
+                let artifact_supported = result
+                    .map(|result| {
+                        !result.changed_files.is_empty() || result.no_change_reason.is_some()
+                    })
+                    .unwrap_or(false);
+                let ok = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        contracts::TaskResultStatus::Completed
+                            | contracts::TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        evidence.status == "satisfied"
+                            && !evidence.summary.trim().is_empty()
+                            && !evidence.evidence_refs.is_empty()
+                            && verification_supported
+                            && artifact_supported
+                    })
+                });
                 json!({
                     "detailId": detail_id,
                     "taskId": task.task_id,
                     "detailSatisfied": ok,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "verificationSupported": verification_supported,
+                    "artifactSupported": artifact_supported,
                     "recommendedNextAction": if ok { "none" } else { "execution_repair" }
                 })
             })
@@ -3519,18 +3559,25 @@ fn build_engineering_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
                 let passed_verifications = result
                     .map(passed_verification_summaries)
                     .unwrap_or_default();
-                let satisfied = result
-                    .map(|result| {
-                        matches!(
-                            result.status,
-                            contracts::TaskResultStatus::Completed
-                                | contracts::TaskResultStatus::CompletedWithNotes
-                        ) && !passed_verifications.is_empty()
-                    })
-                    .unwrap_or(false);
+                let satisfied = applicability.engineering_quality_evidence
+                    && result
+                        .map(|result| {
+                            matches!(
+                                result.status,
+                                contracts::TaskResultStatus::Completed
+                                    | contracts::TaskResultStatus::CompletedWithNotes
+                            ) && !passed_verifications.is_empty()
+                        })
+                        .unwrap_or(false);
                 json!({
                     "requirementId": requirement.requirement_id,
                     "kind": requirement.kind,
@@ -3564,12 +3611,20 @@ fn build_code_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let evidence = result.and_then(|result| {
-                    result
-                        .code_quality_evidence
-                        .iter()
-                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                });
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
+                let evidence = result
+                    .filter(|_| applicability.code_quality_evidence)
+                    .and_then(|result| {
+                        result
+                            .code_quality_evidence
+                            .iter()
+                            .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                    });
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3698,12 +3753,20 @@ fn build_architecture_quality_review_matrix(
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == *task_id);
-            let evidence = result.and_then(|result| {
-                result
-                    .architecture_quality_evidence
-                    .iter()
-                    .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-            });
+            let applicability = task_plan
+                .tasks
+                .iter()
+                .find(|task| task.task_id == *task_id)
+                .map(task_evidence_applicability)
+                .unwrap_or_default();
+            let evidence = result
+                .filter(|_| applicability.architecture_quality_evidence)
+                .and_then(|result| {
+                    result
+                        .architecture_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
             let passed_verification_ids = result
                 .map(|result| {
                     result
@@ -3757,7 +3820,13 @@ fn build_api_contract_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let evidence = result.and_then(|result| {
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
+                let evidence = result.filter(|_| applicability.api_contract_evidence).and_then(|result| {
                     result
                         .api_contract_evidence
                         .iter()
@@ -3890,6 +3959,10 @@ fn build_frontend_quality_review_matrix(
         .iter()
         .filter_map(|task| {
             let requirement = task.frontend_experience_requirement.as_ref()?;
+            let applicability = task_evidence_applicability(task);
+            if !applicability.frontend_quality_self_check {
+                return None;
+            }
             let surface_contract =
                 task_scoped_surface_contract_for_review(requirement, architecture_contract);
             if !surface_contract.is_object() {
@@ -4078,24 +4151,14 @@ fn task_scoped_surface_contract_for_review(
         return Value::Null;
     }
 
-    let ownership = requirement
-        .get("uiSurfaceOwnership")
-        .unwrap_or(&Value::Null);
-    let region_ids = string_array_field(ownership, "regionIdsInScope");
-    let action_ids = string_array_field(ownership, "actionIdsInScope");
-    let state_ids = string_array_field(ownership, "stateKindsInScope");
-    let quality_rule_ids = string_array_field(ownership, "qualityRuleIdsInScope");
+    let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
+    let region_ids = object_id_array_field(scope, "regionsInScope", "regionId");
+    let action_ids = object_id_array_field(scope, "actionsInContract", "actionId");
+    let state_ids = object_id_array_field(scope, "statesInContract", "state");
+    let quality_rule_ids = object_id_array_field(scope, "qualityRulesInScope", "ruleId");
     json!({
         "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": if region_ids.is_empty()
-            && action_ids.is_empty()
-            && state_ids.is_empty()
-            && quality_rule_ids.is_empty()
-        {
-            "all_when_task_scope_empty"
-        } else {
-            "task_scope"
-        },
+        "selectionMode": "task_scope",
         "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
         "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
         "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
@@ -4111,6 +4174,16 @@ fn task_scoped_surface_contract_for_review(
     })
 }
 
+fn object_id_array_field(value: &Value, key: &str, id_key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_key).and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
 fn selected_surface_contract_values(
     contract: &Value,
     array_key: &str,
@@ -4124,7 +4197,7 @@ fn selected_surface_contract_values(
         .flatten()
         .collect::<Vec<_>>();
     if ids.is_empty() {
-        return values.into_iter().cloned().collect();
+        return Vec::new();
     }
     let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
     values
@@ -4772,7 +4845,13 @@ fn build_review_signals(
         }
     }
     for result in task_results {
-        if result.runtime_delivery_evidence.is_some() {
+        let applicability = task_plan
+            .tasks
+            .iter()
+            .find(|task| task.task_id == result.task_id)
+            .map(task_evidence_applicability)
+            .unwrap_or_default();
+        if applicability.runtime_delivery_evidence && result.runtime_delivery_evidence.is_some() {
             signals.push(json!({
                 "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4781,7 +4860,7 @@ fn build_review_signals(
                 "evidenceType": "runtime_delivery"
             }));
         }
-        if result.frontend_experience_self_check.is_some() {
+        if applicability.frontend_self_check && result.frontend_experience_self_check.is_some() {
             signals.push(json!({
                 "signalId": format!("sig-frontend-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4790,7 +4869,8 @@ fn build_review_signals(
                 "evidenceType": "frontend_experience"
             }));
         }
-        if result.frontend_quality_self_check.is_some() {
+        if applicability.frontend_quality_self_check && result.frontend_quality_self_check.is_some()
+        {
             signals.push(json!({
                 "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4801,6 +4881,13 @@ fn build_review_signals(
         }
     }
     Value::Array(signals)
+}
+
+fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
+    serde_json::to_value(task)
+        .ok()
+        .map(|value| task_evidence_applicability_from_value(&value))
+        .unwrap_or_default()
 }
 
 fn value_string_array(value: &Value, key: &str) -> Vec<String> {

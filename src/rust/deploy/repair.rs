@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use state::{
     paths::{from_project_relative, to_project_relative},
     request_index::get_request_index_entry,
+    request_manifest::request_storage_ref,
     store::{
         ensure_dir, now_millis, now_string, path_exists, read_json, read_json_value,
         write_json_atomic, StateError, StateResult,
@@ -1018,10 +1019,12 @@ fn existing_materialized_execution_repair(
         if path_exists(&entry.path().join("result.json")) {
             continue;
         }
-        let output_contract_file = entry.path().join("request.refs/output-contract.json");
-        if !path_exists(&output_contract_file) {
+        let Some(output_contract_ref) =
+            request_storage_ref(project_root, &request_id, "outputContract")?
+        else {
             continue;
-        }
+        };
+        let output_contract_file = from_project_relative(project_root, &output_contract_ref)?;
         let output_contract = read_json_value(&output_contract_file)?;
         let same_repair = output_contract
             .get("repairId")
@@ -1294,19 +1297,21 @@ fn failed_contract_for(
     match failure_kind {
         DeploymentFailureKind::BuildCommandFailed => DeploymentFailedContract {
             field: "build.command".to_string(),
-            command: spec.runtime_contract.build_command.clone(),
+            command: spec.runtime_contract.commands.deployment.build.clone(),
             working_directory,
         },
         DeploymentFailureKind::StartCommandFailed => DeploymentFailedContract {
             field: "start.command".to_string(),
-            command: spec.runtime_contract.start_command.clone(),
+            command: spec.runtime_contract.commands.deployment.start.clone(),
             working_directory,
         },
         DeploymentFailureKind::ApplicationStartupFailed => DeploymentFailedContract {
             field: "runtime.startup".to_string(),
             command: spec
                 .runtime_contract
-                .start_command
+                .commands
+                .deployment
+                .start
                 .clone()
                 .or_else(|| primary.and_then(|service| service.start_command.clone())),
             working_directory,

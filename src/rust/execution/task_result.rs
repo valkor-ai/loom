@@ -159,12 +159,10 @@ where
         "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+        "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
         "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
         "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
         "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-        "task.frontendExperienceRequirement.uiSurfaceOwnership",
     ] {
         if source_repair || allowed_read_fields.contains(optional_field) {
             task_fields_to_read.push(optional_field.to_string());
@@ -1959,6 +1957,13 @@ fn validate_requirement_detail_evidence(
                 "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
                 "requirementDetailEvidence[].verificationIds",
                 "Satisfied requirement detail evidence must link only to passed verification results.",
+            ));
+        }
+        if evidence.status == "satisfied" && evidence.evidence_refs.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].evidenceRefs",
+                "Satisfied requirement detail evidence must cite at least one concrete evidence reference.",
             ));
         }
     }
@@ -3889,7 +3894,6 @@ fn materialize_task_result_repair(
             "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
             "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
             "taskProjection.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "taskProjection.frontendExperienceRequirement.uiSurfaceOwnership",
         ]);
     }
     if runtime_delivery_evidence_applies(&context.task) {
@@ -5100,7 +5104,7 @@ fn frontend_experience_requirement_from_fields(
     );
     let has_surface_contract = fields
         .contains_key("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef")
-        || fields.contains_key("task.frontendExperienceRequirement.uiSurfaceOwnership")
+        || fields.contains_key("task.frontendExperienceRequirement.executionGuidance.uiTaskScope")
         || fields.contains_key("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
         || fields.contains_key(
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
@@ -5117,25 +5121,12 @@ fn frontend_experience_requirement_from_fields(
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
         );
     }
-    let surfaces_in_scope = array_field(
+    let ui_task_scope = value_field(
         fields,
-        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+        "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
     );
-    if surfaces_in_scope
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        requirement["executionGuidance"]["surfacesInScope"] = surfaces_in_scope;
-    }
-    let actions_in_scope = array_field(
-        fields,
-        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-    );
-    if actions_in_scope
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        requirement["executionGuidance"]["actionsInScope"] = actions_in_scope;
+    if ui_task_scope.is_object() {
+        requirement["executionGuidance"]["uiTaskScope"] = ui_task_scope;
     }
     let surface_contract_ref = value_field(
         fields,
@@ -5143,13 +5134,6 @@ fn frontend_experience_requirement_from_fields(
     );
     if !surface_contract_ref.is_null() {
         requirement["uiSurfaceDecisionContractRef"] = surface_contract_ref;
-    }
-    let surface_ownership = value_field(
-        fields,
-        "task.frontendExperienceRequirement.uiSurfaceOwnership",
-    );
-    if !surface_ownership.is_null() {
-        requirement["uiSurfaceOwnership"] = surface_ownership;
     }
     let ui_production_brief = value_field(
         fields,

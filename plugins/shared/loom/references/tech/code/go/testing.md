@@ -82,7 +82,7 @@ Name behavior/invariant, test layer/tag/runtime, and assertion/tool result. Test
 
 ## Unsafe Defaults
 
-- Go testing loaded for every implementation task.
+- Load this reference only when the accepted task owns Go test creation, test modification, or test-specific verification.
 - Every test forced into a table or marked parallel.
 - Sleep-only concurrency synchronization.
 - Unit tests unexpectedly requiring external infrastructure.

@@ -7,7 +7,6 @@ pub fn build_topology(
     runtime: &DeploymentRuntimeContract,
     source_model: &DeploymentSourceModel,
 ) -> DeploymentTopology {
-    let health_path = runtime.health_path.as_deref().map(normalize_path);
     let preview_service = preview_service(source_model);
     let public_entry = preview_service
         .map(|service| service.service_id.clone())
@@ -21,7 +20,7 @@ pub fn build_topology(
             });
         }
     }
-    if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend) {
+    if source_model.shape == DeploymentShape::FrontendAndBackend {
         if let Some(backend) = backend_service(source_model) {
             routes.push(DeploymentRoute::HttpProxy {
                 public_path: api_base_path(runtime),
@@ -35,15 +34,7 @@ pub fn build_topology(
             });
         }
     }
-    let mut preview_paths = if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend)
-    {
-        vec![runtime.preview_path.clone()]
-    } else {
-        health_path
-            .clone()
-            .map(|path| vec![path])
-            .unwrap_or_else(|| vec![runtime.preview_path.clone()])
-    };
+    let mut preview_paths = vec![runtime.preview_path.clone()];
     if preview_paths.is_empty() {
         preview_paths.push("/".to_string());
     }

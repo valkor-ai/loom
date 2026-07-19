@@ -789,11 +789,7 @@ fn build_repair_execution_request(
             "taskProjection.frontendExperienceRequirement.executionGuidance.purpose",
             "taskProjection.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
             "taskProjection.frontendExperienceRequirement.executionGuidance.responsibility",
-            "taskProjection.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "taskProjection.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
-            "taskProjection.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "taskProjection.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
-            "taskProjection.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiTaskScope",
             "taskProjection.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
             "taskProjection.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "taskProjection.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
@@ -801,7 +797,6 @@ fn build_repair_execution_request(
             "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
             "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
             "taskProjection.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "taskProjection.frontendExperienceRequirement.uiSurfaceOwnership",
             "executionRules.frontendImplementationOrganizationRules",
             "executionRules.interactiveVerificationProbePolicy",
             "executionRules.controlledRuntimeProbeRules",
@@ -1631,12 +1626,9 @@ fn materialize_architecture_repair_action(
         })
         .unwrap_or(Value::Null);
     let context_projection = json!({
-        "phaseScope": {
-            "phaseName": value_field(&core_fields, "contextProjection.phaseScope.phaseName"),
-            "phaseGoal": value_field(&core_fields, "contextProjection.phaseScope.phaseGoal"),
-            "acceptanceCandidates": value_field(&core_fields, "contextProjection.phaseScope.acceptanceCandidates")
-        },
         "phaseScopeSummary": {
+            "phaseName": value_field(&core_fields, "contextProjection.phaseScopeSummary.phaseName"),
+            "phaseGoal": value_field(&core_fields, "contextProjection.phaseScopeSummary.phaseGoal"),
             "includedIds": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedIds"),
             "includedLabels": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedLabels"),
             "includedItems": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedItems"),
@@ -2211,8 +2203,8 @@ fn architecture_repair_read_groups(
     }
     core_fields.extend([
         "repairContext.sourceArchitectureRequestRef",
-        "contextProjection.phaseScope.phaseName",
-        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScopeSummary.phaseName",
+        "contextProjection.phaseScopeSummary.phaseGoal",
         "contextProjection.phaseScopeSummary.includedIds",
         "contextProjection.phaseScopeSummary.includedLabels",
         "contextProjection.phaseScopeSummary.includedItems",
@@ -2235,7 +2227,6 @@ fn architecture_repair_read_groups(
     }
     if architecture_section_uses_detail_refs(section) {
         core_fields.extend([
-            "contextProjection.phaseScope.acceptanceCandidates",
             "contextProjection.requirementDetailTransfer.requirementDetails",
             "contextProjection.requirementDetailTransfer.acceptanceDetails",
             "contextProjection.requirementDetailTransfer.businessFlows",

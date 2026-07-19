@@ -3,7 +3,10 @@ use std::{
     path::Path,
 };
 
-use delivery_core::{expand_read_selectors, read_selectors_from_paths, ReadGroupRef, ReadSelector};
+use delivery_core::{
+    expand_read_selectors, lossless_projection_batches, read_selectors_from_paths, ReadGroupRef,
+    ReadSelector,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -189,6 +192,15 @@ pub fn write_native_request(
             &manifest_refs,
             &read_groups,
         )?;
+        if let Some(error) = read_plan_warnings
+            .iter()
+            .find(|warning| warning.level == "error")
+        {
+            return Err(StateError::InvalidArgument(format!(
+                "requestReadPlan projection exceeds the lossless budget: {}",
+                error.message
+            )));
+        }
         (read_groups, manifest_refs, read_plan_warnings)
     };
     let ref_count = manifest_refs.len();
@@ -273,6 +285,17 @@ pub fn request_storage_ref(
     Ok(manifest.refs.get(key).map(|entry| entry.r#ref.clone()))
 }
 
+pub(crate) fn request_storage_refs(
+    project_root: &Path,
+    request_id: &str,
+) -> StateResult<BTreeMap<String, String>> {
+    Ok(read_request_storage_manifest(project_root, request_id)?
+        .refs
+        .into_iter()
+        .map(|(key, entry)| (key, entry.r#ref))
+        .collect())
+}
+
 fn read_request_storage_manifest(
     project_root: &Path,
     request_id: &str,
@@ -302,7 +325,52 @@ fn canonicalize_read_plan(
     for (index, group) in groups.iter().enumerate() {
         let mut group_ref = read_group_ref_from_value(group, index + 1, project_id, request_id)?;
         augment_write_contract_fields(&mut group_ref);
-        canonical_groups.push(group_ref);
+        let fields = group_ref.expanded_fields();
+        let root = Value::Object(root_object.clone());
+        let batches =
+            lossless_projection_batches(&root, &fields, MAX_READ_FIELD_BYTES, MAX_READ_GROUP_BYTES)
+                .map_err(|error| {
+                    StateError::InvalidArgument(format!(
+                        "requestReadPlan group {} cannot be projected losslessly: {}",
+                        group_ref.group_id, error
+                    ))
+                })?;
+        let split = batches.len() > 1
+            || batches
+                .first()
+                .map(|batch| batch.fields != fields)
+                .unwrap_or(false);
+        let batch_count = batches.len();
+        for (batch_index, batch) in batches.into_iter().enumerate() {
+            let mut batch_ref = group_ref.clone();
+            if split {
+                batch_ref.group_id = format!("{}__batch_{}", group_ref.group_id, batch_index + 1);
+                batch_ref.purpose = format!(
+                    "{} Projection batch {} of {}.",
+                    group_ref.purpose,
+                    batch_index + 1,
+                    batch_count
+                );
+                // A projected group is still one semantic read. Every batch
+                // remains required when the source group was required; making
+                // later batches optional silently drops business constraints
+                // when an agent follows the read plan contract.
+                batch_ref.required = group_ref.required;
+            }
+            batch_ref.projection_mode = match batch.mode {
+                delivery_core::ProjectionMode::Index => "index",
+                delivery_core::ProjectionMode::Batch => "batch",
+                delivery_core::ProjectionMode::Targeted => "targeted",
+            }
+            .to_string();
+            batch_ref.selectors = read_selectors_from_paths(batch.fields);
+            batch_ref.order = (canonical_groups.len() + 1) as u32;
+            batch_ref.resource_uri = format!(
+                "loom://projects/{project_id}/requests/{request_id}/field-groups/{}",
+                encode_component(&batch_ref.group_id)
+            );
+            canonical_groups.push(batch_ref);
+        }
     }
     let group_values = canonical_groups
         .iter()
@@ -312,6 +380,7 @@ fn canonicalize_read_plan(
                 "required": group.required,
                 "purpose": group.purpose,
                 "whenToRead": group.when_to_read,
+                "projectionMode": group.projection_mode,
                 "selectors": group.selectors,
             })
         })
@@ -409,6 +478,12 @@ fn read_group_ref_from_value(
             .get("whenToRead")
             .and_then(Value::as_str)
             .unwrap_or("Before acting on this request.")
+            .to_string(),
+        projection_mode: object
+            .get("projectionMode")
+            .and_then(Value::as_str)
+            .filter(|mode| matches!(*mode, "index" | "batch" | "targeted"))
+            .unwrap_or("targeted")
             .to_string(),
         selectors,
         read_tool: "loom.readFieldGroup".to_string(),
@@ -653,7 +728,7 @@ fn validate_read_plan_contract(
             let field_bytes = pretty_len(&value);
             if field_bytes > MAX_READ_FIELD_BYTES {
                 warnings.push(ReadPlanSizeWarning {
-                    level: "warn",
+                    level: "error",
                     group_id: group.group_id.clone(),
                     field: Some(field.clone()),
                     bytes: field_bytes,
@@ -668,7 +743,7 @@ fn validate_read_plan_contract(
         }
         if group_bytes > MAX_READ_GROUP_BYTES {
             warnings.push(ReadPlanSizeWarning {
-                level: "warn",
+                level: "error",
                 group_id: group.group_id.clone(),
                 field: None,
                 bytes: group_bytes,

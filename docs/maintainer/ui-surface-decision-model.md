@@ -21,15 +21,13 @@ The refactor must not add a parallel UI contract beside the current one. Existin
 
 | Current field or function | Current owner | Current role | Target owner | Refactor action |
 | --- | --- | --- | --- | --- |
-| `uiQualitySeed` | MCP request generation | Gives scenario candidates, reference plan, gates, token plan, and selection rules to Architecture | MCP request generation | Keep as an input seed, but stop treating scenario candidates as the final semantic decision. |
-| `infer_primary_scenario()` | MCP Rust keyword inference | Guesses UI scenario from text and stack signals | None as authority | Remove as an authoritative classifier. Keep only as non-binding candidate hint if still useful. |
-| `uiQualityContract.scenario/layoutBaseline/density` | Architecture candidate plus MCP normalization | Stores coarse UI scenario and visual baseline | `uiSurfaceDecisionContract.patternDecision/layoutModel` | Replace with structured pattern, semantic facts, and layout anatomy. |
-| `uiQualityContract.referenceProfile/referenceLoadPlan` | MCP normalization | Selects UIX reference files | `uiSurfaceDecisionContract.referencePlan` | Keep MCP-owned derivation, but derive from decision contract instead of coarse scenario. |
-| `uiQualityContract.qualityGates` | MCP normalization | Stores generated UI quality gates | `uiSurfaceDecisionContract.qualityRules` | Replace with rule objects derived from pattern, regions, actions, states, tokens, and content boundary. |
-| `uiQualityContract.businessUiRules` | Agent candidate | Broad business UI assertions | None | Delete or fold into `qualityRules`; do not keep separate self-assertion rules. |
-| `uiSurfaceRegistry.surfaces` | Agent architecture section | Stores surface purpose, composition, information, action, state, visual, responsive models | `uiSurfaceDecisionContract.regions/actions/states` | Reuse the useful structure, but make it the normalized decision contract rather than a parallel registry. |
-| `frontendExperienceRequirement.uiQualityContract` | TaskPlan | Copies the full AAC UI quality object into frontend tasks | Removed from new artifacts | Do not copy or persist it. TaskPlan carries `uiSurfaceDecisionContractRef` plus region/action/state/rule ownership only. |
-| `frontendExperienceRequirement.uiTaskQualityGates` | TaskPlan | Stores task-scoped gate copies | Removed from new artifacts | Do not generate or persist it. Task-scoped rule ownership is expressed through `uiSurfaceOwnership.qualityRuleIdsInScope`. |
+| `uiQualitySeed` | MCP request generation | Provides non-authoritative candidate signals and reference hints to Architecture | MCP request generation | Keep it as input context only. The accepted surface decision is the authority. |
+| `infer_primary_scenario()` | MCP request generation | Produces a candidate hint from available facts | None as authority | It may inform the request seed, but it must never select or overwrite the accepted surface decision. |
+| `frontendExperience.uiSurfaceDecisionContract` | Architecture submit normalization | Owns pattern, semantic facts, layout, regions, actions, states, references, and executable quality rules | Same field | Keep one canonical decision object and derive every downstream projection from it. |
+| `frontendExperience.uiSurfaceRegistry` and related AAC facts | Architecture candidate | Supplies source facts used to construct the accepted decision | Architecture submit normalization | Preserve as input evidence only; downstream stages must consume the normalized decision projection. |
+| `frontendExperienceRequirement.uiTaskScope` | TaskPlan | Holds the MCP-derived task-owned region/action/state/layout/content/binding scope | Same field | Keep one task-scoped projection. Execution, TaskResult, and Review must consume this exact projection. |
+| `frontendExperienceRequirement.executionGuidance.uiProductionBrief` | Execution request | Explains the task-owned production obligations without becoming a second authority | Execution request | Derive it from `uiTaskScope` and the accepted surface decision; never broaden it from agent prose. |
+| `frontendQualitySelfCheck` | TaskResult | Records implementation and rendered/source evidence for the task-owned projection | TaskResult evidence | Keep it as evidence only. Review must compare it with the persisted task and accepted decision, not trust a status claim alone. |
 | `uiProductionBrief` | Execution request | Repackages registry and quality contract into task guidance | Execution task-scoped view | Generate it directly from `uiSurfaceDecisionContract`; do not keep an old quality-contract view beside it. |
 | `styleAssetPlan` | Execution request | Repackages design token plan and reference plan | Execution task-scoped view | Keep one MCP-owned reference plan and one token asset plan; execution may pass task-relevant paths forward but must not create a second authority. |
 | `frontendQualitySelfCheck.referenceGroupsChecked/referenceFilesChecked` | TaskResult | Evidence that agent read references | TaskResult evidence | Downgrade to read evidence. It must not prove UI quality satisfaction. |
@@ -70,12 +68,12 @@ The authoritative contract should be introduced as `uiSurfaceDecisionContract` u
 
 | Duplicate area | Remove or collapse |
 | --- | --- |
-| Scenario, layout, and density in `uiQualityContract`, `uiSurfaceRegistry.visualModel`, and `uiProductionBrief.layoutContract` | Collapse into `uiSurfaceDecisionContract.layoutModel`; execution may pass a task-scoped view forward but must not reinterpret it. |
+| Scenario, layout, and density in multiple downstream views | Collapse into `uiSurfaceDecisionContract.layoutModel`; execution may pass a task-scoped view forward but must not reinterpret it. |
 | State fields in `requiredUiStates`, `stateRefs`, `statePlacementModel`, `uiProductionBrief.stateContract`, and `statesCovered` | Collapse into `uiSurfaceDecisionContract.stateModel`; TaskResult records state evidence only. |
 | Composition fields in `requiredComposition`, `forbiddenComposition`, `compositionModel.*`, and `visualModel.antiDemoRules` | Collapse into `compositionConstraints`; keep content terms separate in `contentBoundary`. |
-| Reference plan in `uiQualityContract.referenceProfile`, `styleAssetPlan`, and TaskResult checked-reference fields | Keep one MCP-owned reference plan; TaskResult may record read evidence but not use it as quality proof. |
-| `qualityGates`, `uiTaskQualityGates`, `businessUiRules`, and review matrix expectations | Collapse authority into `qualityRules` derived from the decision contract and task scope; do not retain old-field shadows in new requests, artifacts, results, or review packets. |
-| `frontendExperience.surfaces` and `uiSurfaceRegistry.surfaces` as competing downstream inputs | Use existing frontend facts only as input; downstream execution/review consume the normalized decision contract. |
+| Reference plan in the accepted decision, execution guidance, and checked-reference evidence | Keep one MCP-owned reference plan; TaskResult may record read evidence but not use it as quality proof. |
+| Decision rules and review matrix expectations | Collapse authority into `qualityRules` derived from the decision contract and task scope; do not retain agent-authored rule shadows in requests, artifacts, results, or review packets. |
+| `frontendExperience` source facts and downstream projections | Use source facts only to build the canonical decision; downstream execution and review consume the normalized decision and task scope. |
 
 ## Migration Batches
 

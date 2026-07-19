@@ -48,7 +48,7 @@ Generated Compose should only include values supported by those facts. If a vari
 
 ## File Databases And Local State
 
-For local file databases, container paths must be inside a mounted writable directory, for example `/app/data`. Compose should create a named volume or project-local generated volume for that directory. Do not point a container at a host-only relative path that existed only on the developer machine.
+For local file databases, container paths must be inside the mounted writable directory selected by `DeploymentSpec.storageFacts`. Compose should create the volume named by that fact. Do not point a container at a host-only relative path that existed only on the developer machine.
 
 For Spring Boot plus JPA/Flyway/Liquibase style stacks, do not assume Hibernate schema validation is authoritative for all local file databases. If generated deployment is supplying a containerized file database URL and migration tooling owns schema creation, prefer a safe local override that prevents schema validation from failing on SQLite/H2 type affinity before the app can boot.
 
@@ -56,7 +56,7 @@ When dependency services are generated, application URLs must use Compose servic
 
 File database handling is not SQLite-specific:
 
-- SQLite examples commonly use `jdbc:sqlite:/app/data/app.db`, `sqlite:////app/data/app.db`, or framework-specific file paths.
+- File-database paths are containerized into the path declared by `DeploymentSpec.storageFacts`; the path is not a universal `/app/data` convention. Preserve the URL prefix and query/options while mounting the matching named volume.
 - H2 file, HSQLDB file, Derby, LiteFS-backed SQLite, and similar local file stores still need writable mounted paths.
 - If the app config names a host path such as `./data/app.db`, translate it into a container path and mount a volume at the parent directory.
 - If migrations are present, let migration tooling initialize schema for local deployment unless repository config explicitly disables it.

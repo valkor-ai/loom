@@ -74,7 +74,7 @@ Name the public behavior, harness/network boundary, representative states, and a
 
 ## Unsafe Defaults
 
-- React testing loaded for every frontend implementation task.
+- Load this reference only when the accepted task owns React test creation, test modification, or test-specific verification.
 - A new test stack introduced despite established repository tooling.
 - Test IDs preferred over accessible roles and labels.
 - Providers, hooks, and network client all mocked in the same test.

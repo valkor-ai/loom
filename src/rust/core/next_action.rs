@@ -79,6 +79,8 @@ pub struct ReadGroupRef {
     pub order: u32,
     pub purpose: String,
     pub when_to_read: String,
+    #[serde(default = "default_projection_mode")]
+    pub projection_mode: String,
     pub selectors: Vec<ReadSelector>,
     pub read_tool: String,
     pub resource_uri: String,
@@ -114,6 +116,7 @@ impl ReadGroupRef {
             order,
             purpose: "Read the request fields needed for the current action.".to_string(),
             when_to_read: "Before writing the requested artifact.".to_string(),
+            projection_mode: default_projection_mode(),
             selectors: read_selectors_from_paths(fields),
             read_tool: "loom.readFieldGroup".to_string(),
             resource_uri: resource_uri.into(),
@@ -123,6 +126,10 @@ impl ReadGroupRef {
     pub fn expanded_fields(&self) -> Vec<String> {
         expand_read_selectors(&self.selectors)
     }
+}
+
+fn default_projection_mode() -> String {
+    "targeted".to_string()
 }
 
 pub fn read_selectors_from_paths<I, S>(paths: I) -> Vec<ReadSelector>

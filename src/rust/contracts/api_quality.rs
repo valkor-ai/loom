@@ -81,7 +81,8 @@ pub fn build_api_quality_seed_from_foundation(
                 "conditionalRequestPolicy",
                 "rateLimitPolicy",
                 "retryPolicy",
-                "requestIdPolicy"
+                "requestIdPolicy",
+                "normalization"
             ]
         },
         "generationRules": [

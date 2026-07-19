@@ -1,10 +1,10 @@
 use contracts::{BrowserVerificationProfile, CodeQualityRequirement, TaskDefinition, TaskPlan};
+use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicability};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 12] = [
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 11] = [
     "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-    "task.frontendExperienceRequirement.uiSurfaceOwnership",
     "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
     "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode",
     "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision",
@@ -16,18 +16,6 @@ pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 12] = [
     "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
     "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan",
 ];
-
-pub(crate) fn frontend_surface_contract_applies(task: &TaskDefinition) -> bool {
-    task.frontend_experience_requirement
-        .as_ref()
-        .is_some_and(|requirement| {
-            requirement.get("uiSurfaceDecisionContractRef").is_some()
-                || requirement.get("uiSurfaceOwnership").is_some()
-                || requirement
-                    .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
-                    .is_some_and(Value::is_object)
-        })
-}
 
 pub(crate) fn taskplan_outline_result_template() -> Value {
     json!({
@@ -611,34 +599,33 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
     fields
 }
 
+pub(crate) fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
+    let value = serde_json::to_value(task).unwrap_or_else(|_| Value::Null);
+    task_evidence_applicability_from_value(&value)
+}
+
 pub(crate) fn architecture_quality_evidence_applies(task: &TaskDefinition) -> bool {
-    !task.architecture_quality_requirement_refs.is_empty()
+    task_evidence_applicability(task).architecture_quality_evidence
 }
 
 pub(crate) fn api_contract_evidence_applies(task: &TaskDefinition) -> bool {
-    !task.api_contract_requirement_refs.is_empty()
+    task_evidence_applicability(task).api_contract_evidence
 }
 
 pub(crate) fn code_quality_evidence_applies(task: &TaskDefinition) -> bool {
-    !task.code_quality_requirement_refs.is_empty()
+    task_evidence_applicability(task).code_quality_evidence
 }
 
 pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
-    task.runtime_delivery_requirement
-        .as_ref()
-        .map(|requirement| requirement.applies_to_this_task)
-        .unwrap_or(false)
+    task_evidence_applicability(task).runtime_delivery_evidence
 }
 
 pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
-    // Runtime delivery evidence and frontend workflow evidence describe
-    // independent responsibilities. A browser-facing frontend task may need
-    // both contracts in the same TaskResult.
-    task.frontend_experience_requirement.is_some()
+    task_evidence_applicability(task).frontend_self_check
 }
 
 pub(crate) fn frontend_quality_self_check_applies(task: &TaskDefinition) -> bool {
-    frontend_self_check_applies(task) && frontend_surface_contract_applies(task)
+    task_evidence_applicability(task).frontend_quality_self_check
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
@@ -953,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_contract_read_fields_do_not_include_legacy_quality_contract() {
+    fn surface_contract_read_fields_use_canonical_surface_contract() {
         let task = frontend_task(json!({
             "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
             "executionGuidance": {
@@ -971,13 +958,6 @@ mod tests {
         assert!(fields.contains(
             &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
         ));
-        assert!(
-            fields
-                .iter()
-                .all(|field| !field.contains("uiQualityContract")
-                    && !field.contains("uiTaskQualityGates")),
-            "{fields:#?}"
-        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ Use `DeploymentSpec.runtime.ports` as the only host/container port plan.
 
 Generated dependency services are local deployment conveniences, not production infrastructure.
 
-- File databases need a writable mounted container path such as `/app/data`.
+- File databases need the writable `containerPath` and `volumeName` supplied by `DeploymentSpec.storageFacts`; the directory is stack- and repository-derived.
 - SQL/Redis/Mongo/etc services use stable Compose service names.
 - Application connection URLs use service DNS names, not `localhost`.
 - Real credentials are blockers unless Loom can supply safe local placeholders.

@@ -306,7 +306,7 @@ pub struct ArchitectureRisk {
     pub verification_hints: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchitectureQuality {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -348,7 +348,6 @@ pub struct ArchitectureArtifactContract {
     pub acceptance_matrix: Vec<AcceptanceMatrixEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detail_coverage: Vec<ArchitectureDetailCoverageEntry>,
-    #[serde(default)]
     pub architecture_quality: ArchitectureQuality,
     pub handoff: ArchitectureHandoff,
     pub created_at: String,

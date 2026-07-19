@@ -42,7 +42,7 @@ impl DeploymentCodeProbe {
             start_command: None,
             output_directory: None,
             port: 8080,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: None,
             workspace_package_json_paths: vec![],
             services: vec![],
@@ -120,7 +120,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: None,
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: None,
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -171,7 +171,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: None,
             output_directory: frontend_support.output_directory.clone(),
             port: 8080,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: None,
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -239,7 +239,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: Some(python_start_command(&package_root, port)),
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -283,7 +283,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: Some("/app/server".to_string()),
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -322,7 +322,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: Some("dotnet \"$(find /app -maxdepth 1 -name '*.dll' ! -name '*.Views.dll' | sort | head -n 1)\"".to_string()),
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -374,7 +374,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: Some(php_start_command(&package_root, port)),
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -426,7 +426,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: Some(ruby_start_command(&package_root, port)),
             output_directory: frontend_support.output_directory.clone(),
             port,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
@@ -461,7 +461,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             start_command: None,
             output_directory: Some(root.clone()),
             port: 80,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: vec![],
             services: services.clone(),
@@ -493,12 +493,47 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         };
         let package_root = project_root.join(&root);
         let package_manager = node_package_manager(&package_root);
-        let has_lockfile = has_node_lockfile(&package_root);
-        let package_path = if root == "." {
-            "package.json".to_string()
-        } else {
-            format!("{root}/package.json")
-        };
+        let workspace_package_refs = discover_workspace_package_json_paths(project_root);
+        let has_lockfile = workspace_package_refs.iter().any(|package_ref| {
+            let package_root = package_ref.strip_suffix("/package.json").unwrap_or(".");
+            let package_root = root_path(project_root, package_root);
+            has_node_lockfile(&package_root)
+        });
+        let mut package_file_facts = workspace_package_refs
+            .iter()
+            .map(|path| file_fact(project_root, path, "package_file"))
+            .collect::<Vec<_>>();
+        for package_ref in &workspace_package_refs {
+            let package_root = package_ref.strip_suffix("/package.json").unwrap_or(".");
+            package_file_facts.extend(
+                [
+                    "package-lock.json",
+                    "pnpm-lock.yaml",
+                    "yarn.lock",
+                    "bun.lockb",
+                ]
+                .into_iter()
+                .map(|file| {
+                    file_fact(
+                        project_root,
+                        &join_frontend_root(package_root, file),
+                        "lockfile",
+                    )
+                }),
+            );
+        }
+        package_file_facts.extend([
+            file_fact(
+                project_root,
+                &join_frontend_root(&root, "vite.config.ts"),
+                "frontend_config",
+            ),
+            file_fact(
+                project_root,
+                &join_frontend_root(&root, "vite.config.js"),
+                "frontend_config",
+            ),
+        ]);
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Node,
             package_manager,
@@ -520,9 +555,9 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 format!("{root}/dist")
             }),
             port: 5173,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
             working_directory: (root != ".").then_some(root.to_string()),
-            workspace_package_json_paths: vec![package_path.clone()],
+            workspace_package_json_paths: workspace_package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
@@ -533,25 +568,8 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 RuntimeKind::Node,
                 package_manager,
                 5173,
-                vec![
-                    file_fact(project_root, &package_path, "package_file"),
-                    file_fact(
-                        project_root,
-                        &format!("{root}/package-lock.json").replace("./", ""),
-                        "lockfile",
-                    ),
-                    file_fact(
-                        project_root,
-                        &format!("{root}/vite.config.ts").replace("./", ""),
-                        "frontend_config",
-                    ),
-                    file_fact(
-                        project_root,
-                        &format!("{root}/vite.config.js").replace("./", ""),
-                        "frontend_config",
-                    ),
-                ],
-                vec![package_path],
+                package_file_facts,
+                workspace_package_refs,
             )?,
         });
     }
@@ -591,27 +609,50 @@ fn frontend_probe_evidence(project_root: &Path, root: Option<&str>) -> FrontendP
             output_directory: None,
         };
     };
-    let package_refs = vec![join_frontend_root(root, "package.json")];
+    let package_refs = discover_workspace_package_json_paths(project_root)
+        .into_iter()
+        .filter(|path| {
+            root == "."
+                || path == &join_frontend_root(root, "package.json")
+                || path.starts_with(&format!("{}/", root.trim_matches('/')))
+        })
+        .collect::<Vec<_>>();
+    let package_refs = if package_refs.is_empty() {
+        vec![join_frontend_root(root, "package.json")]
+    } else {
+        package_refs
+    };
+    let files = package_refs
+        .iter()
+        .flat_map(|package_ref| {
+            let package_root = package_ref.strip_suffix("/package.json").unwrap_or(".");
+            [
+                ("package.json", "frontend_package_file"),
+                ("package-lock.json", "frontend_lockfile"),
+                ("pnpm-lock.yaml", "frontend_lockfile"),
+                ("yarn.lock", "frontend_lockfile"),
+                ("bun.lockb", "frontend_lockfile"),
+                ("vite.config.ts", "frontend_config"),
+                ("vite.config.js", "frontend_config"),
+                ("next.config.js", "frontend_config"),
+                ("next.config.mjs", "frontend_config"),
+                ("angular.json", "frontend_config"),
+                ("src/main.tsx", "frontend_entry"),
+                ("src/main.ts", "frontend_entry"),
+                ("src/App.tsx", "frontend_entry"),
+                ("src/App.vue", "frontend_entry"),
+            ]
+            .into_iter()
+            .map(move |(relative, kind)| {
+                file_fact(
+                    project_root,
+                    &join_frontend_root(package_root, relative),
+                    kind,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
     let frontend_path = root_path(project_root, root);
-    let files = [
-        ("package.json", "frontend_package_file"),
-        ("package-lock.json", "frontend_lockfile"),
-        ("pnpm-lock.yaml", "frontend_lockfile"),
-        ("yarn.lock", "frontend_lockfile"),
-        ("bun.lockb", "frontend_lockfile"),
-        ("vite.config.ts", "frontend_config"),
-        ("vite.config.js", "frontend_config"),
-        ("next.config.js", "frontend_config"),
-        ("next.config.mjs", "frontend_config"),
-        ("angular.json", "frontend_config"),
-        ("src/main.tsx", "frontend_entry"),
-        ("src/main.ts", "frontend_entry"),
-        ("src/App.tsx", "frontend_entry"),
-        ("src/App.vue", "frontend_entry"),
-    ]
-    .into_iter()
-    .map(|(relative, kind)| file_fact(project_root, &join_frontend_root(root, relative), kind))
-    .collect::<Vec<_>>();
     FrontendProbeEvidence {
         package_refs,
         files,
@@ -699,6 +740,16 @@ fn candidate_roots(project_root: &Path) -> Vec<String> {
     roots.sort();
     roots.dedup();
     roots
+}
+
+fn discover_workspace_package_json_paths(project_root: &Path) -> Vec<String> {
+    candidate_roots(project_root)
+        .into_iter()
+        .filter_map(|root| {
+            let relative = join_frontend_root(&root, "package.json");
+            project_root.join(&relative).is_file().then_some(relative)
+        })
+        .collect()
 }
 
 fn find_dotnet_root(project_root: &Path) -> Option<String> {
@@ -1179,62 +1230,160 @@ fn ruby_runtime_version(root: &Path) -> Option<String> {
 }
 
 fn collect_dependency_services(project_root: &Path) -> Vec<DependencyService> {
-    let signals = dependency_signal_text(project_root);
     let mut services = Vec::new();
-    for (kind, needles) in [
-        (
-            DependencyServiceKind::Postgres,
-            &[
-                "postgres",
-                "postgresql",
-                "jdbc:postgresql",
-                "npgsql",
-                "psycopg",
-            ] as &[&str],
-        ),
-        (
-            DependencyServiceKind::Mysql,
-            &["mysql", "mariadb", "jdbc:mysql", "mysql2"] as &[&str],
-        ),
-        (
-            DependencyServiceKind::Redis,
-            &["redis", "ioredis", "lettuce", "jedis"] as &[&str],
-        ),
-    ] {
-        if needles.iter().any(|needle| signals.contains(needle)) {
-            services.push(crate::runtime_contract::service_definition(kind));
-        }
+    for root in candidate_roots(project_root) {
+        let base = root_path(project_root, &root);
+        collect_json_dependency_kinds(&base.join("package.json"), &mut services);
+        collect_json_dependency_kinds(&base.join("composer.json"), &mut services);
+        collect_line_dependency_kinds(&base.join("requirements.txt"), &mut services);
+        collect_line_dependency_kinds(&base.join("pyproject.toml"), &mut services);
+        collect_line_dependency_kinds(&base.join("Pipfile"), &mut services);
+        collect_line_dependency_kinds(&base.join("pom.xml"), &mut services);
+        collect_line_dependency_kinds(&base.join("build.gradle"), &mut services);
+        collect_line_dependency_kinds(&base.join("build.gradle.kts"), &mut services);
+        collect_line_dependency_kinds(&base.join("go.mod"), &mut services);
+        collect_line_dependency_kinds(&base.join("Gemfile"), &mut services);
+        collect_dotnet_dependency_kinds(&base, &mut services);
     }
     services
+        .into_iter()
+        .map(crate::runtime_contract::service_definition)
+        .collect()
 }
 
-fn dependency_signal_text(project_root: &Path) -> String {
-    let mut text = String::new();
-    for root in candidate_roots(project_root) {
-        let base = project_root.join(root);
-        for name in [
-            "package.json",
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "requirements.txt",
-            "pyproject.toml",
-            "go.mod",
-            "composer.json",
-            "Gemfile",
-            "appsettings.json",
-            "application.properties",
-            "src/main/resources/application.properties",
-            "src/main/resources/application.yml",
-            "src/main/resources/application.yaml",
+fn collect_dotnet_dependency_kinds(root: &Path, services: &mut Vec<DependencyServiceKind>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("csproj") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Some(name) = line
+                .split("Include=\"")
+                .nth(1)
+                .and_then(|value| value.split('"').next())
+            else {
+                continue;
+            };
+            push_dependency_kind(services, dependency_kind_for_name(name));
+        }
+    }
+}
+
+fn collect_json_dependency_kinds(path: &Path, services: &mut Vec<DependencyServiceKind>) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    for section in [
+        "dependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "require",
+    ] {
+        let Some(object) = value.get(section).and_then(Value::as_object) else {
+            continue;
+        };
+        for name in object.keys() {
+            push_dependency_kind(services, dependency_kind_for_name(name));
+        }
+    }
+}
+
+fn collect_line_dependency_kinds(path: &Path, services: &mut Vec<DependencyServiceKind>) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim().to_ascii_lowercase();
+        let name = line
+            .trim_start_matches(['-', '"', '\''])
+            .split(['=', '<', '>', '!', '~', ':', ' ', '"', '\'', ','])
+            .next()
+            .unwrap_or_default();
+        push_dependency_kind(services, dependency_kind_for_name(name));
+
+        for coordinate in [
+            "org.postgresql:postgresql",
+            "com.mysql:mysql-connector",
+            "org.springframework.data:spring-data-redis",
+            "org.springframework.amqp:spring-rabbit",
+            "org.springframework.data:spring-data-elasticsearch",
+            "org.mongodb:mongodb-driver",
+            "github.com/lib/pq",
+            "github.com/go-sql-driver/mysql",
+            "github.com/redis/go-redis",
         ] {
-            if let Ok(value) = fs::read_to_string(base.join(name)) {
-                text.push_str(&value);
-                text.push('\n');
+            if line.contains(coordinate) {
+                push_dependency_kind(services, dependency_kind_for_name(coordinate));
             }
         }
     }
-    text.to_ascii_lowercase()
+}
+
+fn push_dependency_kind(
+    services: &mut Vec<DependencyServiceKind>,
+    kind: Option<DependencyServiceKind>,
+) {
+    if let Some(kind) = kind {
+        if !services.contains(&kind) {
+            services.push(kind);
+        }
+    }
+}
+
+fn dependency_kind_for_name(name: &str) -> Option<DependencyServiceKind> {
+    let name = name.trim().to_ascii_lowercase();
+    let name = name.trim_matches(['"', '\'', '[', ']']);
+    match name {
+        "pg"
+        | "pg-promise"
+        | "postgres"
+        | "postgresql"
+        | "psycopg2"
+        | "psycopg2-binary"
+        | "psycopg"
+        | "asyncpg"
+        | "org.postgresql:postgresql"
+        | "github.com/lib/pq" => Some(DependencyServiceKind::Postgres),
+        "mysql2"
+        | "mysql"
+        | "mariadb"
+        | "pymysql"
+        | "mysqlclient"
+        | "mysql-connector-python"
+        | "mysql-connector-java"
+        | "com.mysql:mysql-connector"
+        | "github.com/go-sql-driver/mysql" => Some(DependencyServiceKind::Mysql),
+        "redis"
+        | "ioredis"
+        | "redis-py"
+        | "lettuce"
+        | "jedis"
+        | "org.springframework.data:spring-data-redis"
+        | "github.com/redis/go-redis" => Some(DependencyServiceKind::Redis),
+        "mongodb" | "mongoose" | "pymongo" | "org.mongodb:mongodb-driver" => {
+            Some(DependencyServiceKind::Mongodb)
+        }
+        "amqplib" | "pika" | "rabbitmq" | "org.springframework.amqp:spring-rabbit" => {
+            Some(DependencyServiceKind::Rabbitmq)
+        }
+        "@elastic/elasticsearch"
+        | "elasticsearch"
+        | "org.springframework.data:spring-data-elasticsearch" => {
+            Some(DependencyServiceKind::Elasticsearch)
+        }
+        "minio" => Some(DependencyServiceKind::Minio),
+        _ => None,
+    }
 }
 
 fn stack_file_facts(project_root: &Path, root: &str, files: &[&str], kind: &str) -> Vec<Value> {

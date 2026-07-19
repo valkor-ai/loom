@@ -358,8 +358,8 @@ pub(crate) fn architecture_read_groups(
         }
     }
     core_fields.extend([
-        "contextProjection.phaseScope.phaseName",
-        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScopeSummary.phaseName",
+        "contextProjection.phaseScopeSummary.phaseGoal",
         "contextProjection.phaseScopeSummary.includedIds",
         "contextProjection.phaseScopeSummary.includedLabels",
         "contextProjection.phaseScopeSummary.includedItems",
@@ -397,7 +397,6 @@ pub(crate) fn architecture_read_groups(
             | ArchitectureSectionGroup::Coverage
     ) {
         core_fields.extend([
-            "contextProjection.phaseScope.acceptanceCandidates",
             "contextProjection.requirementDetailTransfer.requirementDetails",
             "contextProjection.requirementDetailTransfer.acceptanceDetails",
             "contextProjection.requirementDetailTransfer.businessFlows",
@@ -551,7 +550,7 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
 
     let mut candidates = Vec::new();
     if track_is_selected(tracks.get("persistence")) {
-        candidates.push(json!({
+        let mut candidate = json!({
             "dependencyId": "runtime_persistence",
             "track": "persistence",
             "kind": "storage",
@@ -563,10 +562,14 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
                 "Startup exposes storage readiness or failure.",
                 "Affected runtime operations expose an actionable failure signal."
             ]
-        }));
+        });
+        if let Some(provider) = structured_provider_from_track(tracks.get("persistence")) {
+            candidate["provider"] = json!(provider);
+        }
+        candidates.push(candidate);
     }
     if track_is_selected(tracks.get("externalServices")) {
-        candidates.push(json!({
+        let mut candidate = json!({
             "dependencyId": "runtime_external_services",
             "track": "externalServices",
             "kind": "external_runtime",
@@ -578,13 +581,55 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
                 "Dependency readiness or connection failure is observable.",
                 "Affected runtime operations expose an actionable failure signal."
             ]
-        }));
+        });
+        if let Some(provider) = structured_provider_from_track(tracks.get("externalServices")) {
+            candidate["provider"] = json!(provider);
+        }
+        candidates.push(candidate);
     }
     json!({
         "authority": "technical_baseline.stack.tracks",
         "candidates": candidates,
         "emptyPolicy": "runtimeDependencies may be empty only when candidates is empty"
     })
+}
+
+fn structured_provider_from_track(track: Option<&Value>) -> Option<String> {
+    let track = track?.as_object()?;
+    for key in ["provider", "technologyId", "databaseProvider"] {
+        if let Some(provider) = track
+            .get(key)
+            .and_then(Value::as_str)
+            .map(normalize_provider)
+            .filter(|provider| !provider.is_empty())
+        {
+            return Some(provider);
+        }
+    }
+    track
+        .get("selection")
+        .and_then(Value::as_str)
+        .map(normalize_provider)
+        .filter(|provider| !provider.is_empty())
+}
+
+fn normalize_provider(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '-'], "");
+    match normalized.as_str() {
+        "postgres" | "postgresql" => "postgres".to_string(),
+        "mysql" | "mariadb" => "mysql".to_string(),
+        "redis" => "redis".to_string(),
+        "mongodb" | "mongo" => "mongodb".to_string(),
+        "rabbitmq" => "rabbitmq".to_string(),
+        "elasticsearch" | "opensearch" => "elasticsearch".to_string(),
+        "minio" | "s3" => "minio".to_string(),
+        "sqlite" => "sqlite".to_string(),
+        "h2" => "h2".to_string(),
+        _ => normalized,
+    }
 }
 
 fn track_is_selected(track: Option<&Value>) -> bool {
@@ -781,23 +826,24 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
     json!({
         "phaseId": planning_contract.source.phase_id,
         "planningContractId": planning_contract.planning_contract_id,
-        "phaseScope": planning_contract.phase_scope,
         "phaseScopeSummary": phase_scope_summary(planning_contract),
         "technicalBaseline": planning_contract.technical_baseline,
         "requirementDetailTransfer": {
             "requirementDetails": compact_requirement_details_index(planning_contract),
-            "acceptanceDetails": planning_contract.phase_scope.acceptance_candidates,
+            "acceptanceDetails": compact_acceptance_details(&planning_contract.phase_scope.acceptance_candidates),
             "actors": planning_contract.planning_inputs.actors,
             "capabilityGroups": planning_contract.planning_inputs.capability_groups,
             "frontendExperienceDetails": planning_contract.planning_inputs.frontend_experience,
             "userFacingLanguage": planning_contract.planning_inputs.user_facing_language,
-            "businessFlows": planning_contract.planning_inputs.business_flows
+            "businessFlows": compact_business_flow_details(&planning_contract.planning_inputs.business_flows)
         }
     })
 }
 
 fn phase_scope_summary(planning_contract: &PlanningGenerationContract) -> Value {
     json!({
+        "phaseName": planning_contract.phase_scope.phase_name,
+        "phaseGoal": planning_contract.phase_scope.phase_goal,
         "includedIds": scope_ids(&planning_contract.phase_scope.included),
         "includedLabels": scope_labels(&planning_contract.phase_scope.included),
         "includedItems": scope_items(&planning_contract.phase_scope.included),
@@ -808,6 +854,36 @@ fn phase_scope_summary(planning_contract: &PlanningGenerationContract) -> Value 
         "excludedLabels": scope_labels(&planning_contract.phase_scope.excluded),
         "excludedItems": scope_items(&planning_contract.phase_scope.excluded)
     })
+}
+
+fn compact_acceptance_details(values: &[contracts::AcceptanceCandidate]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|acceptance| {
+            json!({
+                "id": acceptance.id,
+                "statement": acceptance.statement,
+                "capabilityRefs": acceptance.capability_refs,
+                "sourceRefs": acceptance.source_refs,
+                "priority": acceptance.priority
+            })
+        })
+        .collect()
+}
+
+fn compact_business_flow_details(values: &[Value]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|flow| {
+            let mut compact = serde_json::Map::new();
+            for key in ["id", "name", "actors", "capabilityRefs", "summary"] {
+                if let Some(value) = flow.get(key).filter(|value| !value.is_null()) {
+                    compact.insert(key.to_string(), value.clone());
+                }
+            }
+            Value::Object(compact)
+        })
+        .collect()
 }
 
 fn scope_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
@@ -1319,22 +1395,25 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
             "runtimeKind": "string",
             "basis": Value::Object(basis),
-            "build": {
-                "command": "string",
-                "workingDirectory": "string",
-                "outputs": ["string"],
-                "codeLevelExpectations": ["string"]
-            },
-            "start": {
-                "command": "string",
-                "workingDirectory": "string",
-                "port": "number",
-                "codeLevelExpectations": ["string"]
+            "commands": {
+                "development": {
+                    "build": {"command": "string", "workingDirectory": "string"},
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                },
+                "verification": {
+                    "build": {"command": "string", "workingDirectory": "string"},
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                },
+                "deployment": {
+                    "build": {"command": "string", "workingDirectory": "string"},
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                }
             },
             "runtimeSurfaces": ["object"],
             "runtimeDependencies": [{
                 "dependencyId": "string",
                 "kind": "service | storage | queue | filesystem | external_runtime",
+                "provider": "optional canonical provider id from runtimeDependencySeed",
                 "requiredFor": ["string"],
                 "startupRequirement": "required | optional | not_applicable",
                 "failureBehavior": "string",
@@ -1343,6 +1422,7 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
             }],
             "httpProbes": {
                 "previewPath": "string",
+                "healthPath": "optional string; only when the repository exposes this probe",
                 "expectedStatus": "2xx_or_3xx"
             },
             "frontend": "optional object when a separate frontend surface exists",
@@ -1373,7 +1453,13 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
         "operationKind": "create | read_list | read_detail | replace | update | delete | state_transition | domain_action | search | export",
         "method": "GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS when type=http_api",
         "path": "string when type=http_api",
-        "requestSchema": ["object"],
+        "requestSchema": [{
+            "field": "string",
+            "required": "boolean",
+            "kind": "string",
+            "validation": "business validation rule",
+            "normalization": "optional object; state trim-before-validation or another explicit canonicalization rule"
+        }],
         "responseSchema": ["object"],
         "statusCodes": {
             "success": ["number"],
@@ -1927,16 +2013,19 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
             "status": "modified",
             "runtimeKind": "",
             "basis": Value::Object(basis),
-            "build": {
-                "command": "",
-                "workingDirectory": ".",
-                "outputs": [],
-                "codeLevelExpectations": [""]
-            },
-            "start": {
-                "command": "",
-                "workingDirectory": ".",
-                "codeLevelExpectations": [""]
+            "commands": {
+                "development": {
+                    "build": {"command": "", "workingDirectory": "."},
+                    "start": {"command": "", "workingDirectory": ".", "port": 8080}
+                },
+                "verification": {
+                    "build": {"command": "", "workingDirectory": "."},
+                    "start": {"command": "", "workingDirectory": ".", "port": 8080}
+                },
+                "deployment": {
+                    "build": {"command": "", "workingDirectory": "."},
+                    "start": {"command": "", "workingDirectory": ".", "port": 8080}
+                }
             },
             "runtimeSurfaces": [{
                 "surfaceId": "runtime_surface_1",
@@ -1947,6 +2036,7 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
             "runtimeDependencies": [],
             "httpProbes": {
                 "previewPath": "/",
+                "healthPath": "",
                 "expectedStatus": "2xx_or_3xx"
             },
             "environment": {
@@ -2021,7 +2111,11 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
             "field": "replace_with_request_field",
             "required": true,
             "kind": "string",
-            "validation": "business validation rule"
+            "validation": "business validation rule",
+            "normalization": {
+                "mode": "trim_before_validation",
+                "required": true
+            }
         }],
         "responseSchema": [{
             "field": "id",
@@ -2233,7 +2327,7 @@ pub fn section_generation_rules(
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
             "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state startup requirement, affected capability, failure behavior, recovery strategy, and observable signal. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
-            "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, and startupRequirement; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
+            "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, startupRequirement, and provider when present; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."

@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Mutex, OnceLock},
+    time::UNIX_EPOCH,
+};
 
 use delivery_core::{
     FieldReadResult, InspectRequestInput, InspectRequestResult, ReadFieldGroupFields,
@@ -18,7 +22,7 @@ use crate::{
         now_for_audit, record_field_read_audit, record_request_inspect_audit, FieldReadAudit,
     },
     request_index::get_request_index_entry,
-    request_manifest::{read_group_refs_from_root, request_storage_ref},
+    request_manifest::{read_group_refs_from_root, request_storage_refs},
     store::{read_json_value, read_text, StateError, StateResult},
 };
 
@@ -28,15 +32,33 @@ struct ParsedRequestRef {
     request_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LoadedRequest {
     request_ref: String,
     request_id: String,
     project_id: String,
     request_kind: String,
+    fingerprint: String,
     root: Value,
     read_groups: Vec<ReadGroupRef>,
 }
+
+#[derive(Debug, Clone)]
+struct CachedRequest {
+    fingerprint: String,
+    request: LoadedRequest,
+}
+
+#[derive(Debug, Default)]
+struct ResolutionCache {
+    manifest_refs: Option<BTreeMap<String, String>>,
+    reference_values: BTreeMap<String, Value>,
+}
+
+static REQUEST_CACHE: OnceLock<Mutex<BTreeMap<String, CachedRequest>>> = OnceLock::new();
+const REQUEST_CACHE_MAX_ENTRIES: usize = 64;
+static FIELD_CACHE: OnceLock<Mutex<BTreeMap<String, FieldReadResult>>> = OnceLock::new();
+const FIELD_CACHE_MAX_ENTRIES: usize = 512;
 
 pub fn inspect_request(input: InspectRequestInput) -> StateResult<InspectRequestResult> {
     let result = inspect_request_inner(&input)?;
@@ -50,7 +72,8 @@ pub fn inspect_request_unrecorded(input: InspectRequestInput) -> StateResult<Ins
 
 fn inspect_request_inner(input: &InspectRequestInput) -> StateResult<InspectRequestResult> {
     let request = load_request(&input.project_root, &input.request_ref)?;
-    let output_contract = read_output_contract(&input.project_root, &request)?;
+    let mut cache = ResolutionCache::default();
+    let output_contract = read_output_contract(&input.project_root, &request, &mut cache)?;
     Ok(InspectRequestResult {
         request_ref: request.request_ref,
         request_id: request.request_id,
@@ -88,7 +111,7 @@ pub fn read_field_group_flat(input: ReadFieldGroupInput) -> StateResult<ReadRequ
             ))
         })?
         .clone();
-    let expanded_fields = group.expanded_fields();
+    let expanded_fields = dedupe(group.expanded_fields());
     let fields = resolve_fields(&input.project_root, &request, &expanded_fields)?;
     let contract_fingerprint = fields
         .get("outputContract.contractFingerprint")
@@ -180,16 +203,49 @@ fn load_request(project_root: &str, request_ref: &str) -> StateResult<LoadedRequ
     let index_entry = get_request_index_entry(project_root, &parsed.request_id)?;
     let paths = project_paths(project_root)?;
     let request_file = from_project_relative(&paths.root, &index_entry.request_file)?;
+    let cache_key = format!("{project_root}\n{request_ref}");
+    let fingerprint = request_file_fingerprint(&request_file)?;
+    if let Some(cached) = REQUEST_CACHE
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .map_err(|_| StateError::StateCorrupted("request resolver cache is poisoned".to_string()))?
+        .get(&cache_key)
+        .filter(|cached| cached.fingerprint == fingerprint)
+        .map(|cached| cached.request.clone())
+    {
+        return Ok(cached);
+    }
     let root = read_json_value(&request_file)?;
     let read_groups = read_group_refs_from_root(&root, &parsed.project_id, &parsed.request_id)?;
-    Ok(LoadedRequest {
+    let request = LoadedRequest {
         request_ref: request_ref.to_string(),
         request_id: parsed.request_id,
         project_id: parsed.project_id,
         request_kind: index_entry.request_kind,
+        fingerprint: fingerprint.clone(),
         root,
         read_groups,
-    })
+    };
+    let mut request_cache = REQUEST_CACHE
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .map_err(|_| {
+            StateError::StateCorrupted("request resolver cache is poisoned".to_string())
+        })?;
+    request_cache.insert(
+        cache_key,
+        CachedRequest {
+            fingerprint,
+            request: request.clone(),
+        },
+    );
+    while request_cache.len() > REQUEST_CACHE_MAX_ENTRIES {
+        let Some(oldest_key) = request_cache.keys().next().cloned() else {
+            break;
+        };
+        request_cache.remove(&oldest_key);
+    }
+    Ok(request)
 }
 
 fn resolve_fields(
@@ -198,9 +254,36 @@ fn resolve_fields(
     fields: &[String],
 ) -> StateResult<BTreeMap<String, FieldReadResult>> {
     let mut resolved = BTreeMap::new();
+    let mut cache = ResolutionCache::default();
     for field in fields {
-        match resolve_field(project_root, request, field) {
+        let cache_key = field_cache_key(project_root, request, field);
+        if let Some(value) = FIELD_CACHE
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .map_err(|_| {
+                StateError::StateCorrupted("field resolver cache is poisoned".to_string())
+            })?
+            .get(&cache_key)
+            .cloned()
+        {
+            resolved.insert(field.clone(), value);
+            continue;
+        }
+        match resolve_field(project_root, request, field, &mut cache) {
             Ok(value) => {
+                let mut field_cache = FIELD_CACHE
+                    .get_or_init(|| Mutex::new(BTreeMap::new()))
+                    .lock()
+                    .map_err(|_| {
+                        StateError::StateCorrupted("field resolver cache is poisoned".to_string())
+                    })?;
+                field_cache.insert(cache_key, value.clone());
+                while field_cache.len() > FIELD_CACHE_MAX_ENTRIES {
+                    let Some(oldest_key) = field_cache.keys().next().cloned() else {
+                        break;
+                    };
+                    field_cache.remove(&oldest_key);
+                }
                 resolved.insert(field.clone(), value);
             }
             Err(error) if is_field_not_found(&error) => {}
@@ -210,20 +293,28 @@ fn resolve_fields(
     Ok(resolved)
 }
 
+fn field_cache_key(project_root: &str, request: &LoadedRequest, field: &str) -> String {
+    format!(
+        "{project_root}\n{}\n{}\n{field}",
+        request.request_ref, request.fingerprint
+    )
+}
+
 fn resolve_field(
     project_root: &str,
     request: &LoadedRequest,
     field: &str,
+    cache: &mut ResolutionCache,
 ) -> StateResult<FieldReadResult> {
     let parts = selector_parts(field)?;
-    if let Some(context_result) = resolve_context_ref_field(project_root, request, field, &parts)? {
+    if let Some(context_result) =
+        resolve_context_ref_field(project_root, request, field, &parts, cache)?
+    {
         return Ok(context_result);
     }
     let root_key = parts.first().expect("selector has first part");
-    if let Some(ref_entry) = request_storage_manifest_ref(project_root, request, root_key)? {
-        let paths = project_paths(project_root)?;
-        let ref_file = from_project_relative(&paths.root, &ref_entry)?;
-        let ref_value = read_json_value(&ref_file)?;
+    if let Some(ref_entry) = request_storage_manifest_ref(project_root, request, root_key, cache)? {
+        let ref_value = read_reference_value(project_root, &ref_entry, cache)?;
         let value = if root_key == "rules"
             && parts[1..].join(".") == "requirementSemanticGrounding.compactRules"
         {
@@ -248,6 +339,7 @@ fn resolve_context_ref_field(
     request: &LoadedRequest,
     field: &str,
     parts: &[String],
+    cache: &mut ResolutionCache,
 ) -> StateResult<Option<FieldReadResult>> {
     let Some(context_refs) = request.root.get("contextRefs").and_then(Value::as_object) else {
         return Ok(None);
@@ -257,9 +349,11 @@ fn resolve_context_ref_field(
             .get("normalizedRequirementTextRef")
             .and_then(Value::as_str)
         {
-            let paths = project_paths(project_root)?;
-            let text_file = from_project_relative(&paths.root, relative)?;
-            return Ok(Some(field_result(Value::String(read_text(&text_file)?))));
+            return Ok(Some(field_result(read_reference_value(
+                project_root,
+                relative,
+                cache,
+            )?)));
         }
     }
     if parts[0] == "sourceRefRegistry" {
@@ -269,9 +363,7 @@ fn resolve_context_ref_field(
         else {
             return Ok(None);
         };
-        let paths = project_paths(project_root)?;
-        let ref_file = from_project_relative(&paths.root, relative)?;
-        let ref_value = read_json_value(&ref_file)?;
+        let ref_value = read_reference_value(project_root, relative, cache)?;
         return Ok(Some(field_result(select_source_ref_registry(
             &ref_value,
             &parts[1..],
@@ -305,9 +397,7 @@ fn resolve_context_ref_field(
     let Some(relative) = context_refs.get(*ref_field).and_then(Value::as_str) else {
         return Ok(None);
     };
-    let paths = project_paths(project_root)?;
-    let ref_file = from_project_relative(&paths.root, relative)?;
-    let ref_value = read_json_value(&ref_file)?;
+    let ref_value = read_reference_value(project_root, relative, cache)?;
     let value = if parts.len() == 1 {
         ref_value
     } else if parts[0] == "keywordHints" && parts.get(1).map(String::as_str) == Some("compact") {
@@ -330,9 +420,47 @@ fn request_storage_manifest_ref(
     project_root: &str,
     request: &LoadedRequest,
     key: &str,
+    cache: &mut ResolutionCache,
 ) -> StateResult<Option<String>> {
+    if cache.manifest_refs.is_none() {
+        let paths = project_paths(project_root)?;
+        cache.manifest_refs = Some(request_storage_refs(&paths.root, &request.request_id)?);
+    }
+    Ok(cache
+        .manifest_refs
+        .as_ref()
+        .and_then(|refs| refs.get(key).cloned()))
+}
+
+fn read_reference_value(
+    project_root: &str,
+    relative: &str,
+    cache: &mut ResolutionCache,
+) -> StateResult<Value> {
+    if let Some(value) = cache.reference_values.get(relative) {
+        return Ok(value.clone());
+    }
     let paths = project_paths(project_root)?;
-    request_storage_ref(&paths.root, &request.request_id, key)
+    let file = from_project_relative(&paths.root, relative)?;
+    let value = match file.extension().and_then(|extension| extension.to_str()) {
+        Some("txt" | "md") => Value::String(read_text(&file)?),
+        _ => read_json_value(&file)?,
+    };
+    cache
+        .reference_values
+        .insert(relative.to_string(), value.clone());
+    Ok(value)
+}
+
+fn request_file_fingerprint(path: &std::path::Path) -> StateResult<String> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    Ok(format!("{}:{modified}", metadata.len()))
 }
 
 fn selector_parts(field: &str) -> StateResult<Vec<String>> {
@@ -452,15 +580,18 @@ fn extract_submit_tool(root: &Value, output_contract: Option<&Value>) -> Option<
         .map(str::to_string)
 }
 
-fn read_output_contract(project_root: &str, request: &LoadedRequest) -> StateResult<Option<Value>> {
+fn read_output_contract(
+    project_root: &str,
+    request: &LoadedRequest,
+    cache: &mut ResolutionCache,
+) -> StateResult<Option<Value>> {
     if let Some(value) = request.root.get("outputContract") {
         return Ok(Some(value.clone()));
     }
-    let Some(relative) = request_storage_manifest_ref(project_root, request, "outputContract")?
+    let Some(relative) =
+        request_storage_manifest_ref(project_root, request, "outputContract", cache)?
     else {
         return Ok(None);
     };
-    let paths = project_paths(project_root)?;
-    let ref_file = from_project_relative(&paths.root, &relative)?;
-    read_json_value(&ref_file).map(Some)
+    read_reference_value(project_root, &relative, cache).map(Some)
 }

@@ -47,6 +47,57 @@ impl Default for AgentFieldPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskEvidenceApplicability {
+    pub frontend_self_check: bool,
+    pub frontend_quality_self_check: bool,
+    pub runtime_delivery_evidence: bool,
+    pub engineering_quality_evidence: bool,
+    pub architecture_quality_evidence: bool,
+    pub api_contract_evidence: bool,
+    pub code_quality_evidence: bool,
+}
+
+/// Resolve optional TaskResult evidence from the same structured task shape
+/// used by execution, persistence, and review. No prose or technology keyword
+/// is consulted here.
+pub fn task_evidence_applicability_from_value(task: &Value) -> TaskEvidenceApplicability {
+    let frontend = task
+        .get("frontendExperienceRequirement")
+        .filter(|value| !value.is_null());
+    let runtime = task
+        .pointer("/runtimeDeliveryRequirement/appliesToThisTask")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    TaskEvidenceApplicability {
+        frontend_self_check: frontend.is_some(),
+        frontend_quality_self_check: frontend.is_some_and(|requirement| {
+            requirement.get("uiSurfaceDecisionContractRef").is_some()
+                || requirement
+                    .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+                    .is_some_and(Value::is_object)
+        }),
+        runtime_delivery_evidence: runtime,
+        engineering_quality_evidence: non_empty_array_field(
+            task,
+            "engineeringQualityRequirementRefs",
+        ),
+        architecture_quality_evidence: non_empty_array_field(
+            task,
+            "architectureQualityRequirementRefs",
+        ),
+        api_contract_evidence: non_empty_array_field(task, "apiContractRequirementRefs"),
+        code_quality_evidence: non_empty_array_field(task, "codeQualityRequirementRefs"),
+    }
+}
+
+fn non_empty_array_field(value: &Value, key: &str) -> bool {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
 /// Build the compact, tree-shaped field contract from the canonical schema.
 /// The full JSON schema remains private; the tree avoids repeating long leaf
 /// prefixes in the Agent-facing read group.
@@ -308,31 +359,18 @@ pub fn derive_agent_field_policies(root: &Value) -> BTreeMap<String, AgentFieldP
     derive_architecture_field_policies(root, &mut policies);
 
     let task = root.get("task").unwrap_or(&Value::Null);
-    let frontend_experience = task
-        .get("frontendExperienceRequirement")
-        .filter(|value| !value.is_null());
-    let runtime_applies = task
-        .pointer("/runtimeDeliveryRequirement/appliesToThisTask")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let applicability = task_evidence_applicability_from_value(task);
     policies.insert(
         "frontendExperienceSelfCheck".to_string(),
-        policy_for(if frontend_experience.is_some() && !runtime_applies {
+        policy_for(if applicability.frontend_self_check {
             AgentFieldApplicability::CurrentRequest
         } else {
             AgentFieldApplicability::NotApplicable
         }),
     );
-    let frontend_quality_applies = frontend_experience.is_some()
-        && !runtime_applies
-        && frontend_experience
-            .and_then(|value| {
-                value.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
-            })
-            .is_some_and(|value| !value.is_null());
     policies.insert(
         "frontendQualitySelfCheck".to_string(),
-        policy_for(if frontend_quality_applies {
+        policy_for(if applicability.frontend_quality_self_check {
             AgentFieldApplicability::CurrentRequest
         } else {
             AgentFieldApplicability::NotApplicable
@@ -340,29 +378,35 @@ pub fn derive_agent_field_policies(root: &Value) -> BTreeMap<String, AgentFieldP
     );
     policies.insert(
         "runtimeDeliveryEvidence".to_string(),
-        policy_for(if runtime_applies {
+        policy_for(if applicability.runtime_delivery_evidence {
             AgentFieldApplicability::CurrentRequest
         } else {
             AgentFieldApplicability::NotApplicable
         }),
     );
-    policy_for_task_array_field(
-        &mut policies,
-        task,
-        "apiContractRequirements",
-        "apiContractEvidence",
+    policies.insert(
+        "apiContractEvidence".to_string(),
+        policy_for(if applicability.api_contract_evidence {
+            AgentFieldApplicability::CurrentRequest
+        } else {
+            AgentFieldApplicability::NotApplicable
+        }),
     );
-    policy_for_task_array_field(
-        &mut policies,
-        task,
-        "architectureQualityRequirements",
-        "architectureQualityEvidence",
+    policies.insert(
+        "architectureQualityEvidence".to_string(),
+        policy_for(if applicability.architecture_quality_evidence {
+            AgentFieldApplicability::CurrentRequest
+        } else {
+            AgentFieldApplicability::NotApplicable
+        }),
     );
-    policy_for_task_array_field(
-        &mut policies,
-        task,
-        "codeQualityRequirements",
-        "codeQualityEvidence",
+    policies.insert(
+        "codeQualityEvidence".to_string(),
+        policy_for(if applicability.code_quality_evidence {
+            AgentFieldApplicability::CurrentRequest
+        } else {
+            AgentFieldApplicability::NotApplicable
+        }),
     );
     policies
 }
@@ -1113,24 +1157,6 @@ fn policy_for(applicability: AgentFieldApplicability) -> AgentFieldPolicy {
         applicability,
         ..AgentFieldPolicy::default()
     }
-}
-
-fn policy_for_task_array_field(
-    policies: &mut BTreeMap<String, AgentFieldPolicy>,
-    task: &Value,
-    task_field: &str,
-    result_field: &str,
-) {
-    let applicability = if task
-        .get(task_field)
-        .and_then(Value::as_array)
-        .is_some_and(|items| !items.is_empty())
-    {
-        AgentFieldApplicability::CurrentRequest
-    } else {
-        AgentFieldApplicability::NotApplicable
-    };
-    policies.insert(result_field.to_string(), policy_for(applicability));
 }
 
 fn schema_type(schema: &Value) -> String {

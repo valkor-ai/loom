@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use contracts::{
     DeploymentRuntimeContract, DeploymentShape, DeploymentSourceModel, DeploymentSourceService,
     PackageManager, RuntimeKind, SourceModelSource, SourceServiceRole,
@@ -10,7 +12,7 @@ pub fn source_model_from_runtime_contract(
     fallback_probe: &DeploymentCodeProbe,
     build_context_path: String,
 ) -> DeploymentSourceModel {
-    let shape = runtime
+    let declared_shape = runtime
         .deployment_shape
         .unwrap_or(DeploymentShape::SingleService);
     if matches!(
@@ -19,6 +21,7 @@ pub fn source_model_from_runtime_contract(
     ) {
         return source_model_from_probe(fallback_probe, build_context_path);
     }
+    let shape = inferred_shape(declared_shape, runtime, fallback_probe);
     if shape == DeploymentShape::FrontendAndBackend {
         let frontend_root = service_root_from_refs(
             &[
@@ -33,9 +36,11 @@ pub fn source_model_from_runtime_contract(
                 runtime
                     .frontend
                     .as_ref()
-                    .and_then(|item| item.build_command.as_deref()),
-                runtime.build_command.as_deref(),
-                runtime.start_command.as_deref(),
+                    .and_then(|item| item.commands.build.as_deref()),
+                runtime.commands.development.build.as_deref(),
+                runtime.commands.development.start.as_deref(),
+                runtime.commands.deployment.build.as_deref(),
+                runtime.commands.deployment.start.as_deref(),
             ],
             &["frontend", "web", "client", "ui"],
         );
@@ -46,9 +51,11 @@ pub fn source_model_from_runtime_contract(
                 runtime
                     .api
                     .as_ref()
-                    .and_then(|item| item.build_command.as_deref()),
-                runtime.start_command.as_deref(),
-                runtime.build_command.as_deref(),
+                    .and_then(|item| item.commands.build.as_deref()),
+                runtime.commands.development.start.as_deref(),
+                runtime.commands.development.build.as_deref(),
+                runtime.commands.deployment.start.as_deref(),
+                runtime.commands.deployment.build.as_deref(),
             ],
             &["backend", "api", "service", "server"],
         );
@@ -57,8 +64,8 @@ pub fn source_model_from_runtime_contract(
             runtime
                 .frontend
                 .as_ref()
-                .and_then(|item| item.build_command.clone())
-                .or_else(|| runtime.build_command.clone()),
+                .and_then(|item| item.commands.build.clone())
+                .or_else(|| runtime.commands.deployment.build.clone()),
             &frontend_root,
             &["frontend", "web", "client", "ui"],
         );
@@ -66,13 +73,13 @@ pub fn source_model_from_runtime_contract(
             runtime
                 .api
                 .as_ref()
-                .and_then(|item| item.build_command.clone())
-                .or_else(|| runtime.build_command.clone()),
+                .and_then(|item| item.commands.build.clone())
+                .or_else(|| runtime.commands.deployment.build.clone()),
             &backend_root,
             &["backend", "api", "service", "server"],
         );
         let backend_start_candidate = command_for_service(
-            runtime.start_command.clone(),
+            runtime.commands.deployment.start.clone(),
             &backend_root,
             &["backend", "api", "service", "server"],
         );
@@ -81,7 +88,7 @@ pub fn source_model_from_runtime_contract(
             runtime
                 .api
                 .as_ref()
-                .and_then(|api| api.build_command.as_deref()),
+                .and_then(|api| api.commands.build.as_deref()),
             backend_build.as_deref(),
             backend_start_candidate.as_deref(),
         ]);
@@ -108,7 +115,7 @@ pub fn source_model_from_runtime_contract(
             root: frontend_root.clone(),
             working_directory: (frontend_root != ".").then_some(frontend_root.clone()),
             workspace_package_json_paths: fallback_probe.workspace_package_json_paths.clone(),
-            manifest_refs: node_manifest_refs(&frontend_root),
+            manifest_refs: node_manifest_refs(fallback_probe, &frontend_root),
             lockfile_refs: frontend_lockfile_refs.clone(),
             artifact_refs: vec![runtime
                 .frontend
@@ -141,7 +148,7 @@ pub fn source_model_from_runtime_contract(
                 .or_else(|| runtime.frontend_output_dir.clone())
                 .or_else(|| Some(default_frontend_output_dir(&frontend_root))),
             port: 80,
-            healthcheck_path: Some("/".to_string()),
+            healthcheck_path: None,
         };
         let backend = DeploymentSourceService {
             service_id: "backend".to_string(),
@@ -150,6 +157,7 @@ pub fn source_model_from_runtime_contract(
             working_directory: (backend_root != ".").then_some(backend_root.clone()),
             workspace_package_json_paths: vec![],
             manifest_refs: backend_manifest_refs(
+                fallback_probe,
                 &backend_root,
                 backend_kind,
                 backend_build.as_deref(),
@@ -209,7 +217,7 @@ pub fn source_model_from_runtime_contract(
         runtime_kind_from_signals(&[
             runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
             runtime.runtime_kind.as_deref(),
-            runtime.start_command.as_deref(),
+            runtime.commands.deployment.start.as_deref(),
         ])
     };
     let service_runtime_kind = if contract_kind == RuntimeKind::Unknown {
@@ -235,9 +243,11 @@ pub fn source_model_from_runtime_contract(
         artifact_refs: probe_artifact_refs(fallback_probe),
         runtime_kind: service_runtime_kind,
         package_manager: runtime
-            .build_command
+            .commands
+            .deployment
+            .build
             .as_deref()
-            .or(runtime.start_command.as_deref())
+            .or(runtime.commands.deployment.start.as_deref())
             .filter(|command| command_is_usable(command))
             .and_then(|command| package_manager_from_command(Some(command)))
             .or(fallback_probe.package_manager)
@@ -252,12 +262,16 @@ pub fn source_model_from_runtime_contract(
         runtime_version: fallback_probe.runtime_version.clone(),
         runtime_version_source: fallback_probe.runtime_version_source.clone(),
         build_command: runtime
-            .build_command
+            .commands
+            .deployment
+            .build
             .clone()
             .filter(|command| command_is_usable(command))
             .or_else(|| fallback_probe.build_command.clone()),
         start_command: runtime
-            .start_command
+            .commands
+            .deployment
+            .start
             .clone()
             .filter(|command| command_is_usable(command))
             .or_else(|| fallback_probe.start_command.clone()),
@@ -266,11 +280,7 @@ pub fn source_model_from_runtime_contract(
             .clone()
             .or_else(|| fallback_probe.output_directory.clone()),
         port: runtime.port.unwrap_or(fallback_probe.port),
-        healthcheck_path: runtime
-            .health_path
-            .clone()
-            .or_else(|| fallback_probe.healthcheck_path.clone())
-            .or_else(|| Some(runtime.preview_path.clone())),
+        healthcheck_path: runtime.health_path.clone(),
     };
     DeploymentSourceModel {
         schema_version: 1,
@@ -284,6 +294,43 @@ pub fn source_model_from_runtime_contract(
         notes: vec![
             "Deployment source model was derived from RuntimeDelivery single service and repository code evidence.".to_string(),
         ],
+    }
+}
+
+fn inferred_shape(
+    declared: DeploymentShape,
+    runtime: &DeploymentRuntimeContract,
+    probe: &DeploymentCodeProbe,
+) -> DeploymentShape {
+    if declared == DeploymentShape::FrontendAndBackend {
+        return declared;
+    }
+    let has_frontend_code =
+        !probe.workspace_package_json_paths.is_empty() || probe.output_directory.is_some();
+    let has_api_contract = runtime
+        .api_contract
+        .as_ref()
+        .is_some_and(|contract| !contract.interfaces.is_empty());
+    let integrated_frontend = runtime
+        .frontend
+        .as_ref()
+        .and_then(|frontend| {
+            frontend
+                .served_by
+                .as_deref()
+                .or(frontend.served_by_ref.as_deref())
+        })
+        .is_some_and(|value| {
+            let value = value.to_ascii_lowercase().replace(['-', '_'], "");
+            value.contains("sameprocess")
+                || value.contains("sameapp")
+                || value.contains("backendstatic")
+                || value.contains("springbootstatic")
+        });
+    if has_frontend_code && has_api_contract && !integrated_frontend {
+        DeploymentShape::FrontendAndBackend
+    } else {
+        declared
     }
 }
 
@@ -402,7 +449,7 @@ fn resolve_frontend_root(candidate: String, probe: &DeploymentCodeProbe) -> Stri
 
 fn resolve_backend_root(candidate: String, probe: &DeploymentCodeProbe) -> String {
     if candidate == "." {
-        return candidate;
+        return backend_root_from_probe(probe).unwrap_or(candidate);
     }
     if backend_root_from_probe(probe).as_deref() == Some(candidate.as_str()) {
         return candidate;
@@ -418,44 +465,80 @@ fn frontend_root_matches_probe(root: &str, probe: &DeploymentCodeProbe) -> bool 
         .any(|path| path == &manifest)
 }
 
-fn node_manifest_refs(root: &str) -> Vec<String> {
-    vec![join_root(root, "package.json")]
+fn node_manifest_refs(probe: &DeploymentCodeProbe, root: &str) -> Vec<String> {
+    let path = join_root(root, "package.json");
+    evidence_has_file_path(probe, &path)
+        .then_some(path)
+        .into_iter()
+        .collect()
 }
 
 fn node_lockfile_refs(
     probe: &DeploymentCodeProbe,
     root: &str,
-    package_manager: Option<PackageManager>,
+    _package_manager: Option<PackageManager>,
 ) -> Vec<String> {
-    node_lockfile_ref_for_root(probe, root, package_manager)
-        .into_iter()
-        .collect()
+    node_workspace_file_refs(
+        probe,
+        root,
+        &[
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "bun.lockb",
+        ],
+    )
 }
 
 fn backend_manifest_refs(
+    probe: &DeploymentCodeProbe,
     root: &str,
     kind: RuntimeKind,
     build_command: Option<&str>,
 ) -> Vec<String> {
-    match kind {
+    let candidates: Vec<String> = match kind {
         RuntimeKind::Java => {
             if package_manager_from_command(build_command) == Some(PackageManager::Gradle) {
-                vec![join_root(root, "build.gradle")]
+                vec!["build.gradle".to_string(), "build.gradle.kts".to_string()]
             } else {
-                vec![join_root(root, "pom.xml")]
+                vec!["pom.xml".to_string()]
             }
         }
-        RuntimeKind::Dotnet => vec![join_root(root, "*.csproj")],
+        RuntimeKind::Dotnet => dotnet_manifest_candidates(probe, root),
         RuntimeKind::Python => vec![
-            join_root(root, "pyproject.toml"),
-            join_root(root, "requirements.txt"),
+            "pyproject.toml".to_string(),
+            "requirements.txt".to_string(),
+            "Pipfile".to_string(),
         ],
-        RuntimeKind::Go => vec![join_root(root, "go.mod")],
-        RuntimeKind::Node => node_manifest_refs(root),
-        RuntimeKind::Php => vec![join_root(root, "composer.json")],
-        RuntimeKind::Ruby => vec![join_root(root, "Gemfile")],
+        RuntimeKind::Go => vec!["go.mod".to_string()],
+        RuntimeKind::Node => return node_manifest_refs(probe, root),
+        RuntimeKind::Php => vec!["composer.json".to_string()],
+        RuntimeKind::Ruby => vec!["Gemfile".to_string()],
         _ => vec![],
-    }
+    };
+    candidates
+        .into_iter()
+        .map(|relative| join_root(root, &relative))
+        .filter(|path| evidence_has_file_path(probe, path))
+        .collect()
+}
+
+fn dotnet_manifest_candidates(probe: &DeploymentCodeProbe, root: &str) -> Vec<String> {
+    let prefix = if root == "." {
+        String::new()
+    } else {
+        format!("{}/", root.trim_matches('/'))
+    };
+    probe
+        .evidence
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("path").and_then(serde_json::Value::as_str))
+        .filter(|path| path.starts_with(&prefix) && path.ends_with(".csproj"))
+        .filter_map(|path| path.strip_prefix(&prefix).map(str::to_string))
+        .collect()
 }
 
 fn backend_artifact_refs(root: &str, kind: RuntimeKind) -> Vec<String> {
@@ -474,21 +557,31 @@ fn backend_artifact_refs(root: &str, kind: RuntimeKind) -> Vec<String> {
 fn probe_manifest_refs(probe: &DeploymentCodeProbe) -> Vec<String> {
     let root = probe.working_directory.as_deref().unwrap_or(".");
     match probe.kind {
-        RuntimeKind::Node => node_manifest_refs(root),
-        RuntimeKind::Java => {
-            backend_manifest_refs(root, RuntimeKind::Java, probe.build_command.as_deref())
-        }
-        RuntimeKind::Python => {
-            backend_manifest_refs(root, RuntimeKind::Python, probe.build_command.as_deref())
-        }
+        RuntimeKind::Node => node_manifest_refs(probe, root),
+        RuntimeKind::Java => backend_manifest_refs(
+            probe,
+            root,
+            RuntimeKind::Java,
+            probe.build_command.as_deref(),
+        ),
+        RuntimeKind::Python => backend_manifest_refs(
+            probe,
+            root,
+            RuntimeKind::Python,
+            probe.build_command.as_deref(),
+        ),
         RuntimeKind::Go => {
-            backend_manifest_refs(root, RuntimeKind::Go, probe.build_command.as_deref())
+            backend_manifest_refs(probe, root, RuntimeKind::Go, probe.build_command.as_deref())
         }
-        RuntimeKind::Dotnet => {
-            backend_manifest_refs(root, RuntimeKind::Dotnet, probe.build_command.as_deref())
+        RuntimeKind::Dotnet => backend_manifest_refs(
+            probe,
+            root,
+            RuntimeKind::Dotnet,
+            probe.build_command.as_deref(),
+        ),
+        RuntimeKind::Php | RuntimeKind::Ruby => {
+            backend_manifest_refs(probe, root, probe.kind, probe.build_command.as_deref())
         }
-        RuntimeKind::Php => vec![join_root(root, "composer.json")],
-        RuntimeKind::Ruby => vec![join_root(root, "Gemfile")],
         RuntimeKind::Static | RuntimeKind::Unknown => vec![],
     }
 }
@@ -587,52 +680,51 @@ fn frontend_framework_from_signals(signals: &[Option<&str>]) -> Option<String> {
     }
 }
 
-fn node_lockfile_ref_for_root(
+fn node_workspace_file_refs(
     probe: &DeploymentCodeProbe,
     root: &str,
-    package_manager: Option<PackageManager>,
-) -> Option<String> {
-    let package_path = join_root(root, "package.json");
-    if !probe
+    file_names: &[&str],
+) -> Vec<String> {
+    let root_prefix = if root == "." || root.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", root.trim_matches('/'))
+    };
+    let package_roots = probe
         .workspace_package_json_paths
         .iter()
-        .any(|path| path == &package_path)
-    {
-        return None;
-    }
-    let mut candidates = node_lockfile_candidates(package_manager);
-    for fallback in [
-        "package-lock.json",
-        "pnpm-lock.yaml",
-        "yarn.lock",
-        "bun.lockb",
-    ] {
-        if !candidates.contains(&fallback) {
-            candidates.push(fallback);
-        }
-    }
-    candidates
-        .into_iter()
-        .map(|name| join_root(root, name))
-        .find(|candidate| evidence_has_file_path(probe, candidate))
-        .or_else(|| {
-            (probe.kind == RuntimeKind::Node && probe.has_lockfile).then(|| {
-                let fallback = node_lockfile_candidates(package_manager)
-                    .first()
-                    .copied()
-                    .unwrap_or("package-lock.json");
-                join_root(root, fallback)
-            })
+        .filter_map(|path| {
+            if path == "package.json" {
+                Some("")
+            } else {
+                path.strip_suffix("/package.json")
+            }
         })
-}
-
-fn node_lockfile_candidates(package_manager: Option<PackageManager>) -> Vec<&'static str> {
-    match package_manager.unwrap_or(PackageManager::Npm) {
-        PackageManager::Pnpm => vec!["pnpm-lock.yaml"],
-        PackageManager::Yarn => vec!["yarn.lock"],
-        PackageManager::Bun => vec!["bun.lockb"],
-        _ => vec!["package-lock.json"],
-    }
+        .filter(|package_root| {
+            root == "."
+                || *package_root == root.trim_matches('/')
+                || package_root.starts_with(&root_prefix)
+        })
+        .map(|package_root| {
+            if package_root.is_empty() {
+                ".".to_string()
+            } else {
+                package_root.to_string()
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    let mut refs = package_roots
+        .into_iter()
+        .flat_map(|package_root| {
+            file_names
+                .iter()
+                .map(move |name| join_root(&package_root, name))
+        })
+        .filter(|path| evidence_has_file_path(probe, path))
+        .collect::<Vec<_>>();
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 fn evidence_has_file_path(probe: &DeploymentCodeProbe, relative: &str) -> bool {
@@ -652,14 +744,12 @@ fn evidence_has_file_path(probe: &DeploymentCodeProbe, relative: &str) -> bool {
 
 fn backend_healthcheck_path(
     runtime: &DeploymentRuntimeContract,
-    fallback_probe: &DeploymentCodeProbe,
+    _fallback_probe: &DeploymentCodeProbe,
 ) -> Option<String> {
     runtime
         .health_path
         .clone()
         .or_else(|| preferred_api_probe_path(runtime))
-        .or_else(|| fallback_probe.healthcheck_path.clone())
-        .or_else(|| Some(runtime.preview_path.clone()))
 }
 
 fn preferred_api_probe_path(runtime: &DeploymentRuntimeContract) -> Option<String> {
@@ -668,13 +758,6 @@ fn preferred_api_probe_path(runtime: &DeploymentRuntimeContract) -> Option<Strin
         .iter()
         .find(|probe| probe.path.to_ascii_lowercase().contains("health"))
         .map(|probe| probe.path.clone())
-        .or_else(|| {
-            runtime
-                .safe_http_probes
-                .iter()
-                .find(|probe| probe.path.starts_with('/'))
-                .map(|probe| probe.path.clone())
-        })
 }
 
 fn command_is_usable(command: &str) -> bool {
@@ -687,16 +770,20 @@ pub fn runtime_contract_declares_multi_root(runtime: &DeploymentRuntimeContract)
     }
     let mut labels = Vec::new();
     for command in [
-        runtime.build_command.as_deref(),
-        runtime.start_command.as_deref(),
+        runtime.commands.development.build.as_deref(),
+        runtime.commands.development.start.as_deref(),
+        runtime.commands.verification.build.as_deref(),
+        runtime.commands.verification.start.as_deref(),
+        runtime.commands.deployment.build.as_deref(),
+        runtime.commands.deployment.start.as_deref(),
         runtime
             .frontend
             .as_ref()
-            .and_then(|endpoint| endpoint.build_command.as_deref()),
+            .and_then(|endpoint| endpoint.commands.build.as_deref()),
         runtime
             .api
             .as_ref()
-            .and_then(|api| api.build_command.as_deref()),
+            .and_then(|api| api.commands.build.as_deref()),
     ]
     .into_iter()
     .flatten()
@@ -1179,4 +1266,42 @@ fn start_command_is_runtime_safe(kind: RuntimeKind, command: &str) -> bool {
             || lower.starts_with("gradle"));
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn node_source_facts_include_lockfiles_for_each_workspace_package_root() {
+        let probe = DeploymentCodeProbe {
+            kind: RuntimeKind::Node,
+            workspace_package_json_paths: vec![
+                "package.json".to_string(),
+                "apps/admin/package.json".to_string(),
+                "packages/shared/package.json".to_string(),
+            ],
+            evidence: json!({
+                "files": [
+                    {"path": "package.json"},
+                    {"path": "package-lock.json"},
+                    {"path": "apps/admin/package.json"},
+                    {"path": "apps/admin/pnpm-lock.yaml"},
+                    {"path": "packages/shared/package.json"},
+                    {"path": "packages/shared/yarn.lock"}
+                ]
+            }),
+            ..DeploymentCodeProbe::unknown()
+        };
+
+        assert_eq!(
+            node_lockfile_refs(&probe, ".", Some(PackageManager::Npm)),
+            vec![
+                "apps/admin/pnpm-lock.yaml",
+                "package-lock.json",
+                "packages/shared/yarn.lock"
+            ]
+        );
+    }
 }

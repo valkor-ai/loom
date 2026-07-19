@@ -66,7 +66,7 @@ Record boundary, scenario, command, and meaningful HTTP/visible/build assertion.
 
 ## Unsafe Defaults
 
-- Next testing reference loaded for implementation-only tasks.
+- Load this reference only when the accepted task owns Next.js test creation, test modification, or test-specific verification.
 - Client component tests claimed as Server Component/runtime/middleware proof.
 - Action tests bypassing auth/transaction/revalidation/readback.
 - Shared cache/env/cookie state leaking across tests.

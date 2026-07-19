@@ -780,10 +780,7 @@ fn interactive_verification_probe_policy() -> Value {
         "appliesWhen": "The task uses browser, e2e, interactive UI, runtime UI, or API-backed UI verification.",
         "deriveProbePlanFrom": [
             "task.verificationIntents[].behavior",
-            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "task.frontendExperienceRequirement.executionGuidance.workflowsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
             "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"
         ],
         "requiredExecutionPattern": [
@@ -1099,11 +1096,7 @@ fn task_execution_read_groups(
             "task.frontendExperienceRequirement.executionGuidance.purpose",
             "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
             "task.frontendExperienceRequirement.executionGuidance.responsibility",
-            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
             "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
@@ -1111,7 +1104,6 @@ fn task_execution_read_groups(
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
             "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "task.frontendExperienceRequirement.uiSurfaceOwnership",
         ]);
     }
     if has_frontend_execution {
@@ -1597,11 +1589,7 @@ fn build_frontend_execution_guidance(
             "purpose": "No AAC frontendExperience is present for this task.",
             "userFacingLanguage": user_facing_language,
             "responsibility": task.objective,
-            "surfacesInScope": [],
-            "dataViewsInScope": [],
-            "actionsInScope": [],
-            "operationPathsInScope": [],
-            "frontendBackendBindings": [],
+            "uiTaskScope": empty_ui_task_scope(),
             "dataBindingExpectation": {
                 "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"]
             },
@@ -1648,11 +1636,15 @@ fn build_frontend_execution_guidance(
         "purpose": "Task-scoped frontend execution guidance derived from AAC and TaskPlan refs.",
         "userFacingLanguage": user_facing_language,
         "responsibility": task.objective,
-        "surfacesInScope": surfaces,
-        "dataViewsInScope": data_views,
-        "actionsInScope": actions,
-        "operationPathsInScope": operation_paths,
-        "frontendBackendBindings": frontend_backend_bindings,
+        "uiTaskScope": ui_task_scope_projection(
+            frontend,
+            &task_scope,
+            &surfaces,
+            &data_views,
+            &actions,
+            &operation_paths,
+            &frontend_backend_bindings,
+        ),
         "dataBindingExpectation": {
             "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"],
             "requiredModeForSatisfaction": if closure_requirements.is_empty() { Value::Null } else { json!("wired") },
@@ -1669,6 +1661,53 @@ fn build_frontend_execution_guidance(
         "uiProductionBrief": ui_production_brief(task, frontend, &task_scope, user_facing_language),
         "styleAssetPlan": style_asset_plan(frontend),
         "guidanceWarnings": warnings
+    })
+}
+
+fn empty_ui_task_scope() -> Value {
+    json!({
+        "source": "MCP-derived TaskPlan uiTaskScope projection",
+        "surfacesInScope": [],
+        "dataViewsInScope": [],
+        "actionsInScope": [],
+        "operationPathsInScope": [],
+        "frontendBackendBindings": [],
+        "regionsInScope": [],
+        "actionsInContract": [],
+        "statesInContract": [],
+        "qualityRulesInScope": [],
+        "ownershipDimensions": []
+    })
+}
+
+fn ui_task_scope_projection(
+    frontend: &Value,
+    scope: &FrontendTaskScope,
+    surfaces: &[Value],
+    data_views: &[Value],
+    actions: &[Value],
+    operation_paths: &[Value],
+    bindings: &[Value],
+) -> Value {
+    let surface_contract = frontend
+        .get("uiSurfaceDecisionContract")
+        .unwrap_or(&Value::Null);
+    json!({
+        "source": "MCP-derived TaskPlan uiTaskScope projection",
+        "surfaceIds": scope.surface_refs,
+        "surfacesInScope": surfaces,
+        "dataViewsInScope": data_views,
+        "actionsInScope": actions,
+        "operationPathsInScope": operation_paths,
+        "frontendBackendBindings": bindings,
+        "regionsInScope": selected_surface_contract_values(surface_contract, "regionModel", "regionId", &scope.surface_region_refs),
+        "actionsInContract": selected_surface_contract_values(surface_contract, "actionModel", "actionId", &scope.surface_action_refs),
+        "statesInContract": selected_surface_contract_values(surface_contract, "stateModel", "state", &scope.state_refs),
+        "qualityRulesInScope": selected_surface_contract_values(surface_contract, "qualityRules", "ruleId", &scope.quality_rule_refs),
+        "ownershipDimensions": scope.ownership_dimensions,
+        "layoutBaseline": surface_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
+        "informationModel": surface_contract.get("informationModel").cloned().unwrap_or(Value::Null),
+        "contentBoundary": surface_contract.get("contentBoundary").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -1759,24 +1798,81 @@ fn frontend_task_scope(
         );
         push_unique_strings(
             &mut scope.surface_region_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/regionIdsInScope"),
+            scope_refs_from_requirement(requirement, "/uiTaskScope/regionsInScope", &["regionId"]),
         );
         push_unique_strings(
             &mut scope.surface_action_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/actionIdsInScope"),
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/actionsInContract",
+                &["actionId"],
+            ),
         );
         push_unique_strings(
             &mut scope.state_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/stateKindsInScope"),
+            scope_refs_from_requirement(requirement, "/uiTaskScope/statesInContract", &["state"]),
         );
         push_unique_strings(
             &mut scope.quality_rule_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/qualityRuleIdsInScope"),
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/qualityRulesInScope",
+                &["ruleId"],
+            ),
         );
         push_unique_strings(
             &mut scope.ownership_dimensions,
             ownership_dimensions_from_requirement(requirement),
         );
+
+        // A TaskResult submit reconstructs the task from the execution request. Preserve the
+        // previously derived task-scoped contract when the original TaskPlan projection did not
+        // carry explicit UI scope arrays.
+        let brief = requirement
+            .pointer("/executionGuidance/uiProductionBrief")
+            .unwrap_or(&Value::Null);
+        push_unique_strings(
+            &mut scope.surface_refs,
+            string_array_at(brief.get("appliesTo").unwrap_or(&Value::Null), "surfaceIds"),
+        );
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            string_array_at(
+                brief.get("appliesTo").unwrap_or(&Value::Null),
+                "dataViewIds",
+            ),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            string_array_at(brief.get("appliesTo").unwrap_or(&Value::Null), "actionIds"),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            string_array_at(
+                brief.get("appliesTo").unwrap_or(&Value::Null),
+                "operationPathIds",
+            ),
+        );
+        let brief_contract = brief.get("surfaceDecisionContract").unwrap_or(&Value::Null);
+        push_unique_strings(
+            &mut scope.surface_region_refs,
+            scope_refs_from_requirement(brief_contract, "/regionsInScope", &["regionId"]),
+        );
+        push_unique_strings(
+            &mut scope.surface_action_refs,
+            scope_refs_from_requirement(brief_contract, "/actionsInScope", &["actionId"]),
+        );
+        push_unique_strings(
+            &mut scope.state_refs,
+            scope_refs_from_requirement(brief_contract, "/statesInScope", &["state"]),
+        );
+        push_unique_strings(
+            &mut scope.quality_rule_refs,
+            scope_refs_from_requirement(brief_contract, "/qualityRulesInScope", &["ruleId"]),
+        );
+        for region in array_at(brief_contract, "regionsInScope") {
+            push_unique_strings(&mut scope.state_refs, string_array_at(region, "stateRefs"));
+        }
     }
     for detail in &aac.detail_coverage {
         if !task
@@ -1811,52 +1907,84 @@ fn frontend_task_scope(
         enrich_scope_from_operation_paths(frontend, &mut scope);
         enrich_scope_from_surfaces(frontend, &mut scope);
     }
-    if task_has_frontend_execution(task)
-        && scope.surface_refs.is_empty()
-        && scope.data_view_refs.is_empty()
-        && scope.action_refs.is_empty()
-        && scope.operation_path_refs.is_empty()
-    {
-        push_unique_strings(
-            &mut scope.surface_refs,
-            registry_surface_values(frontend)
-                .into_iter()
-                .filter_map(|surface| string_at(surface, "surfaceId"))
-                .chain(
-                    array_at(frontend, "surfaces")
-                        .into_iter()
-                        .filter_map(|surface| string_at(surface, "surfaceId")),
-                )
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.operation_path_refs,
-            array_at(frontend, "operationPaths")
-                .into_iter()
-                .filter_map(|path| string_at(path, "pathId"))
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.data_view_refs,
-            array_at(frontend, "dataViews")
-                .into_iter()
-                .filter_map(|view| string_at(view, "viewId"))
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.action_refs,
-            array_at(frontend, "actions")
-                .into_iter()
-                .filter_map(|action| string_at(action, "actionId"))
-                .collect(),
-        );
+    if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+        if scope.surface_region_refs.is_empty()
+            && (!scope.surface_refs.is_empty()
+                || !scope.data_view_refs.is_empty()
+                || !scope.action_refs.is_empty()
+                || !scope.operation_path_refs.is_empty())
+        {
+            for region in array_at(surface_contract, "regionModel") {
+                let refs = string_array_at(region, "surfaceRefs");
+                if refs.is_empty()
+                    || refs.iter().any(|reference| {
+                        scope.surface_refs.contains(reference)
+                            || scope.data_view_refs.contains(reference)
+                            || scope.action_refs.contains(reference)
+                            || scope.operation_path_refs.contains(reference)
+                    })
+                {
+                    push_unique(
+                        &mut scope.surface_region_refs,
+                        string_at(region, "regionId"),
+                    );
+                }
+            }
+        }
+        if scope.quality_rule_refs.is_empty()
+            && (!scope.surface_refs.is_empty()
+                || !scope.data_view_refs.is_empty()
+                || !scope.action_refs.is_empty()
+                || !scope.operation_path_refs.is_empty())
+        {
+            for rule in array_at(surface_contract, "qualityRules") {
+                let refs = string_array_at(rule, "scopeRefs");
+                if refs.is_empty()
+                    || refs.iter().any(|reference| {
+                        scope.surface_refs.contains(reference)
+                            || scope.data_view_refs.contains(reference)
+                            || scope.action_refs.contains(reference)
+                            || scope.operation_path_refs.contains(reference)
+                    })
+                {
+                    push_unique(&mut scope.quality_rule_refs, string_at(rule, "ruleId"));
+                }
+            }
+        }
     }
-    if scope.state_refs.is_empty() {
-        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+    if scope.state_refs.is_empty() && !scope.surface_refs.is_empty() {
+        for surface in selected_frontend_surfaces(frontend, &scope.surface_refs) {
             push_unique_strings(
                 &mut scope.state_refs,
-                object_array_field(surface_contract, "stateModel", "state"),
+                string_array_at(&surface, "stateRefs"),
             );
+            if let Some(model) = surface
+                .get("statePlacementModel")
+                .and_then(Value::as_object)
+            {
+                push_unique_strings(&mut scope.state_refs, model.keys().cloned().collect());
+            }
+        }
+    }
+    if scope.state_refs.is_empty() && !scope.surface_region_refs.is_empty() {
+        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+            for region in array_at(surface_contract, "regionModel") {
+                if string_at(region, "regionId")
+                    .is_some_and(|region_id| scope.surface_region_refs.contains(&region_id))
+                {
+                    push_unique_strings(
+                        &mut scope.state_refs,
+                        string_array_at(region, "stateRefs"),
+                    );
+                }
+            }
+        }
+    }
+    if !scope.surface_region_refs.is_empty() {
+        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+            for state in array_at(surface_contract, "stateModel") {
+                push_unique(&mut scope.state_refs, string_at(state, "state"));
+            }
         }
     }
     scope.surface_refs = unique_strings(scope.surface_refs);
@@ -2166,15 +2294,7 @@ fn surface_decision_contract_projection(contract: &Value, scope: &FrontendTaskSc
     );
     json!({
         "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": if scope.surface_region_refs.is_empty()
-            && scope.surface_action_refs.is_empty()
-            && scope.state_refs.is_empty()
-            && scope.quality_rule_refs.is_empty()
-        {
-            "all_when_task_scope_empty"
-        } else {
-            "task_scope"
-        },
+        "selectionMode": "task_scope",
         "patternDecision": contract.get("patternDecision").cloned().unwrap_or(Value::Null),
         "semanticFacts": contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
         "layoutModel": contract.get("layoutModel").cloned().unwrap_or(Value::Null),
@@ -2194,10 +2314,10 @@ fn selected_surface_contract_values(
     id_key: &str,
     ids: &[String],
 ) -> Vec<Value> {
-    let values = array_at(contract, array_key);
     if ids.is_empty() {
-        return values.into_iter().cloned().collect();
+        return Vec::new();
     }
+    let values = array_at(contract, array_key);
     selected_from_values(values, id_key, ids)
 }
 
@@ -2324,11 +2444,7 @@ fn state_contract(
     surfaces: &[Value],
     scope: &FrontendTaskScope,
 ) -> Value {
-    let state_refs = if scope.state_refs.is_empty() {
-        object_array_field(surface_contract, "stateModel", "state")
-    } else {
-        scope.state_refs.clone()
-    };
+    let state_refs = scope.state_refs.clone();
     let states_in_scope =
         selected_surface_contract_values(surface_contract, "stateModel", "state", &state_refs);
     json!({
@@ -2506,23 +2622,6 @@ fn default_forbidden_composition() -> Vec<String> {
         "decorative or explanatory sections that displace required data, actions, states, or feedback"
             .to_string(),
     ]
-}
-
-fn object_array_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
-    value
-        .get(array_key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    item.get(field_key)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn compact_join(values: Vec<String>, fallback: &str) -> String {
@@ -2712,20 +2811,6 @@ fn string_at(value: &Value, key: &str) -> Option<String> {
 fn string_array_at(value: &Value, key: &str) -> Vec<String> {
     value
         .get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn string_array_at_pointer(value: &Value, pointer: &str) -> Vec<String> {
-    value
-        .pointer(pointer)
         .and_then(Value::as_array)
         .map(|items| {
             items

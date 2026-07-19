@@ -70,7 +70,7 @@ Name the public behavior, harness boundary, representative state, and assertion 
 
 ## Unsafe Defaults
 
-- Vue testing loaded for every implementation task.
+- Load this reference only when the accepted task owns Vue test creation, test modification, or test-specific verification.
 - New runner introduced despite repository tooling.
 - Every child/action/router/client stubbed until no real behavior remains.
 - Composables called without component/effect lifecycle.

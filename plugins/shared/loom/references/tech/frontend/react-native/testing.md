@@ -70,7 +70,7 @@ Name each behavior, evidence layer, platform/runtime, and assertion. Report mock
 
 ## Unsafe Defaults
 
-- Testing reference loaded for every React Native implementation task.
+- Load this reference only when the accepted task owns React Native test creation, test modification, or test-specific verification.
 - Snapshot trees used as the primary workflow evidence.
 - Native modules mocked to empty objects regardless of real contract.
 - Arbitrary sleeps used for async/animation synchronization.

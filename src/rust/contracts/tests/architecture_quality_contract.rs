@@ -229,10 +229,10 @@ fn architecture_quality_contract_serializes_required_decision_nfr_and_risk_ids()
 }
 
 #[test]
-fn legacy_architecture_artifact_without_quality_deserializes_with_empty_default() {
+fn architecture_artifact_requires_quality_contract() {
     let value = serde_json::json!({
         "schemaVersion": "1.0",
-        "architectureArtifactContractId": "aac-legacy",
+        "architectureArtifactContractId": "aac-current",
         "deliveryId": "delivery-1",
         "phaseId": "phase-1",
         "status": "ready",
@@ -257,9 +257,8 @@ fn legacy_architecture_artifact_without_quality_deserializes_with_empty_default(
         "updatedAt": "2026-06-24T10:00:00+08:00"
     });
 
-    let artifact: ArchitectureArtifactContract =
-        serde_json::from_value(value).expect("legacy AAC should deserialize");
-    assert!(artifact.architecture_quality.decisions.is_empty());
-    assert!(artifact.architecture_quality.nfrs.is_empty());
-    assert!(artifact.architecture_quality.risks.is_empty());
+    assert!(
+        serde_json::from_value::<ArchitectureArtifactContract>(value).is_err(),
+        "the canonical AAC must reject artifacts that omit architectureQuality"
+    );
 }

@@ -14,7 +14,10 @@ Required closure:
 - `services[].workingDirectory` is the in-container command directory when it differs from the build context.
 - `services[].runtimeKind` selects the stack generator.
 - `services[].packageManager`, `hasLockfile`, `manifestRefs`, and `lockfileRefs` drive dependency install commands.
-- `services[].buildCommand`, `startCommand`, `outputDirectory`, `port`, and `healthcheckPath` must agree with Dockerfile, Compose, and validation.
+- `services[].buildCommand`, `startCommand`, `outputDirectory`, `port`, and `healthcheckPath` are generated service facts. They must agree with Dockerfile, Compose, and validation; runtime command authority comes from `runtimeContract.commands.development`, `verification`, and `deployment`.
+- `manifestRefs` and `lockfileRefs` must contain only files confirmed by the repository scanner. Never emit a wildcard or a conventional manifest that does not exist.
+- A healthcheck path is optional. Absence means Loom validates the preview/API probe externally; it must not be replaced with `/`.
+- `storageFacts` are the only source for file-database and dependency volume mounts. Do not infer persistence from an environment string or a fixed container directory.
 
 Agents should not rediscover this model from logs. If the model is wrong, use the returned `modelRepairRef` and state which source fact is inconsistent. Do not edit `source-model.json` directly or replace it with an unrelated topology; Loom validates the base fingerprint, recalculates dependent facts, and regenerates assets after an accepted model repair.
 
