@@ -1047,7 +1047,12 @@ fn section_content_shape(
                     "structuralRules": ["module, data, interaction, or runtime boundary rule"],
                     "rationale": "string"
                 },
-                "applications": ["object"],
+                "applications": [{
+                    "applicationId": "stable application id",
+                    "name": "string",
+                    "kind": "web_client | mobile_client | native_client | desktop_client | backend_service | api_service | worker | external_system",
+                    "rootPath": "repository-relative root"
+                }],
                 "applicationInteractions": [{
                     "interactionId": "string",
                     "providerApplicationRef": "string",
@@ -1067,7 +1072,13 @@ fn section_content_shape(
                     "acceptanceRefs": ["string"]
                 }]
             },
-            "modules": ["object"]
+            "modules": [{
+                "moduleId": "stable module id",
+                "name": "string",
+                "responsibility": "current-phase responsibility",
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"]
+            }]
         }),
         ArchitectureSectionGroup::DomainContract => json!({
             "dataModel": {
@@ -2249,15 +2260,18 @@ pub fn section_generation_rules(
 ) -> Vec<String> {
     match section {
         ArchitectureSectionGroup::Foundation => vec![
+            "Use currentSectionContract.resultTemplate as the only content shape. Replace every placeholder and populate structured objects before submit; do not submit template labels, prose where an object is required, or null for a required collection.".to_string(),
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only. Write modules once in content.modules; every module needs stable ownership, responsibility, and current-phase scope or acceptance refs.".to_string(),
+            "Write engineeringBoundary.applications as structured objects with applicationId, name, kind, and rootPath. Use the same applicationId values in applicationInteractions; do not use display names as refs.".to_string(),
             "Write engineeringBoundary.patternDecision from current-phase business boundaries, consistency needs, state complexity, interaction pressure, runtime boundaries, and failure recovery. patternId is open-ended: use classification=custom with concrete structuralRules when no known pattern fits; custom never relaxes ownership or verification obligations.".to_string(),
             "Keep patternDecision.decisionDrivers, structuralRules, and rationale concrete. Do not use organization size, prestige, hypothetical scale, or an unrelated example as a structural driver.".to_string(),
             "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
-            "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan.".to_string(),
+            "Every applicationInteractions entry must be an object with a stable interactionId, providerApplicationRef, providerModuleRef, consumerApplicationRefs array, interactionType, protocol, interfaceRefs array, qualityTraits object, scopeRefs array, and acceptanceRefs array. Use applicationId/moduleId values from the current candidate and allowed refs; never use application names or prose as ids.".to_string(),
+            "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan. providerApplicationRef must name the serving application, providerModuleRef the serving module, and consumerApplicationRefs every current consumer application.".to_string(),
             "For each http_api interaction, write the complete qualityTraits object. Set authRequirement from current actor/permission requirements or an existing interface policy; use not_applicable only when the current interface is intentionally unauthenticated, and use deferred_with_risk when protection is required but deferred.".to_string(),
             "Set paginationRequired only for a collection that can grow beyond a bounded current-phase list or whose confirmed data view requires paging. Set contractArtifactRequired only for an existing contract file, an explicit OpenAPI/documentation request, code generation, or a separately consumed/public contract. Set compatibilityRequired only when changing an interface with an existing or separately deployed consumer.".to_string(),
-            "List operationalPolicies only for current idempotency, cache, retry, rate-limit, or request-id behavior supported by requirements, accepted architecture, or an existing API convention; use an empty array otherwise.".to_string(),
+            "List operationalPolicies only as the exact enum values idempotency, cache, retry, rate_limit, or request_id. Do not write labels such as transactional, observability, error_handling, circuit_breaker, or descriptive prose; use an empty array otherwise when no declared policy applies.".to_string(),
             "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
             "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
@@ -2267,6 +2281,7 @@ pub fn section_generation_rules(
         ],
         ArchitectureSectionGroup::DomainContract => {
             let mut rules = vec![
+                "Use currentSectionContract.resultTemplate as the only content shape. Replace every placeholder and populate structured objects before submit; do not submit template labels, prose where an object is required, or null for a required collection.".to_string(),
                 "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
                     .to_string(),
                 "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
@@ -2274,6 +2289,8 @@ pub fn section_generation_rules(
                 "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
                 "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
                 "Write dataModel.dataArchitecture as the implementation-facing storage-use contract. Use persistenceMode=no_persistence only when current state is intentionally derived or in-memory; otherwise identify source of truth and complete the declared structured fields for each applicable ownership, invariant, transaction, consistency, migration, read-model, lifecycle, and derived-data entry. Keep non-applicable collections empty.".to_string(),
+                "Every dataArchitecture collection is an array of objects, never an array of prose strings. For transactionBoundaries use transactionId, ownerModuleRef, operationRefs, atomicityRule, and failureBehavior; for consistencyRules use consistencyId, ownerModuleRef, dataRefs, mode, rule, and conflictOrStaleBehavior; for migrationImpacts use migrationId, ownerModuleRef, dataRefs, change, compatibilityRule, rollbackOrForwardRepair, and verification; for readModels use readModelId, ownerModuleRef, dataRefs, queryPurpose, boundedReadRule, and freshnessRule; for lifecyclePolicies use policyId, dataRefs, lifecycleRule, ownerModuleRef, and cleanupOrArchiveBehavior; for derivedData use derivedDataId, ownerModuleRef, sourceDataRefs, refreshTrigger, freshnessRule, and rebuildStrategy. Use [] when a collection is not applicable.".to_string(),
+                "Use exact enum values for dataArchitecture.consistencyRules[].mode: strong, eventual, read_your_writes, or external_source_owned. Use entityId/moduleId/interfaceId/flowId values for refs, not display names or explanatory sentences; do not leave required fields as empty strings or replace_with_* placeholders.".to_string(),
                 "Do not reselect a database in dataArchitecture. Derive its rules from the accepted Technical Baseline and current phase behavior, including provider-safe migration and failure boundaries where they apply.".to_string(),
                 "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
                     .to_string(),

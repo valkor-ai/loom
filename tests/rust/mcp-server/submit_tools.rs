@@ -4045,6 +4045,53 @@ fn task_result_submit_hydrates_stale_frontend_task_guidance() {
 }
 
 #[test]
+fn task_result_repair_uses_canonical_task_for_nullable_request_projection() {
+    let fixture = Fixture::new("task-result-repair-canonical-task-contract");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+
+    // The execution request is an agent-facing projection. Nullable optional values in
+    // that projection must not be deserialized as a replacement TaskDefinition.
+    mutate_private_request_storage_value(&fixture, &execution_request_ref, "task", |task| {
+        task["writeBoundary"]["artifactRefs"]["consumedInterfaces"] = Value::Null;
+        task["frontendExperienceRequirement"]["executionGuidance"]["dataBindingExpectation"]
+            ["knownGapPolicy"] = Value::Null;
+        task["frontendExperienceRequirement"]["executionGuidance"]["dataBindingExpectation"]
+            ["requiredModeForSatisfaction"] = Value::Null;
+        task["frontendExperienceRequirement"]["executionGuidance"]["dataBindingExpectation"]
+            ["staticModePolicy"] = Value::Null;
+    });
+
+    write_task_result_candidate_without_requirement_detail_evidence(
+        &fixture,
+        &execution_request_ref,
+    );
+    let repair_action = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(repair_action["state"], "auto_runnable", "{repair_action:#}");
+    assert_eq!(repair_action["next"]["artifactKind"], "task_result_repair");
+
+    let repair_request_ref = repair_action["next"]["requestRef"]
+        .as_str()
+        .expect("task result repair requestRef");
+    write_task_result_candidate(&fixture, repair_request_ref);
+    let accepted = call_submit(
+        "loom.repairSubmitFile",
+        repair_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"], "task_result_repair",
+        "nullable request projection must not re-enter the same repair loop: {accepted:#}"
+    );
+}
+
+#[test]
 fn review_execution_repair_carries_frontend_execution_guidance() {
     let fixture = Fixture::new("review-exec-repair-frontend-guidance");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
@@ -4470,122 +4517,6 @@ fn task_result_submit_routes_invalid_frontend_surface_shape_to_quality_repair() 
                     .as_str()
                     .is_some_and(|path| path.contains("surfaceRegionEvidence"))
         ));
-}
-
-#[test]
-fn task_result_submit_fills_single_intent_detail_verification_ids() {
-    let fixture = Fixture::new("task-result-single-intent-detail-fallback");
-    let execution_request_ref = start_planned_task_execution(&fixture);
-    let request_id = execution_request_ref
-        .split("/requests/")
-        .nth(1)
-        .expect("request id in ref");
-    let task_ref = state::request_manifest::request_storage_ref(&fixture.root, request_id, "task")
-        .expect("task storage ref")
-        .expect("task ref");
-    let task_path = fixture.root.join(task_ref);
-    let mut task_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&task_path).expect("read task ref"))
-            .expect("parse task ref");
-    let verification_id = task_value["verificationIntents"][0]["verificationId"]
-        .as_str()
-        .expect("single verification id")
-        .to_string();
-    let first_verification_intent = task_value["verificationIntents"][0].clone();
-    task_value["verificationIntents"] = json!([first_verification_intent]);
-    let legacy_detail_id = "detail.legacy.single_intent";
-    task_value["requirementDetailRefs"]
-        .as_array_mut()
-        .expect("task detail refs")
-        .push(json!(legacy_detail_id));
-    assert!(
-        !task_value["verificationIntents"][0]["requirementDetailRefs"]
-            .as_array()
-            .expect("verification detail refs")
-            .iter()
-            .any(|item| item == &json!(legacy_detail_id))
-    );
-    write_json_atomic(&task_path, &task_value).expect("write legacy-style task ref");
-
-    let fields = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: execution_request_ref.clone(),
-        fields: vec![
-            "source.taskPlanId".to_string(),
-            "source.taskId".to_string(),
-            "outputContract.resultFile".to_string(),
-            "outputContract.resultTemplate".to_string(),
-            "outputContract.resultRules".to_string(),
-        ],
-    })
-    .expect("read execution fields")
-    .fields;
-    let result_file = fields["outputContract.resultFile"]
-        .value
-        .as_str()
-        .expect("result file");
-    let result_rules_text = fields["outputContract.resultRules"].value.to_string();
-    assert!(result_rules_text.contains("Loom derives detailId and verificationIds"));
-    let mut result = fields["outputContract.resultTemplate"].value.clone();
-    result["taskResultId"] = json!("result-single-intent-fallback");
-    result["taskPlanId"] = fields["source.taskPlanId"].value.clone();
-    result["taskId"] = fields["source.taskId"].value.clone();
-    result["changedFiles"] = json!(["src/main.tsx"]);
-    if let Some(self_check) = result
-        .get_mut("frontendExperienceSelfCheck")
-        .and_then(Value::as_object_mut)
-    {
-        self_check.insert("evidenceRefs".to_string(), json!(["src/main.tsx"]));
-        self_check.insert(
-            "summary".to_string(),
-            json!("The task-owned frontend flow evidence remains satisfied while legacy detail evidence is normalized."),
-        );
-    }
-    complete_frontend_quality_token_evidence_for_test(&mut result);
-    for item in result["requirementDetailEvidence"]
-        .as_array_mut()
-        .expect("detail evidence")
-    {
-        item["evidenceRefs"] = json!(["src/main.tsx"]);
-    }
-    result["requirementDetailEvidence"]
-        .as_array_mut()
-        .expect("detail evidence")
-        .push(json!({
-            "detailId": legacy_detail_id,
-            "status": "satisfied",
-            "verificationIds": [],
-            "evidenceRefs": ["src/main.tsx"],
-            "summary": "Legacy detail is covered by the task's only verification intent."
-        }));
-    write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
-
-    let accepted = call_submit(
-        "loom.recordTaskResultFile",
-        &execution_request_ref,
-        fixture.root_str(),
-    );
-
-    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
-    assert_ne!(
-        accepted["next"]["artifactKind"],
-        json!("task_result_repair"),
-        "{accepted:#}"
-    );
-    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
-    let latest_result_ref =
-        latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
-    let persisted: Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture.root.join(latest_result_ref)).expect("read task result"),
-    )
-    .expect("parse persisted task result");
-    let legacy_evidence = persisted["requirementDetailEvidence"]
-        .as_array()
-        .expect("persisted detail evidence")
-        .iter()
-        .find(|item| item["detailId"] == json!(legacy_detail_id))
-        .expect("legacy evidence");
-    assert_eq!(legacy_evidence["verificationIds"], json!([verification_id]));
 }
 
 #[test]

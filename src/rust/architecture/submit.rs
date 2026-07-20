@@ -193,6 +193,7 @@ where
     let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let mut raw = state::store::read_json_value(&candidate_file)?;
+    normalize_architecture_candidate_null_arrays(&mut raw);
     normalize_architecture_candidate_envelope(
         &mut raw,
         &authorized.request_id,
@@ -281,6 +282,9 @@ where
         candidate_normalized = true;
     }
     if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
+        candidate_normalized = true;
+    }
+    if normalize_foundation_interaction_machine_fields(&mut candidate.content) {
         candidate_normalized = true;
     }
 
@@ -590,6 +594,214 @@ fn normalize_architecture_candidate_envelope(
     }
     if matches!(current_section, ArchitectureSectionGroup::RuntimeDelivery) {
         normalize_runtime_dependency_field_names(object.get_mut("content"));
+    }
+}
+
+fn normalize_architecture_candidate_null_arrays(raw: &mut Value) {
+    const ARRAY_FIELDS: &[&str] = &[
+        "acceptanceRefs",
+        "actions",
+        "applicationInteractions",
+        "composedOf",
+        "constraints",
+        "consumerApplicationRefs",
+        "dataRefs",
+        "decisionDrivers",
+        "derivedData",
+        "enforcementPoints",
+        "entities",
+        "failurePaths",
+        "fields",
+        "happyPath",
+        "invariants",
+        "interfaceRefs",
+        "lifecyclePolicies",
+        "migrationImpacts",
+        "modules",
+        "operationRefs",
+        "ownership",
+        "readModels",
+        "relationships",
+        "scopeRefs",
+        "sourceDataRefs",
+        "stateEffects",
+        "stateMachineRefs",
+        "stateMachines",
+        "structuralRules",
+        "transitions",
+        "userFlows",
+    ];
+    normalize_named_null_arrays(raw, ARRAY_FIELDS);
+}
+
+fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_named_null_arrays(item, array_fields);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if value.is_null() && array_fields.contains(&key.as_str()) {
+                    *value = Value::Array(vec![]);
+                } else {
+                    normalize_named_null_arrays(value, array_fields);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_foundation_interaction_machine_fields(content: &mut Value) -> bool {
+    let Some(object) = content.as_object_mut() else {
+        return false;
+    };
+    let Some(boundary) = object
+        .get_mut("engineeringBoundary")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    let applications = boundary
+        .get("applications")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let modules = boundary
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let provider_applications = applications
+        .iter()
+        .filter(|application| {
+            application
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "backend_service" | "api_service" | "server" | "service" | "worker"
+                    )
+                })
+        })
+        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let consumer_applications = applications
+        .iter()
+        .filter(|application| {
+            application
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "web_client" | "mobile_client" | "native_client" | "desktop_client"
+                    )
+                })
+        })
+        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let module_id = (modules.len() == 1)
+        .then(|| modules[0].get("moduleId").and_then(Value::as_str))
+        .flatten();
+    let Some(interactions) = boundary
+        .get_mut("applicationInteractions")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for interaction in interactions {
+        let Some(interaction) = interaction.as_object_mut() else {
+            continue;
+        };
+        let interaction_type = interaction
+            .get("interactionType")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if interaction
+            .get("providerApplicationRef")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && provider_applications.len() == 1
+        {
+            interaction.insert(
+                "providerApplicationRef".to_string(),
+                json!(provider_applications[0]),
+            );
+            changed = true;
+        }
+        if interaction
+            .get("consumerApplicationRefs")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+            && consumer_applications.len() == 1
+        {
+            interaction.insert(
+                "consumerApplicationRefs".to_string(),
+                json!([consumer_applications[0]]),
+            );
+            changed = true;
+        }
+        if interaction
+            .get("providerModuleRef")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && module_id.is_some()
+        {
+            interaction.insert("providerModuleRef".to_string(), json!(module_id));
+            changed = true;
+        }
+        if interaction_type == "http_api" {
+            let Some(policies) = interaction
+                .get_mut("qualityTraits")
+                .and_then(Value::as_object_mut)
+                .and_then(|traits| traits.get_mut("operationalPolicies"))
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            let normalized = policies
+                .iter()
+                .map(|policy| {
+                    policy
+                        .as_str()
+                        .and_then(normalize_operational_policy_alias)
+                        .map(|value| Value::String(value.to_string()))
+                        .unwrap_or_else(|| policy.clone())
+                })
+                .collect::<Vec<_>>();
+            if normalized != *policies {
+                *policies = normalized;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+fn normalize_operational_policy_alias(value: &str) -> Option<&'static str> {
+    match value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+        .as_str()
+    {
+        "idempotent" | "deduplication" | "duplicate_prevention" => Some("idempotency"),
+        "caching" | "cache_control" => Some("cache"),
+        "retries" | "retry_policy" => Some("retry"),
+        "rate_limiting" | "rate_limit_policy" => Some("rate_limit"),
+        "correlation_id" | "trace_id" | "request_correlation" => Some("request_id"),
+        "idempotency" => Some("idempotency"),
+        "cache" => Some("cache"),
+        "retry" => Some("retry"),
+        "rate_limit" => Some("rate_limit"),
+        "request_id" => Some("request_id"),
+        _ => None,
     }
 }
 
@@ -1435,18 +1647,29 @@ fn validate_structured_entries(
     code: &str,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
+    let expected_shape = format!(
+        "Use an object with required string fields [{}] and array fields [{}].",
+        required_strings.join(", "),
+        required_arrays.join(", ")
+    );
     let Some(entries) = value.and_then(Value::as_array) else {
         issues.push(issue(
             code,
             path,
-            "The field must be an explicit array of structured objects, including an empty array when it does not apply.",
+            &format!(
+                "The field must be an explicit array of structured objects, including an empty array when it does not apply. {expected_shape}"
+            ),
         ));
         return;
     };
     for (index, entry) in entries.iter().enumerate() {
         let entry_path = format!("{path}[{index}]");
         let Some(entry) = entry.as_object() else {
-            issues.push(issue(code, &entry_path, "The entry must be an object."));
+            issues.push(issue(
+                code,
+                &entry_path,
+                &format!("The entry must be an object. {expected_shape}"),
+            ));
             continue;
         };
         for field in required_strings {
@@ -4280,6 +4503,76 @@ mod tests {
             "HTTP_INTERACTION_OPERATIONAL_POLICY_INVALID".to_string(),
             Some(format!("{base}.operationalPolicies[0]"))
         )));
+    }
+
+    #[test]
+    fn foundation_normalization_fills_unambiguous_owners_and_policy_aliases() {
+        let mut content = json!({
+            "engineeringBoundary": {
+                "applications": [
+                    {"applicationId": "app-web", "kind": "web_client"},
+                    {"applicationId": "app-api", "kind": "backend_service"}
+                ],
+                "modules": [{"moduleId": "module-api"}],
+                "applicationInteractions": [{
+                    "interactionId": "interaction-api",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "operationalPolicies": ["retry_policy", "correlation-id"]
+                    }
+                }]
+            }
+        });
+
+        assert!(normalize_foundation_interaction_machine_fields(
+            &mut content
+        ));
+        let interaction = &content["engineeringBoundary"]["applicationInteractions"][0];
+        assert_eq!(interaction["providerApplicationRef"], "app-api");
+        assert_eq!(interaction["consumerApplicationRefs"], json!(["app-web"]));
+        assert_eq!(interaction["providerModuleRef"], "module-api");
+        assert_eq!(
+            interaction["qualityTraits"]["operationalPolicies"],
+            json!(["retry", "request_id"])
+        );
+        assert!(
+            validate_structured_communication_boundaries(&foundation_candidate(
+                interaction.clone()
+            ))
+            .iter()
+            .all(|issue| !issue.code.contains("OPERATIONAL_POLICY"))
+        );
+    }
+
+    #[test]
+    fn architecture_candidate_null_collections_become_empty_arrays_before_schema_validation() {
+        let mut candidate = json!({
+            "content": {
+                "engineeringBoundary": {
+                    "applicationInteractions": null,
+                    "patternDecision": {
+                        "decisionDrivers": null,
+                        "structuralRules": null
+                    }
+                },
+                "modules": null,
+                "dataModel": {
+                    "entities": [{"fields": null, "constraints": null}]
+                }
+            }
+        });
+
+        normalize_architecture_candidate_null_arrays(&mut candidate);
+
+        assert_eq!(
+            candidate["content"]["engineeringBoundary"]["applicationInteractions"],
+            json!([])
+        );
+        assert_eq!(candidate["content"]["modules"], json!([]));
+        assert_eq!(
+            candidate["content"]["dataModel"]["entities"][0]["fields"],
+            json!([])
+        );
     }
 
     #[test]

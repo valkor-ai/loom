@@ -476,7 +476,7 @@ fn select_targets(
     targets: &[WriteTarget],
     written_target_ids: Option<&[String]>,
 ) -> Result<Vec<WriteTarget>, WriteTargetAuthorizationError> {
-    let ids = written_target_ids
+    let requested = written_target_ids
         .unwrap_or(&[])
         .iter()
         .map(|id| id.trim().to_string())
@@ -486,14 +486,28 @@ fn select_targets(
         .iter()
         .map(|target| target.target_id.clone())
         .collect::<BTreeSet<_>>();
-    for id in &ids {
-        if !known.contains(id) {
+    let ids = requested
+        .iter()
+        .map(|value| {
+            if known.contains(value) {
+                return Ok(value.clone());
+            }
+            let path_matches = targets
+                .iter()
+                .filter(|target| target.path == *value)
+                .map(|target| target.target_id.clone())
+                .collect::<Vec<_>>();
+            if path_matches.len() == 1 {
+                return Ok(path_matches[0].clone());
+            }
             return Err(fatal(
                 "TARGET_NOT_ALLOWED",
-                format!("writtenTargetIds contains unknown targetId: {id}"),
+                format!(
+                    "writtenTargetIds contains unknown targetId: {value}; use one of the declared outputContract.writeTargets.targetId values."
+                ),
             ));
-        }
-    }
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
 
     let mut selected = Vec::new();
     for target in targets {

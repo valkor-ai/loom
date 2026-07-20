@@ -8,6 +8,9 @@ use crate::{ArtifactKind, RouteAction};
 pub struct FileSubmitInput {
     pub project_root: String,
     pub request_ref: String,
+    #[schemars(
+        description = "Optional subset of outputContract.writeTargets.targetId values. Use the targetId exactly as returned by the active request; the target path is not an id."
+    )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub written_target_ids: Option<Vec<String>>,
 }

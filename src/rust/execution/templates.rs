@@ -3,20 +3,6 @@ use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicab
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 11] = [
-    "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contentBoundary",
-    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope",
-    "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
-    "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan",
-];
-
 pub(crate) fn taskplan_outline_result_template() -> Value {
     json!({
         "status": "ready",
@@ -168,7 +154,7 @@ pub(crate) fn task_result_template_with_code_quality(
                 })
                 .unwrap_or_default();
             let mut result = json!({
-                "status": if browser_checks.is_empty() { "passed" } else { "not_run" },
+                "status": "not_run",
                 "evidenceType": if browser_checks.is_empty() { "automated_test" } else { "browser_automation" },
                 "summary": "",
                 "provenance": {
@@ -204,7 +190,7 @@ pub(crate) fn task_result_template_with_code_quality(
         .iter()
         .map(|_| {
             json!({
-                "status": "satisfied",
+                "status": "not_verified",
                 "evidenceRefs": [],
                 "summary": ""
             })
@@ -443,7 +429,7 @@ pub(crate) fn task_result_schema_shape(
                 "status": "satisfied | partial | blocked",
                 "dataBinding": {
                     "mode": "wired | partial | not_applicable",
-                    "knownGaps": ["string"]
+                    "knownGaps": []
                 },
                 "evidenceRefs": ["project-relative evidence ref"],
                 "summary": "string"
@@ -499,7 +485,7 @@ pub(crate) fn task_result_schema_shape(
                     "parallelTokenSystemCreated": false,
                     "mergeSummary": "string"
                 },
-                "knownGaps": ["string"],
+                "knownGaps": [],
                 "summary": "string"
             }),
         );
@@ -548,7 +534,7 @@ pub(crate) fn task_result_schema_shape(
                 "errorPaths": ["HTTP method/path or operation id"],
                 "paginationPaths": ["HTTP method/path or operation id"],
                 "contractFileRefs": ["project-relative contract file"],
-                "knownGaps": ["string"],
+                "knownGaps": [],
                 "summary": "string"
             }]),
         );
@@ -562,7 +548,7 @@ pub(crate) fn task_result_schema_shape(
                 "referenceFilesChecked": ["reference path"],
                 "changedFiles": ["project-relative path"],
                 "commandsRun": ["command"],
-                "knownGaps": ["string"],
+                "knownGaps": [],
                 "summary": "string"
             }]),
         );
@@ -654,7 +640,7 @@ fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
         .iter()
         .map(|_| {
             json!({
-                "status": "passed",
+                "status": "not_applicable",
                 "evidence": ""
             })
         })
@@ -673,7 +659,7 @@ fn architecture_quality_evidence_template(task: &TaskDefinition) -> Value {
             .iter()
             .map(|_| {
                 json!({
-                    "status": "satisfied",
+                    "status": "not_verified",
                     "changedFiles": [],
                     "summary": ""
                 })
@@ -688,7 +674,7 @@ fn api_contract_evidence_template(task: &TaskDefinition) -> Value {
             .iter()
             .map(|_| {
                 json!({
-                    "status": "satisfied",
+                    "status": "not_verified",
                     "changedFiles": [],
                     "successPaths": [],
                     "errorPaths": [],
@@ -727,7 +713,7 @@ fn code_quality_evidence_template(
                     })
                     .unwrap_or_default();
                 json!({
-                    "status": "satisfied",
+                    "status": "not_verified",
                     "referenceGroupsChecked": reference_groups,
                     "referenceFilesChecked": reference_files,
                     "changedFiles": [],
@@ -745,9 +731,9 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
         return Value::Null;
     }
     json!({
-        "status": "satisfied",
+        "status": "partial",
         "dataBinding": {
-            "mode": "wired",
+            "mode": "partial",
             "knownGaps": []
         },
         "evidenceRefs": [],
@@ -793,7 +779,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|region| {
                     region.get("regionId").and_then(Value::as_str).map(|_| {
                         json!({
-                            "status": "satisfied",
+                            "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_region"],
                             "states": merged_state_refs(region, &surface_state_ids),
                             "actions": region.get("actionRefs").cloned().unwrap_or_else(|| json!([])),
@@ -813,7 +799,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|action| {
                     action.get("actionId").and_then(Value::as_str).map(|id| {
                         json!({
-                            "status": "satisfied",
+                            "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_action"],
                             "states": [],
                             "actions": [id],
@@ -833,7 +819,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|state| {
                     state.get("state").and_then(Value::as_str).map(|id| {
                         json!({
-                            "status": "satisfied",
+                            "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_state"],
                             "states": [id],
                             "actions": [],
@@ -853,7 +839,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|rule| {
                     rule.get("ruleId").and_then(Value::as_str).map(|_| {
                         json!({
-                            "status": "satisfied",
+                            "status": "missing",
                             "files": ["replace_with_ui_file_path_or_check_for_this_rule"],
                             "states": [],
                             "actions": [],
@@ -951,27 +937,6 @@ mod tests {
             "codeQualityRequirementRefs": []
         }))
         .expect("valid task")
-    }
-
-    #[test]
-    fn surface_contract_read_fields_use_canonical_surface_contract() {
-        let task = frontend_task(json!({
-            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-            "executionGuidance": {
-                "uiProductionBrief": {
-                    "surfaceDecisionContract": {
-                        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
-                    }
-                }
-            }
-        }));
-
-        let fields = FRONTEND_QUALITY_CONTRACT_READ_FIELDS;
-
-        assert!(frontend_quality_self_check_applies(&task));
-        assert!(fields.contains(
-            &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
-        ));
     }
 
     #[test]
@@ -1081,5 +1046,33 @@ mod tests {
         assert!(template["frontendQualitySelfCheck"]
             .get("browserCheckRefs")
             .is_none());
+    }
+
+    #[test]
+    fn task_result_template_starts_unverified_until_agent_records_evidence() {
+        let mut task = frontend_task(json!({
+            "uiSurfaceDecisionContractRef": "surface-contract",
+            "executionGuidance": {
+                "uiProductionBrief": {
+                    "surfaceDecisionContract": {"contractRef": "surface-contract"}
+                }
+            }
+        }));
+        task.verification_intents = serde_json::from_value(json!([{
+            "verificationId": "verify-ui",
+            "behavior": "Verify the UI.",
+            "preferredEvidence": ["automated_test"],
+            "acceptableEvidence": ["automated_test"]
+        }]))
+        .expect("verification intents");
+        task.api_contract_requirement_refs = vec!["api-1".to_string()];
+        task.code_quality_requirement_refs = vec!["code-1".to_string()];
+
+        let template = task_result_template_with_code_quality(&task, &[], None);
+
+        assert_eq!(template["verificationResults"][0]["status"], "not_run");
+        assert_eq!(template["apiContractEvidence"][0]["status"], "not_verified");
+        assert_eq!(template["codeQualityEvidence"][0]["status"], "not_verified");
+        assert_eq!(template["frontendExperienceSelfCheck"]["status"], "partial");
     }
 }

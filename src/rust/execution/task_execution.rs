@@ -630,6 +630,7 @@ pub(crate) fn task_execution_rules(
             "submitTool": "loom.recordTaskResultFile",
             "rule": "The task is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
         },
+        "writeTargetRule": "When a file-submit tool accepts writtenTargetIds, pass the active outputContract.writeTargets[].targetId (for TaskResult: result), never the target path or resultFile string.",
         "finalResponseGuard": {
             "mustNotReportProgressBeforeSubmit": true,
             "rule": "Do not stop with a progress-only summary before submitting TaskResult."
@@ -830,6 +831,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
+        "The result template is a conservative starting shape: not_run, not_verified, partial, missing, and not_applicable entries are not completion evidence. Replace them only after the corresponding work or verification actually happened.".to_string(),
     ];
     if frontend_self_check_applies(task) {
         rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present; Loom derives closureRequirementIds from the assigned closure contract.".to_string());
@@ -844,7 +846,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
-        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, report status and evidence in the task.runtimeDeliveryRequirement.requiredCodeLevelChecks order. Loom derives requirementRef, checkedFields, checkId, and contractField.".to_string());
+        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, report status and evidence in the task.runtimeDeliveryRequirement.requiredCodeLevelChecks order. Every applicable check must be passed or explicitly unverified; replace the template's not_applicable status when the check applies. Loom derives requirementRef, checkedFields, checkId, and contractField.".to_string());
         rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
     }
     if !task.engineering_quality_requirement_refs.is_empty() {
@@ -852,14 +854,16 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         rules.push("For persistence_mapping requirements, evidence must cover changed risk field kinds across domain model, storage schema or migration, data access mapping, DTO/API contract, and same-provider persistence behavior when those parts are in task scope.".to_string());
     }
     if !task.architecture_quality_requirement_refs.is_empty() {
-        rules.push("For referenced architectureQualityRequirements, provide one architectureQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. Summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
+        rules.push("For referenced architectureQualityRequirements, provide one architectureQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. The template starts as not_verified; set satisfied only when the changed files and passed verification evidence demonstrate the referenced decision, NFR, or risk mitigation.".to_string());
     }
     if !task.api_contract_requirement_refs.is_empty() {
         rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+        rules.push("The apiContractEvidence template starts as not_verified. Set status=satisfied only after the assigned API behavior has concrete passed verification evidence; for completed or completed_with_notes results, keep knownGaps empty and explain non-applicable checks in summary instead of recording a gap.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
+        rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
 }
@@ -946,7 +950,9 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "Run the smallest available compile, type, lint, unit, or integration check that proves the changed code.",
-            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence."
+            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence.",
+            "For completed or completed_with_notes results, codeQualityEvidence.status must be satisfied and knownGaps must be an empty array; a reference that is irrelevant to one changed file is explained in summary, not recorded as a gap.",
+            "Do not author requirementId or verificationIds when the result template marks them as MCP-derived; keep evidence entries in the assigned requirement order and let Loom normalize linkage fields."
         ]
     })
 }

@@ -817,6 +817,7 @@ where
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let mut group_value = read_project_json_value(root, &group_file)?;
+        normalize_taskplan_candidate_null_arrays(&mut group_value);
         normalize_taskplan_group_envelope(
             &mut group_value,
             &authorized.request_id,
@@ -1194,6 +1195,56 @@ fn normalize_taskplan_group_envelope(
     object.insert("deliveryId".to_string(), json!(delivery_id));
     object.insert("phaseId".to_string(), json!(phase_id));
     object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn normalize_taskplan_candidate_null_arrays(raw: &mut Value) {
+    const ARRAY_FIELDS: &[&str] = &[
+        "acceptanceRefs",
+        "acceptableEvidence",
+        "affectedContractFields",
+        "conceptRefs",
+        "conceptResponsibilities",
+        "conceptVerificationIntents",
+        "consumedInterfaces",
+        "dependsOn",
+        "decisions",
+        "entities",
+        "forbiddenActions",
+        "forbiddenPaths",
+        "implementationActions",
+        "interfaces",
+        "modules",
+        "nfrs",
+        "preferredEvidence",
+        "requirementDetailRefs",
+        "requiredCodeLevelChecks",
+        "risks",
+        "scopeRefs",
+        "stateMachines",
+        "userFlows",
+        "verificationIntents",
+    ];
+    normalize_named_null_arrays(raw, ARRAY_FIELDS);
+}
+
+fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_named_null_arrays(item, array_fields);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if value.is_null() && array_fields.contains(&key.as_str()) {
+                    *value = Value::Array(vec![]);
+                } else {
+                    normalize_named_null_arrays(value, array_fields);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn validate_outline(
@@ -2313,20 +2364,52 @@ fn normalize_runtime_delivery_requirements(
     let contract_field_set = contract_fields.iter().cloned().collect::<BTreeSet<_>>();
 
     for task in tasks.iter_mut() {
+        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
+        // The closure contract is derived from accepted RuntimeDelivery facts. It
+        // must not depend on the agent copying a second machine-owned object into
+        // the TaskPlan candidate; a missing closure field is therefore materialized
+        // before validation instead of becoming a repair loop.
+        if is_closure && task.runtime_delivery_requirement.is_none() {
+            task.runtime_delivery_requirement = Some(contracts::TaskRuntimeDeliveryRequirement {
+                applies_to_this_task: true,
+                reason: "Final code-level closure for the RuntimeDeliveryContract.".to_string(),
+                runtime_delivery_ref: Some(runtime_ref.to_string()),
+                affected_contract_fields: contract_fields.clone(),
+                required_code_level_checks: contract_fields
+                    .iter()
+                    .map(|field| runtime_delivery_check_for_field(field))
+                    .collect(),
+                evidence_expected_in_task_result: Vec::new(),
+                forbidden_actions: Vec::new(),
+                source: Some("mcp_derived_from_runtime_delivery".to_string()),
+                deployment_failure_ref: None,
+            });
+        }
         let Some(requirement) = task.runtime_delivery_requirement.as_mut() else {
             continue;
         };
-        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
+        if is_closure {
+            requirement.applies_to_this_task = true;
+            requirement.reason =
+                "Final code-level closure for the accepted RuntimeDeliveryContract.".to_string();
+            requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
+            requirement.affected_contract_fields = contract_fields.clone();
+            requirement.required_code_level_checks = contract_fields
+                .iter()
+                .map(|field| runtime_delivery_check_for_field(field))
+                .collect();
+            requirement.evidence_expected_in_task_result.clear();
+            requirement.forbidden_actions.clear();
+            requirement.source = Some("mcp_derived_from_runtime_delivery".to_string());
+            requirement.deployment_failure_ref = None;
+            continue;
+        }
         if !is_closure && !requirement.applies_to_this_task {
             requirement.runtime_delivery_ref = None;
             requirement.affected_contract_fields.clear();
             requirement.required_code_level_checks.clear();
             continue;
         }
-        if is_closure {
-            requirement.applies_to_this_task = true;
-        }
-
         requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
         let requested_fields = if is_closure {
             contract_fields.clone()
@@ -5831,8 +5914,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
-            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
-            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement scope and evidence expectations from that template. Loom derives runtimeDeliveryRef, contractField, and checkId values during accept.",
+            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified. Loom derives the accepted RuntimeDelivery reference, contract fields, and check ids during accept, so the candidate must not invent those machine fields.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure. Declare the closure task and its group placement; Loom materializes the complete runtimeDeliveryRequirement from the accepted RuntimeDeliveryContract even when the candidate omits that machine-owned object.",
             "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
             "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
         },
@@ -7531,6 +7614,40 @@ mod tests {
             "codeQualityRequirementRefs": []
         }))
         .expect("browser task")
+    }
+
+    #[test]
+    fn taskplan_candidate_null_optional_arrays_are_normalized_before_deserialization() {
+        let mut candidate = json!({
+            "tasks": [{
+                "scopeRefs": null,
+                "verificationIntents": null,
+                "writeBoundary": {
+                    "forbiddenPaths": null,
+                    "artifactRefs": {
+                        "modules": null,
+                        "interfaces": null
+                    }
+                },
+                "runtimeDeliveryRequirement": {
+                    "affectedContractFields": null,
+                    "requiredCodeLevelChecks": null
+                }
+            }]
+        });
+
+        normalize_taskplan_candidate_null_arrays(&mut candidate);
+
+        assert_eq!(candidate["tasks"][0]["scopeRefs"], json!([]));
+        assert_eq!(candidate["tasks"][0]["verificationIntents"], json!([]));
+        assert_eq!(
+            candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"],
+            json!([])
+        );
+        assert_eq!(
+            candidate["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"],
+            json!([])
+        );
     }
 
     #[test]

@@ -6,9 +6,9 @@ use std::{
 use contracts::{
     api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
     ui_quality_enum_refs, ui_surface_decision_enum_refs, ArchitectureSectionGroup,
-    CodeQualityRequirement, PlanningGenerationContract, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -396,10 +396,6 @@ fn materialize_delivery_execution_repair_inner(
         finding_refs.clone(),
         attempt_count,
         source_task_execution_request_ref.clone(),
-        source_code_quality_requirements(
-            project_root,
-            source_task_execution_request_ref.as_deref(),
-        )?,
     );
     let stored = state::write_native_request(
         project_root,
@@ -677,7 +673,6 @@ fn build_repair_execution_request(
     finding_refs: Vec<String>,
     attempt_count: u32,
     source_task_execution_request_ref: Option<String>,
-    source_code_quality_requirements: Vec<CodeQualityRequirement>,
 ) -> Value {
     let browser_profile = browser_verification_profile_for_task(task_plan, task);
     let engineering_quality_requirements = task_plan
@@ -698,11 +693,9 @@ fn build_repair_execution_request(
         .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
         .cloned()
         .collect::<Vec<_>>();
-    let code_quality_requirements = if source_code_quality_requirements.is_empty() {
-        code_quality_requirements_for_task(task_plan, task)
-    } else {
-        source_code_quality_requirements
-    };
+    // Repair requests must use the current TaskPlan quality contract. The source
+    // execution request is an agent-facing projection and is not a second authority.
+    let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
     let result_contract = task_result_contract(task, &code_quality_requirements, browser_profile);
     let result_template = result_contract["resultTemplate"].clone();
     let mut execution_rules = task_execution_rules(result_file, task, None);
@@ -1975,41 +1968,6 @@ fn request_source_task_id(
         .and_then(|field| field.value.as_str())
         .map(str::to_string),
     )
-}
-
-fn source_code_quality_requirements(
-    project_root: &str,
-    source_request_ref: Option<&str>,
-) -> Result<Vec<CodeQualityRequirement>, state::store::StateError> {
-    let Some(source_request_ref) = source_request_ref else {
-        return Ok(vec![]);
-    };
-    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
-        project_root: project_root.to_string(),
-        request_ref: source_request_ref.to_string(),
-    })?;
-    let allowed = inspected
-        .read_groups
-        .iter()
-        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
-        .any(|field| field == "sourceContext.codeQualityExecutionContext");
-    if !allowed {
-        return Ok(vec![]);
-    }
-    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: project_root.to_string(),
-        request_ref: source_request_ref.to_string(),
-        fields: vec!["sourceContext.codeQualityExecutionContext".to_string()],
-    })?
-    .fields;
-    let Some(value) = fields
-        .get("sourceContext.codeQualityExecutionContext")
-        .map(|field| field.value.clone())
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(vec![]);
-    };
-    serde_json::from_value(value).map_err(state::store::StateError::Json)
 }
 
 fn projected_field_value(
