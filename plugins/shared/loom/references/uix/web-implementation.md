@@ -150,6 +150,21 @@ wide comparison table -> horizontal overflow with labeled scroll region
 - In server-rendered stacks, avoid hydration mismatch from random values, current time, viewport-only values, or uncontrolled-to-controlled input transitions.
 - Use client-only rendering escapes sparingly and only for values that genuinely cannot match across server and browser.
 
+## Browser Boundary Decisions
+
+- Keep browser-only APIs, viewport measurements, random values, current-time values,
+  and storage access behind the project's established client boundary.
+- Prefer CSS layout and media queries over render-time measurement. When measurement
+  is necessary, handle the initial unknown state without shifting or hiding the
+  primary workflow.
+- Give every scrollable region an intentional owner. Nested scrolling must preserve
+  keyboard, touch, focus, and escape behavior rather than trapping the user.
+- For a list that can grow, select normal rendering, paging, virtualization, or
+  incremental loading from expected volume and interaction needs. Do not optimize a
+  small list with a complex renderer before measuring the actual bottleneck.
+- Keep API, storage, and browser failure messages in product language and near the
+  affected surface; source code and network details belong in diagnostics.
+
 Formatting pattern:
 
 ```ts
@@ -169,6 +184,8 @@ Implementation evidence should show:
 - Reduced-motion handling for animated UI.
 - Locale formatting and navigation-state handling when those values or flows are user-visible.
 - Hydration-sensitive values checked in server-rendered Web stacks.
+- Browser boundary, scroll ownership, list strategy, and client-only values checked
+  when those concerns are part of the changed surface.
 
 ## Quality Gate Index
 

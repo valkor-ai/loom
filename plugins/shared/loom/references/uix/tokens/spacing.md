@@ -18,6 +18,26 @@ Use a consistent spacing scale. Suggested baseline:
 | `space-10` | 40 | Large section separation. |
 | `space-12` | 48 | Editorial/marketing rhythm. |
 
+Extend the scale only when the project already has a larger rhythm or the selected
+surface needs it. Keep the base increments divisible by 4 for product UI. A new
+value needs a semantic reason such as page section, shell gutter, control height,
+or media composition; it must not exist only to nudge one element into place.
+
+## Semantic Rhythm
+
+Use separate semantic aliases for repeated relationships:
+
+| Relationship | Examples |
+| --- | --- |
+| Inline | icon/label, badge/text, input prefix/suffix |
+| Control | button padding, field padding, table cell padding |
+| Component | form fields, toolbar items, card content |
+| Region | panel sections, list/detail gap, page heading to content |
+| Shell | page gutter, sidebar/content gap, mobile safe-area padding |
+
+The same numeric value may serve multiple aliases, but components should consume
+the semantic alias so a density change can be made without editing every component.
+
 ## CSS Token Skeleton
 
 ```css
@@ -66,6 +86,11 @@ Use these tokens in layout primitives and component padding before introducing o
 - Keep sticky bars and bottom actions away from safe-area edges on mobile.
 - Avoid horizontal scroll for the page; allow it only inside data tables or code blocks when needed.
 - Mobile page padding usually starts at `space-4`; dense desktop workbenches can also use `space-4` when information volume is high.
+- For wide screens, increase outer region separation before increasing every control
+  gap. For narrow screens, reduce page padding before shrinking readable text or
+  touch targets.
+- Keep action groups visually closer to the object they affect than to unrelated
+  page chrome. Spacing is part of workflow hierarchy, not decoration.
 
 ## Self-Check
 
@@ -73,3 +98,5 @@ Use these tokens in layout primitives and component padding before introducing o
 - Layout remains stable across loading/error/success state changes.
 - Dense surfaces still have enough breathing room to scan repeated actions.
 - Repeated components use the same gap/padding tokens instead of per-component raw values.
+- A spacing audit can explain every off-scale value as an asset dimension, browser
+  constraint, platform metric, or an explicitly accepted exception.

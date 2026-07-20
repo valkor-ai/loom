@@ -17,6 +17,7 @@ use delivery_core::{
     LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
     TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
+use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicability};
 use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
@@ -203,16 +204,45 @@ fn review_request_matches_current_task_results(
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: project_root.to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec!["reviewPacket.taskResultSummaries".to_string()],
+        fields: vec![
+            "reviewPacket.taskResultSummaries".to_string(),
+            "reviewPacket.taskResultSnapshotFingerprint".to_string(),
+        ],
     });
     let Ok(fields) = fields else {
         return false;
     };
-    fields
+    let summaries_match = fields
         .fields
         .get("reviewPacket.taskResultSummaries")
         .map(|field| field.value.clone())
-        .is_some_and(|actual| actual == expected)
+        .is_some_and(|actual| actual == expected);
+    let fingerprint_match = fields
+        .fields
+        .get("reviewPacket.taskResultSnapshotFingerprint")
+        .and_then(|field| field.value.as_str())
+        .is_some_and(|actual| actual == task_result_snapshot_fingerprint(task_results));
+    summaries_match && fingerprint_match
+}
+
+fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
+    let mut snapshots = task_results
+        .iter()
+        .filter_map(|result| {
+            let mut value = serde_json::to_value(result).ok()?;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("createdAt");
+                object.remove("updatedAt");
+            }
+            Some(value)
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| {
+        left.get("taskResultId")
+            .and_then(Value::as_str)
+            .cmp(&right.get("taskResultId").and_then(Value::as_str))
+    });
+    delivery_core::contract_fingerprint(&Value::Array(snapshots))
 }
 
 fn build_review_request(
@@ -292,13 +322,13 @@ fn build_review_request(
             "groupSummaries": compact_group_summaries(&task_plan.groups),
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results),
+            "taskResultSnapshotFingerprint": task_result_snapshot_fingerprint(task_results),
             "apiContractContext": compact_api_contract_context(
                 task_plan,
                 architecture_contract,
                 project_api_contract,
             )
         },
-        "changeSet": change_set,
         "changeContext": change_context,
         "conceptReviewMatrix": concept_review_matrix,
         "detailReviewMatrix": detail_review_matrix,
@@ -338,6 +368,7 @@ fn build_review_request(
             "commonRules": [
                 "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
+                "When reviewMatrixSummary.codeQuality or a code_quality signal needs investigation, read the optional review_code_quality_context group. Use its task-scoped referenceLoadPlan and referenceGroups only; do not scan the full tech tree or substitute a different database provider reference.",
                 "Every finding must include non-empty readRefs.",
                 "Write finding observations and evidence only. Loom derives findingId, pendingActions.findingRefs, nextAction.findingRefs, nextAction.targetTaskIds, and approved phase linkage from the current review signals.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
@@ -434,6 +465,7 @@ fn build_review_request(
                         "reviewPacket.groupSummaries",
                         "reviewPacket.taskSummaries",
                         "reviewPacket.taskResultSummaries",
+                        "reviewPacket.taskResultSnapshotFingerprint",
                         "reviewPacket.apiContractContext"
                     ])
                 },
@@ -462,6 +494,15 @@ fn build_review_request(
                         "reviewMatrixSummary.codeQuality",
                         "reviewMatrixSummary.frontendQuality",
                         "outputContract.reviewSignals.items"
+                    ])
+                },
+                {
+                    "groupId": "review_code_quality_context",
+                    "required": false,
+                    "purpose": "Read task-scoped language, framework, and database reference evidence only when code quality requires investigation.",
+                    "whenToRead": "Read when reviewMatrixSummary.codeQuality or a code_quality review signal is unsatisfied or ambiguous.",
+                    "selectors": read_selectors_value_from_paths([
+                        "codeQualityReviewMatrix"
                     ])
                 },
                 review_quality_read_group(),
@@ -550,7 +591,7 @@ fn review_quality_profile() -> Value {
             {
                 "refId": "rv.core",
                 "path": "tech/review/core.md",
-                "reason": "Review gate posture, order, decision discipline, and route selection."
+                "reason": "Risk-based review posture, scope reconstruction, inspection order, and repository-fit method."
             },
             {
                 "refId": "rv.spec",
@@ -570,7 +611,7 @@ fn review_quality_profile() -> Value {
             {
                 "refId": "rv.findings",
                 "path": "tech/review/finding-quality.md",
-                "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
+                "reason": "Actionable finding impact, evidence, root-cause, repair ownership, and consistency guidance."
             }
         ]
     })
@@ -1085,7 +1126,7 @@ where
     let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
-            return repairable_or_fallback_manual_review(
+            return review_result_repairable(
                 input,
                 authorized,
                 target.path.clone(),
@@ -1109,12 +1150,7 @@ where
     normalize_review_linkage_fields(&mut result, &fields);
     let issues = validate_review_result(&result, &fields);
     if !issues.is_empty() {
-        return repairable_or_fallback_manual_review(
-            input,
-            authorized,
-            target.path.clone(),
-            issues,
-        );
+        return review_result_repairable(input, authorized, target.path.clone(), issues);
     }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -1122,6 +1158,7 @@ where
     };
     let persisted = review_result_file(root, &locator, &result.review_id);
     state::store::write_json_atomic(&persisted, &result)?;
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let result_ref = to_project_relative(root, &persisted)?;
     state::store::write_json_atomic(
         &review_latest_file(root, &locator),
@@ -2055,12 +2092,26 @@ fn normalize_approved_next_phase(
     {
         return Ok(None);
     }
-    brainstorm::materialize_next_phase_from_preview(
+    materialize_approved_next_phase_from_preview(
         project_root,
         delivery_id,
         phase_id,
-        result.next_action.target_phase_id.as_deref(),
+        &result.next_action.r#type,
     )
+}
+
+fn materialize_approved_next_phase_from_preview(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    action_type: &str,
+) -> Result<Option<brainstorm::NextPhaseHandoff>, state::store::StateError> {
+    if !matches!(action_type, "done" | "continue_to_next_phase") {
+        return Ok(None);
+    }
+    // The accepted phase preview is the source of truth for the handoff. The
+    // agent must not be able to select a different phase by writing a target id.
+    brainstorm::materialize_next_phase_from_preview(project_root, delivery_id, phase_id, None)
 }
 
 fn materialize_manual_review_request(
@@ -2151,16 +2202,14 @@ fn materialize_manual_review_request(
         &result_ref,
     )?;
     let browser_environment_gate = browser_quality_gate.is_some();
-    Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
-        prompt: if browser_environment_gate {
+    Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+        input.project_root.clone(),
+        if browser_environment_gate {
             "Required browser evidence is unavailable. Retry the browser environment, submit external browser evidence, or approve a quality waiver."
-                .to_string()
         } else {
             "Review requires user decision. Reply approve_override to continue with notes, or request_changes with the repair route and change summary."
-                .to_string()
         },
-        accepted_responses: if browser_environment_gate {
+        if browser_environment_gate {
             vec![
                 "retry_browser_environment".to_string(),
                 "submit_external_browser_evidence".to_string(),
@@ -2172,10 +2221,10 @@ fn materialize_manual_review_request(
                 "request_changes".to_string(),
             ]
         },
-        request_ref: Some(stored.request_ref),
-        delivery_id: Some(delivery_id),
-        phase_id: Some(phase_id),
-        gate: Some(json!({
+        Some(stored.request_ref),
+        Some(delivery_id),
+        Some(phase_id),
+        Some(json!({
             "gateId": format!("manual_review_{}", result.review_id),
             "kind": "manual_review",
             "reviewResultRef": result_ref,
@@ -2192,7 +2241,7 @@ fn materialize_manual_review_request(
                     .collect::<Vec<_>>()
             }
         })),
-    }))
+    )))
 }
 
 fn build_manual_review_request(
@@ -2520,6 +2569,37 @@ where
             "manual_review_resolution_candidate_only",
         ));
     }
+    let approved_next_phase = if matches!(
+        resolution.decision.as_str(),
+        "approve_override" | "approve_quality_waiver"
+    ) {
+        materialize_approved_next_phase_from_preview(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            &resolution.next_action.r#type,
+        )?
+    } else {
+        None
+    };
+    if let Some(handoff) = approved_next_phase {
+        resolution.next_action.r#type = "continue_to_next_phase".to_string();
+        resolution.next_action.target_phase_id = Some(handoff.phase_id);
+        resolution.next_action.reason = handoff.reason;
+    } else if resolution.next_action.r#type == "continue_to_next_phase" {
+        return Ok(repairable_with_tool(
+            input,
+            authorized,
+            target.path.clone(),
+            vec![issue(
+                "MANUAL_REVIEW_NEXT_PHASE_UNAVAILABLE",
+                "nextAction.type",
+                "continue_to_next_phase requires an accepted nextPhasePreview candidate. Use done when no next phase is available.",
+            )],
+            "loom.reviewResolveFile",
+            "manual_review_resolution_candidate_only",
+        ));
+    }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
@@ -2527,6 +2607,7 @@ where
     let persisted =
         manual_review_resolution_file(root, &locator, &resolution.manual_review_resolution_id);
     state::store::write_json_atomic(&persisted, &resolution)?;
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let resolution_ref = to_project_relative(root, &persisted)?;
     apply_browser_quality_resolution(&input.project_root, &locator, &resolution, &fields)?;
     let effective_action = effective_manual_review_action(&resolution);
@@ -3284,7 +3365,7 @@ fn update_delivery_after_manual_review_resolution(
         );
     }
     if effective_action.kind == RouteActionKind::Done {
-        delivery.status = DeliveryLifecycleStatus::Completed;
+        delivery.status = DeliveryLifecycleStatus::CompletedWithOverride;
     }
     delivery.updated_at = state::store::now_string();
     store
@@ -3389,26 +3470,73 @@ fn build_concept_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]
 }
 
 fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Vec<Value> {
-    let satisfied = task_results
-        .iter()
-        .flat_map(|result| {
-            result
-                .requirement_detail_evidence
-                .iter()
-                .filter(|evidence| evidence.status == "satisfied")
-                .map(|evidence| evidence.detail_id.clone())
-        })
-        .collect::<BTreeSet<_>>();
     task_plan
         .tasks
         .iter()
         .flat_map(|task| {
             task.requirement_detail_refs.iter().map(|detail_id| {
-                let ok = satisfied.contains(detail_id);
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == task.task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .requirement_detail_evidence
+                        .iter()
+                        .find(|evidence| evidence.detail_id == *detail_id)
+                });
+                let passed_ids = result
+                    .map(|result| {
+                        result
+                            .verification_results
+                            .iter()
+                            .filter(|verification| verification.status == "passed")
+                            .map(|verification| verification.verification_id.as_str())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let verification_supported = evidence
+                    .map(|evidence| {
+                        !evidence.verification_ids.is_empty()
+                            && evidence.verification_ids.iter().all(|id| {
+                                passed_ids.contains(id.as_str())
+                                    && result.is_some_and(|result| {
+                                        result
+                                            .verification_results
+                                            .iter()
+                                            .find(|verification| {
+                                                verification.verification_id == *id
+                                            })
+                                            .is_some_and(verification_is_traceable)
+                                    })
+                            })
+                    })
+                    .unwrap_or(false);
+                let artifact_supported = result
+                    .map(|result| {
+                        !result.changed_files.is_empty() || result.no_change_reason.is_some()
+                    })
+                    .unwrap_or(false);
+                let ok = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        contracts::TaskResultStatus::Completed
+                            | contracts::TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        evidence.status == "satisfied"
+                            && !evidence.summary.trim().is_empty()
+                            && !evidence.evidence_refs.is_empty()
+                            && verification_supported
+                            && artifact_supported
+                    })
+                });
                 json!({
                     "detailId": detail_id,
                     "taskId": task.task_id,
                     "detailSatisfied": ok,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "verificationSupported": verification_supported,
+                    "artifactSupported": artifact_supported,
                     "recommendedNextAction": if ok { "none" } else { "execution_repair" }
                 })
             })
@@ -3428,18 +3556,25 @@ fn build_engineering_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
                 let passed_verifications = result
                     .map(passed_verification_summaries)
                     .unwrap_or_default();
-                let satisfied = result
-                    .map(|result| {
-                        matches!(
-                            result.status,
-                            contracts::TaskResultStatus::Completed
-                                | contracts::TaskResultStatus::CompletedWithNotes
-                        ) && !passed_verifications.is_empty()
-                    })
-                    .unwrap_or(false);
+                let satisfied = applicability.engineering_quality_evidence
+                    && result
+                        .map(|result| {
+                            matches!(
+                                result.status,
+                                contracts::TaskResultStatus::Completed
+                                    | contracts::TaskResultStatus::CompletedWithNotes
+                            ) && !passed_verifications.is_empty()
+                        })
+                        .unwrap_or(false);
                 json!({
                     "requirementId": requirement.requirement_id,
                     "kind": requirement.kind,
@@ -3473,12 +3608,20 @@ fn build_code_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let evidence = result.and_then(|result| {
-                    result
-                        .code_quality_evidence
-                        .iter()
-                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                });
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
+                let evidence = result
+                    .filter(|_| applicability.code_quality_evidence)
+                    .and_then(|result| {
+                        result
+                            .code_quality_evidence
+                            .iter()
+                            .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                    });
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3607,12 +3750,20 @@ fn build_architecture_quality_review_matrix(
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == *task_id);
-            let evidence = result.and_then(|result| {
-                result
-                    .architecture_quality_evidence
-                    .iter()
-                    .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-            });
+            let applicability = task_plan
+                .tasks
+                .iter()
+                .find(|task| task.task_id == *task_id)
+                .map(task_evidence_applicability)
+                .unwrap_or_default();
+            let evidence = result
+                .filter(|_| applicability.architecture_quality_evidence)
+                .and_then(|result| {
+                    result
+                        .architecture_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
             let passed_verification_ids = result
                 .map(|result| {
                     result
@@ -3666,7 +3817,13 @@ fn build_api_contract_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let evidence = result.and_then(|result| {
+                let applicability = task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *task_id)
+                    .map(task_evidence_applicability)
+                    .unwrap_or_default();
+                let evidence = result.filter(|_| applicability.api_contract_evidence).and_then(|result| {
                     result
                         .api_contract_evidence
                         .iter()
@@ -3774,6 +3931,22 @@ fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
         .collect()
 }
 
+fn verification_is_traceable(verification: &contracts::VerificationResult) -> bool {
+    verification.provenance.as_ref().is_some_and(|provenance| {
+        !provenance.evidence_refs.is_empty()
+            || !provenance.test_case_refs.is_empty()
+            || (provenance
+                .command
+                .as_deref()
+                .is_some_and(|command| !command.trim().is_empty())
+                && provenance.exit_code.is_some())
+            || verification
+                .browser_checks
+                .iter()
+                .any(|check| !check.artifact_refs.is_empty())
+    })
+}
+
 fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
     result
         .requirement_detail_evidence
@@ -3799,6 +3972,10 @@ fn build_frontend_quality_review_matrix(
         .iter()
         .filter_map(|task| {
             let requirement = task.frontend_experience_requirement.as_ref()?;
+            let applicability = task_evidence_applicability(task);
+            if !applicability.frontend_quality_self_check {
+                return None;
+            }
             let surface_contract =
                 task_scoped_surface_contract_for_review(requirement, architecture_contract);
             if !surface_contract.is_object() {
@@ -3987,24 +4164,14 @@ fn task_scoped_surface_contract_for_review(
         return Value::Null;
     }
 
-    let ownership = requirement
-        .get("uiSurfaceOwnership")
-        .unwrap_or(&Value::Null);
-    let region_ids = string_array_field(ownership, "regionIdsInScope");
-    let action_ids = string_array_field(ownership, "actionIdsInScope");
-    let state_ids = string_array_field(ownership, "stateKindsInScope");
-    let quality_rule_ids = string_array_field(ownership, "qualityRuleIdsInScope");
+    let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
+    let region_ids = object_id_array_field(scope, "regionsInScope", "regionId");
+    let action_ids = object_id_array_field(scope, "actionsInContract", "actionId");
+    let state_ids = object_id_array_field(scope, "statesInContract", "state");
+    let quality_rule_ids = object_id_array_field(scope, "qualityRulesInScope", "ruleId");
     json!({
         "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": if region_ids.is_empty()
-            && action_ids.is_empty()
-            && state_ids.is_empty()
-            && quality_rule_ids.is_empty()
-        {
-            "all_when_task_scope_empty"
-        } else {
-            "task_scope"
-        },
+        "selectionMode": "task_scope",
         "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
         "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
         "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
@@ -4020,6 +4187,16 @@ fn task_scoped_surface_contract_for_review(
     })
 }
 
+fn object_id_array_field(value: &Value, key: &str, id_key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_key).and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
 fn selected_surface_contract_values(
     contract: &Value,
     array_key: &str,
@@ -4033,7 +4210,7 @@ fn selected_surface_contract_values(
         .flatten()
         .collect::<Vec<_>>();
     if ids.is_empty() {
-        return values.into_iter().cloned().collect();
+        return Vec::new();
     }
     let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
     values
@@ -4681,7 +4858,13 @@ fn build_review_signals(
         }
     }
     for result in task_results {
-        if result.runtime_delivery_evidence.is_some() {
+        let applicability = task_plan
+            .tasks
+            .iter()
+            .find(|task| task.task_id == result.task_id)
+            .map(task_evidence_applicability)
+            .unwrap_or_default();
+        if applicability.runtime_delivery_evidence && result.runtime_delivery_evidence.is_some() {
             signals.push(json!({
                 "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4690,7 +4873,7 @@ fn build_review_signals(
                 "evidenceType": "runtime_delivery"
             }));
         }
-        if result.frontend_experience_self_check.is_some() {
+        if applicability.frontend_self_check && result.frontend_experience_self_check.is_some() {
             signals.push(json!({
                 "signalId": format!("sig-frontend-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4699,7 +4882,8 @@ fn build_review_signals(
                 "evidenceType": "frontend_experience"
             }));
         }
-        if result.frontend_quality_self_check.is_some() {
+        if applicability.frontend_quality_self_check && result.frontend_quality_self_check.is_some()
+        {
             signals.push(json!({
                 "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
@@ -4710,6 +4894,13 @@ fn build_review_signals(
         }
     }
     Value::Array(signals)
+}
+
+fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
+    serde_json::to_value(task)
+        .ok()
+        .map(|value| task_evidence_applicability_from_value(&value))
+        .unwrap_or_default()
 }
 
 fn value_string_array(value: &Value, key: &str) -> Vec<String> {
@@ -4884,6 +5075,13 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                         "verificationId": verification.verification_id,
                         "status": verification.status,
                         "evidenceType": verification.evidence_type,
+                        "provenance": verification.provenance.as_ref().map(|provenance| json!({
+                            "evidenceRefCount": provenance.evidence_refs.len(),
+                            "changedFileCount": provenance.changed_files.len(),
+                            "testCaseRefCount": provenance.test_case_refs.len(),
+                            "commandPresent": provenance.command.as_deref().is_some_and(|command| !command.trim().is_empty()),
+                            "exitCode": provenance.exit_code
+                        })),
                         "browserChecks": verification.browser_checks.iter().map(|check| {
                             let diagnostic_artifact_refs = if check.status != contracts::BrowserCheckStatus::Passed
                                 || check.attempts > 1
@@ -5115,13 +5313,23 @@ fn allowed_refs(
         })
         .collect::<BTreeSet<_>>();
     verification_refs.extend(task_results.iter().flat_map(|result| {
-        result
-            .verification_results
-            .iter()
-            .flat_map(|verification| verification.browser_checks.iter())
-            .flat_map(|check| {
+        result.verification_results.iter().flat_map(|verification| {
+            let browser_refs = verification.browser_checks.iter().flat_map(|check| {
                 std::iter::once(check.check_id.clone()).chain(check.artifact_refs.iter().cloned())
-            })
+            });
+            let provenance_refs = verification
+                .provenance
+                .iter()
+                .flat_map(|provenance| {
+                    provenance
+                        .evidence_refs
+                        .iter()
+                        .chain(provenance.changed_files.iter())
+                        .chain(provenance.test_case_refs.iter())
+                })
+                .cloned();
+            browser_refs.chain(provenance_refs)
+        })
     }));
     let mut read_refs = vec!["reviewPacket".to_string(), "changeContext".to_string()];
     read_refs.extend(
@@ -5375,7 +5583,7 @@ fn value_to_write_target(value: &Value) -> Result<WriteTarget, state::store::Sta
     })
 }
 
-fn repairable_or_fallback_manual_review(
+fn review_result_repairable(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
     target_file: String,
@@ -5410,6 +5618,7 @@ fn repairable_with_tool(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -5420,6 +5629,7 @@ fn repairable_with_tool(
         resubmit_tool: resubmit_tool.to_string(),
         fix_scope: Some(fix_scope.to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(resubmit_tool),
     })
 }
 
@@ -5471,6 +5681,33 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_quality_profile_routes_only_review_method_references() {
+        let profile = review_quality_profile();
+        let items = profile["referenceLoadPlan"].as_array().unwrap();
+        let paths = items
+            .iter()
+            .filter_map(|item| item.get("path").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                "tech/review/core.md",
+                "tech/review/spec-compliance.md",
+                "tech/review/defect-patterns.md",
+                "tech/review/test-evidence.md",
+                "tech/review/finding-quality.md",
+            ]
+        );
+        assert!(items.iter().all(|item| {
+            !item["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("route selection")
+        }));
+    }
 
     fn task_result_with_browser_check(attempts: u32) -> TaskResult {
         serde_json::from_value(json!({
@@ -5609,6 +5846,16 @@ mod tests {
         assert_eq!(
             retried[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"][0],
             json!("test-results/workflow/trace.zip")
+        );
+    }
+
+    #[test]
+    fn review_snapshot_fingerprint_changes_when_task_result_evidence_changes() {
+        let first = task_result_with_browser_check(1);
+        let second = task_result_with_browser_check(2);
+        assert_ne!(
+            task_result_snapshot_fingerprint(&[first]),
+            task_result_snapshot_fingerprint(&[second])
         );
     }
 

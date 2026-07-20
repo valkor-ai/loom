@@ -1,32 +1,74 @@
-# Next.js Testing Quality
+# Next.js Testing
 
-This file applies Next.js testing and verification rules to task-owned routes, Server Components, Client Components, Server Actions, route handlers, and runtime configuration.
+Use Next.js framework testing only for tasks that own tests. Choose the smallest proof for route/server/client/action/runtime behavior. MCP-assigned Playwright references own real browser navigation, hydration, multi-viewport rendering, and deployed workflow evidence.
 
-Keep this file at the Next.js route/component/server boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+## Proof Boundary
 
-## When To Use
+| Claim | Suitable proof |
+|---|---|
+| Pure parser/mapper/schema | TypeScript unit test |
+| Client component behavior | selected React component test tooling |
+| Server data/helper | server unit/integration test with owned ports |
+| Server Action | action/application integration pattern |
+| Route handler | Request/Response HTTP contract test |
+| Route file/build boundary | production `next build` plus focused route test |
+| Hydration/navigation/rendered workflow | assigned browser test |
 
-- The task changes App Router pages, layouts, route handlers, Server Actions, metadata, loading/error/not-found states, middleware, or Next.js configuration.
-- Use this alongside the repository's existing test runner and React testing strategy. Do not introduce a new test stack for a small task.
-- If the project has no route/component tests, run build/type/lint checks and record the test gap rather than inventing unrelated infrastructure.
+Do not render every Server Component with brittle framework internals or claim component tests prove middleware, deployment rewrites, browser hydration, streaming, or server/client bundles.
 
-## Implementation Focus
+## Client Components
 
-- Prefer tests around user-visible route behavior, not file names alone: ready state, loading fallback, error reset, not found, redirect, form pending, validation error, and successful mutation.
-- For Client Components, use accessible queries and realistic user events through the existing React test tooling.
-- For Server Actions, test validation, auth/ownership denial, successful mutation, revalidation target, and returned error shape through an existing action or integration-test pattern.
-- For route handlers, test status codes, request parsing, response DTO shape, and expected error mapping.
-- Keep server-only dependencies mocked at owned boundaries. Do not mock the component or action under test.
-- Use `next build` as the required integration proof for server/client boundaries, metadata, config, middleware, and App Router file contracts.
-- Keep test data deterministic and isolated. Do not depend on route execution order or shared mutable caches between tests.
+Test visible behavior with accessible queries and realistic events through the repository's React runner. Provide router/action/data adapters at owned boundaries without mocking the component/state logic being claimed.
 
-## Verification Focus
+Cover pending, validation, conflict, forbidden, unavailable, disabled, success, optimistic rollback, and target identity where relevant. Avoid private state/hook implementation assertions.
 
-- Run the focused test command, then `next build` when framework boundaries changed.
-- Verify no secret, database client, or server-only helper appears in client-bundle paths.
-- For mutation flows, verify visible readback or cache invalidation when feasible.
-- For config changes, verify the exact affected route, header, image, env, or runtime behavior.
+## Server Components And Data
 
-## Evidence Focus
+Test pure server helpers and application/data boundaries directly. For server components, prove authorization/scoping, expected outcome mapping, and serialization where the repository has a stable harness; production build remains required for import/serialization contracts.
 
-- In the evidence summary, name the proof type: route behavior test, Server Action test, route handler test, Client Component interaction, metadata proof, build proof, or runtime config proof.
+Use deterministic request identity, cache state, time, and data. Reset/invalidate shared/request caches between tests so order does not affect outcomes.
+
+Mock/fake external services, clocks, and selected repositories at ports. Do not mock the authorization, cache key, or mapping behavior being tested.
+
+## Server Actions
+
+Exercise typed input parsing, authentication, ownership, business validation/conflict, successful durable mutation, duplicate handling, returned serializable state, and exact revalidation/readback.
+
+Do not unit-test only the exported function while bypassing framework form/cookie/redirect behavior if that behavior is the claim. Preserve thrown redirect/notFound semantics in the harness.
+
+## Route Handlers And Middleware
+
+Construct real `Request` objects and assert status, headers, content type, body/error shape, cookies, auth, and method/path behavior. Test body/size/format limits when owned.
+
+Middleware matcher/redirect/rewrite/header behavior requires focused integration/build/runtime or browser probes; a direct function call does not prove matcher exclusions or effective path topology.
+
+## App Router Boundaries
+
+Exercise dynamic/search params, loading/error/not-found, redirects, and metadata through stable repository tooling where available. Production build catches route file contracts, server/client imports, action serialization, and runtime incompatibility.
+
+Parallel/intercepting/deep-link/back-stack behavior belongs in browser tests when it requires actual navigation/history/focus.
+
+## Runtime And Environment
+
+For config/runtime tasks, build/start with valid and invalid required env, then probe exact headers/rewrites/health/image/runtime behavior. Ensure tests do not print secrets.
+
+Inspect client output/import graph when public/server env or server-only dependency isolation is the claim. Use bundle evidence only for measured performance tasks.
+
+## Verification And Cleanup
+
+Run the changed test target first, then production build when routes, server/client boundaries, actions, middleware, metadata, config, or runtime changed. Do not invent a test runner/coverage threshold for a small task absent repository policy.
+
+Reset mocks, caches, environment, cookies, timers, test servers, database fixtures, and global fetch implementations. Avoid arbitrary sleeps and test-order dependencies.
+
+## Delivery Evidence
+
+Record boundary, scenario, command, and meaningful HTTP/visible/build assertion. Passing counts or `next build` alone cannot prove business/auth branches, cache coherence, browser hydration, navigation history, responsive UI, or deployed binding.
+
+## Unsafe Defaults
+
+- Load this reference only when the accepted task owns Next.js test creation, test modification, or test-specific verification.
+- Client component tests claimed as Server Component/runtime/middleware proof.
+- Action tests bypassing auth/transaction/revalidation/readback.
+- Shared cache/env/cookie state leaking across tests.
+- Build success used as the only behavioral evidence.
+- Browser behavior asserted without an actual browser boundary.

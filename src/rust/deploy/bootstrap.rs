@@ -163,23 +163,21 @@ pub fn deploy_bootstrap(input: DeployBootstrapInput) -> LoomMcpActionResult {
     }
 
     if !input.confirm {
-        return LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: input.project_root,
-            prompt:
-                "Deployment bootstrap may run database migrations or seed commands. Confirm before execution."
-                    .to_string(),
-            accepted_responses: vec!["confirm".to_string()],
-            request_ref: None,
-            delivery_id: None,
-            phase_id: None,
-            gate: Some(json!({
+        return LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+            input.project_root,
+            "Deployment bootstrap may run database migrations or seed commands. Confirm before execution.",
+            vec!["confirm".to_string()],
+            None,
+            None,
+            None,
+            Some(json!({
                 "tool": "loom.deployBootstrap",
                 "confirmRequired": true,
                 "kind": input.kind,
                 "tasks": tasks,
                 "warnings": spec.bootstrap.warnings
             })),
-        });
+        ));
     }
 
     let compose_file = match from_project_relative(project_root, &spec.files.compose_path) {

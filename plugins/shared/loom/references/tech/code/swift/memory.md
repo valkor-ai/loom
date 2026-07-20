@@ -19,6 +19,15 @@ This file applies ARC, ownership, and performance guidance to Swift changes.
 - Handle iOS memory warnings or scene lifecycle events when the task owns memory-heavy resources.
 - Use `autoreleasepool` only for known Objective-C/Foundation-heavy loops where measurement or local convention supports it.
 
+## Decision Rules
+
+- Audit every escaping closure, observer, timer, subscription, and task for the ownership cycle it creates. Use `weak` for non-owning delegates/back-references and `unowned` only when the lifetime proof is absolute.
+- Cancel or remove observers, timers, Combine subscriptions, and tasks in the same owner teardown that releases the resource. Do not rely on a view disappearing or a process ending as cleanup.
+- Keep caches bounded, clearable, and lifecycle-scoped. State whether the cache is memory-only, persisted, shared across scenes, or invalidated by an external version/identity.
+- Preserve value semantics for snapshots and models unless identity/shared mutation is required. Avoid repeatedly copying large values in hot paths, but confirm the cost before introducing reference wrappers.
+- Require a representative measurement before claiming an optimization. Use Instruments, XCTest metrics, or another repository-approved measurement and record before/after data when feasible.
+- Handle memory warnings or scene lifecycle events for resources owned by the task; do not add platform-specific cleanup to unrelated code.
+
 ## Verification Focus
 
 - Build and run tests for the changed path. Add tests for deallocation or cancellation when the repository has patterns for that.

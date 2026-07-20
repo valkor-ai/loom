@@ -117,6 +117,10 @@ where
             )
         })?;
 
+        if let Some(pending_repair) = active_phase.pending_repair.as_ref() {
+            return Ok(pending_repair.to_result(ctx.project_root));
+        }
+
         if let Some(existing) = lease.as_mut() {
             if existing.is_fresh_at(self.store.now_millis()) {
                 if active_phase
@@ -184,6 +188,38 @@ where
                         "continue_to_next_phase is missing targetPhaseId.",
                     )
                 })?;
+            let current_index = delivery
+                .phases
+                .iter()
+                .position(|phase| phase.phase_id == delivery.active_phase_id)
+                .ok_or_else(|| {
+                    LoomCoreError::failure(
+                        "PHASE_NOT_FOUND",
+                        format!(
+                            "Active phase {} was not found in delivery {}.",
+                            delivery.active_phase_id, delivery.delivery_id
+                        ),
+                    )
+                })?;
+            let target_index = delivery
+                .phases
+                .iter()
+                .position(|phase| phase.phase_id == target_phase_id)
+                .ok_or_else(|| {
+                    LoomCoreError::failure(
+                        "PHASE_NOT_FOUND",
+                        format!("Target phase {} was not found.", target_phase_id),
+                    )
+                })?;
+            if target_index <= current_index {
+                return Err(LoomCoreError::failure(
+                    "INVALID_NEXT_PHASE_TARGET",
+                    format!(
+                        "continue_to_next_phase must target a later phase than {}.",
+                        delivery.active_phase_id
+                    ),
+                ));
+            }
             delivery.active_phase_id = target_phase_id;
             self.store
                 .save_delivery_index(&ctx.project_root, &delivery)?;
@@ -265,7 +301,13 @@ where
             .store
             .load_delivery_index(&ctx.project_root, &event.delivery_id)?;
         if delivery.active_phase_id != event.phase_id {
-            delivery.active_phase_id = event.phase_id.clone();
+            return Err(LoomCoreError::failure(
+                "STALE_SUBMIT_PHASE",
+                format!(
+                    "Accepted submit event belongs to {}, but the active delivery phase is {}.",
+                    event.phase_id, delivery.active_phase_id
+                ),
+            ));
         }
         let phase = delivery
             .phases
@@ -284,6 +326,7 @@ where
             .next_action
             .clone()
             .or_else(|| Some(RouteAction::done("submit_accepted")));
+        phase.pending_repair = None;
         delivery.updated_at = self.store.now_string();
         self.store
             .save_delivery_index(&ctx.project_root, &delivery)?;
@@ -299,21 +342,38 @@ fn user_gate_result(
     phase_id: &str,
     action: &RouteAction,
 ) -> LoomMcpActionResult {
-    LoomMcpActionResult::UserGate(crate::LoomMcpUserGateResult {
+    let gate = crate::LoomMcpUserGateResult::new(
         project_root,
-        prompt: action.prompt.clone().unwrap_or_else(|| {
+        action.prompt.clone().unwrap_or_else(|| {
             "User confirmation is required before Loom can continue.".to_string()
         }),
-        accepted_responses: if action.accepted_responses.is_empty() {
+        if action.accepted_responses.is_empty() {
             vec!["confirm".to_string()]
         } else {
             action.accepted_responses.clone()
         },
-        request_ref: action.request_ref.clone(),
-        delivery_id: Some(delivery_id.to_string()),
-        phase_id: Some(phase_id.to_string()),
-        gate: action.details.clone(),
-    })
+        action.request_ref.clone(),
+        Some(delivery_id.to_string()),
+        Some(phase_id.to_string()),
+        action.details.clone(),
+    );
+    if action.kind == RouteActionKind::BrainstormClarification
+        || action
+            .details
+            .as_ref()
+            .and_then(|details| details.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("phase_brainstorm_continuation")
+    {
+        let block = action
+            .details
+            .as_ref()
+            .and_then(|details| details.get("currentBlock"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("phase_scope");
+        return LoomMcpActionResult::UserGate(gate.with_brainstorm_knowledge(block));
+    }
+    LoomMcpActionResult::UserGate(gate)
 }
 
 fn result_state_name(result: &LoomMcpActionResult) -> String {

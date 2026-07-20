@@ -1,31 +1,90 @@
-# C# Performance Quality
+# .NET Runtime Performance
 
 ## When To Use
 
-- The task changes performance-sensitive C# paths, allocation-heavy processing, streams, serialization, LINQ-heavy code, EF queries, caching, AOT/source generation, or benchmarked hotspots.
-- Use this when performance is a stated requirement, a measured bottleneck, or a risk introduced by the task.
-- Do not introduce low-level optimizations into ordinary business code without evidence or a clear bounded hotspot.
+Use this reference only when the task owns a measured CPU, allocation, GC, memory, throughput, latency, startup, publish size, query, stream, or runtime-resource bottleneck.
 
 ## Implementation Focus
 
-- Start with the simplest correct code, then optimize measured hotspots. Do not use `Span<T>`, `Memory<T>`, pooling, unsafe code, or source generators only to appear "high performance".
-- Avoid multiple enumeration of `IEnumerable<T>` when the source can be expensive, streaming, or side-effectful. Materialize once only when the data size is bounded and reuse is needed.
-- Use appropriate collections: dictionary/set for lookup/uniqueness, list with known capacity for accumulation, frozen collections for static read-heavy maps in supported target frameworks.
-- Keep async allocation choices honest. Use `ValueTask<T>` only for frequently synchronous paths and only when consumers understand single-await semantics.
-- Return rented buffers to `ArrayPool<T>` in `finally`, and do not expose pooled arrays beyond their ownership scope.
-- For streams and large payloads, avoid buffering whole content into memory unless the maximum size is bounded by contract.
-- Optimize EF queries through projections, `AsNoTracking`, pagination, split queries, compiled queries, or indexes before adding application-level caching.
-- Apply response caching/compression only when semantics and headers make it safe for the endpoint and users.
-- Use JSON source generation or AOT-oriented changes only when the project targets Native AOT, cold-start constraints, or reflection trimming risks.
-- Keep performance claims tied to tests, benchmarks, profiling, or query evidence rather than intuition.
+### Measure First
+
+Name workload, input/concurrency, TFM/runtime, OS/hardware/container limits, build tier, warmup, repetitions, statistic, baseline, and correctness output.
+
+Use BenchmarkDotNet for microbenchmarks and appropriate tracing/profilers/counters for application behavior. A debug stopwatch or one request is not reliable evidence.
+
+Check algorithm, query/network I/O, serialization, blocking, contention, and redundant work before low-level allocation tuning.
+
+### Enumeration And Collections
+
+Know whether `IEnumerable<T>` is lazy, repeatable, remote, streaming, or side-effectful. Avoid multiple enumeration; materialize once only when bounded ownership/reuse justifies memory.
+
+Choose list/dictionary/hash/frozen/immutable/concurrent structures from access/mutation/concurrency/lifetime. Pre-size with realistic cardinality and avoid retained oversized capacity.
+
+Use LINQ when clear; remove allocations/enumerations only in measured hot paths and preserve provider translation for `IQueryable`.
+
+### Span, Memory, And Pools
+
+Use spans for synchronous contiguous parsing/formatting/processing where backing lifetime is explicit. They cannot cross async/yield/heap capture.
+
+Use `Memory<T>`/`ReadOnlyMemory<T>` across async only with a clear owner. Do not retain memory over a pooled buffer after return.
+
+Rent bounded buffers/objects from established facilities such as `ArrayPool<T>` only for hot repeated allocation. Return in `finally`, clear sensitive data, avoid double return/use-after-return, cap pooled object capacity, and document thread safety.
+
+Keep `stackalloc` size bounded or conditional; user-controlled/large allocation can overflow the stack.
+
+### Async And Concurrency Cost
+
+Use `ValueTask<T>` only for frequently synchronous hot APIs with measured benefit and consumer semantics (normally one await/consumption). Ordinary `Task<T>` is safer for general APIs.
+
+Avoid fake async (`Task.Run` around I/O), unbounded `WhenAll`, thread-pool starvation, blocking locks, and sync-over-async. Bound channels/concurrency and propagate cancellation.
+
+Measure lock/contention/context-switch costs before replacing safe synchronization.
+
+### Streams, Serialization, And Networking
+
+Stream bounded chunks instead of buffering entire large payloads; preserve cancellation, length limits, disposal, and partial failure behavior.
+
+Use source-generated serialization only when startup/AOT/allocation or trimming needs justify it and every runtime type/options path is registered. Avoid reflection fallbacks hidden until production.
+
+Reuse clients/connections through accepted factories/pools and consume/dispose responses correctly. Compression/caching must preserve endpoint/user semantics.
+
+### GC And Object Lifetime
+
+Measure allocation rate, generations, LOH, pause time, roots, and retained memory. Reducing allocation count is insufficient if retained size or latency worsens.
+
+Avoid long-lived event/static/cache closures retaining request/user/large graphs. Bound caches and unsubscribe/dispose lifecycle owners.
+
+Do not force collections/NoGC regions globally without a proven controlled latency scenario.
+
+### AOT, Trimming, And Startup
+
+Native AOT, ReadyToRun, single-file, trimming, invariant globalization, and source generation trade compatibility, size, startup, build time, reflection/dynamic behavior, and diagnostics.
+
+Test the actual published artifact and deployment platform; ordinary build/tests cannot prove trim/AOT compatibility.
+
+### EF And External Systems
+
+Use provider/task-specific data guidance for query shape. Measure projection/tracking/round trips/query plan/index before application caching or compiled queries.
+
+Include network/database/queue limits when optimizing end-to-end throughput; a faster CPU loop may not affect the real bottleneck.
 
 ## Verification Focus
 
-- Run normal `dotnet build`/`dotnet test` first; optimized code still needs correctness coverage.
-- For a performance task, run the repository's BenchmarkDotNet benchmark, profiler, query plan, or targeted measurement and record the comparison.
-- For allocation-sensitive changes, verify buffer ownership, stream disposal, and no use-after-return of pooled arrays.
-- For EF performance changes, test query output and include projection/query-shape evidence when feasible.
+- Run correctness tests before/after under release/published configuration.
+- Record repeatable benchmark/profile/counter evidence with environment and variability.
+- Test span/pool/stream empty/boundary/error/cancellation and ownership after return/disposal.
+- Verify memory retention/GC and concurrency/resource limits under representative load.
+- Publish/run trimming/AOT/single-file changes on the target runtime and exercise reflection/serialization/plugins.
 
 ## Evidence Focus
 
-- In the evidence summary, name the performance decision: measured hotspot, collection choice, LINQ enumeration, pooled buffer, stream handling, EF query optimization, caching, source generation, or benchmark result.
+Report bottleneck, workload/runtime, measurement, intervention, result/variability, and correctness/resource tradeoff. `Span<T>`, pooling, ValueTask, or source generation presence does not prove meaningful improvement.
+
+## Unsafe Defaults
+
+- Performance reference selected from prose without measured ownership.
+- Span/pool/unsafe complexity added to ordinary business code.
+- Pooled memory retained after return or sensitive data left uncleared.
+- ValueTask used broadly without consumer/lifetime constraints.
+- Debug/microbenchmark result generalized to production workload.
+- AOT/trimming claimed complete from `dotnet build` only.

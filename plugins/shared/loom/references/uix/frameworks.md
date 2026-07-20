@@ -43,6 +43,33 @@ Before applying a token template:
 
 Do not create both `tokens.css` and a separate Tailwind theme for the same project unless the repo already uses both and they are linked intentionally.
 
+## Boundary With Technical Guidance
+
+Keep responsibilities separate when multiple guidance sets apply:
+
+| Concern | UIX framework guidance | Technical guidance |
+| --- | --- | --- |
+| Component split | shell, feature, primitive, state region | language/module conventions |
+| Route ownership | visible navigation and return context | router configuration and server route behavior |
+| Data state | loading, empty, error, readback placement | client, API, cache, and serialization implementation |
+| Token use | semantic roles and consumer consistency | CSS, Tailwind, theme, build, and package configuration |
+| Browser/native behavior | user-visible interaction and responsive outcome | platform API, lifecycle, and dependency details |
+| Tests | visible behavior and state assertions | runner, fixtures, mocks, and type/build setup |
+
+Read only the technical references that the task owns. A framework name does not
+justify loading every framework feature, testing guide, build guide, or state
+library guide.
+
+## Existing Project Adaptation
+
+- Inspect the actual entry point, router, style source, component library, data
+  client, and test runner before choosing a framework example.
+- Adapt examples to the accepted project version and conventions. Do not introduce
+  a new router, state library, CSS system, SSR boundary, or component package just
+  because an example uses one.
+- Preserve server/client, route, state, and token ownership across a feature split;
+  a prettier component boundary that breaks those contracts is not an improvement.
+
 ## Verification
 
 - Run focused build/type/lint tests available in the repo.
@@ -50,6 +77,8 @@ Do not create both `tokens.css` and a separate Tailwind theme for the same proje
 - Keep framework setup notes out of product UI.
 - Check that framework-specific client/server boundaries, hydration, routing, and state ownership do not break the current UI requirements.
 - Name the files that consume the declared token asset, not only the file that defines tokens.
+- Evidence identifies the adapted project convention and any framework boundary
+  that was intentionally not changed.
 
 ## Quality Gate Index
 

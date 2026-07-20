@@ -1,34 +1,80 @@
-# React Hooks Quality
+# React Hooks And Reactive Client Lifecycles
 
-This file applies React hook discipline to task-owned custom hooks, effects, subscriptions, browser integrations, and hook-based stateful components.
+Apply hooks guidance when the task owns effects, subscriptions, browser integrations, timers, replaceable async work, custom hooks, or another reactive client flow. Static/presentational component work should not load it.
 
-## When To Use
+## Effects Are Synchronization
 
-- The task creates or changes `useEffect`, `useMemo`, `useCallback`, `useRef`, `useReducer`, custom hooks, debounced search, media queries, local storage, subscriptions, timers, or browser event listeners.
-- Use this when stale closures, missing cleanup, dependency arrays, or cancellation behavior can affect correctness.
-- If the task only renders static markup with no hooks, do not expand scope because this reference exists.
+Use effects to synchronize React state with systems outside rendering: DOM/browser APIs, subscriptions, timers, analytics, imperative widgets, or manual data sources. Do not use effects to compute values from props/state or mirror one state variable into another.
 
-## Implementation Focus
+Keep one concern per effect and include all reactive dependencies. Restructure unstable objects/functions or move logic rather than suppressing exhaustive-deps.
 
-- Keep effects scoped to a single concern: data fetch, subscription, DOM listener, timer, analytics event, or synchronization. Split unrelated effects instead of building one large effect with hidden dependencies.
-- Include every value used by an effect in the dependency list unless the value is intentionally stable by contract. Do not silence hook lint warnings to make the task pass.
-- Add cleanup for subscriptions, event listeners, timers, observers, animation frames, and async work that can complete after unmount.
-- For fetches or replaceable async work, use `AbortController`, a request token, or a cancellation flag so stale results do not overwrite newer UI state.
-- Use functional state updates when the next value depends on the previous value, especially inside timers, async callbacks, subscriptions, and memoized callbacks.
-- Use `useCallback` only when a stable function identity is needed for memoized children, effect dependencies, event unsubscription, or a custom hook contract.
-- Use `useMemo` only for expensive calculations, stable object identities required by memoized children, or derived values that would otherwise cause downstream churn.
-- Store mutable non-render data in refs: timers, DOM nodes, previous values, external instances, and in-flight request ids. Do not put data in refs when the UI must re-render from it.
-- Custom hooks should expose a small typed contract with clear loading, error, ready, and action states when they own async work.
-- Guard browser-only APIs for SSR or pre-rendered environments when the repository can run outside the browser.
+```tsx
+useEffect(() => {
+  const controller = new AbortController()
+  void search(query, { signal: controller.signal }).then(setResults, error => {
+    if (!controller.signal.aborted) setFailure(mapError(error))
+  })
+  return () => controller.abort()
+}, [query])
+```
 
-## Verification Focus
+Handle development Strict Mode setup-cleanup replay; an effect must be safely repeatable and cleanup must undo setup.
 
-- Run hook/component tests that prove effect cleanup, debounced timing, cancellation, subscription disposal, and dependency-driven refresh when touched.
-- Use fake timers only where the repo already supports them; restore real timers after the test.
-- For local storage or media query hooks, test missing browser APIs or SSR-safe initialization when the framework can render on the server.
-- For custom hooks used by multiple components, add a hook-level test or component integration test around the public hook contract.
+## Cleanup And Stale Work
 
-## Evidence Focus
+Remove listeners/observers/subscriptions, clear timers/animation frames, abort requests, dispose external instances, and prevent stale completions overwriting newer state.
 
-- In the evidence summary, name the hook decision: effect split, cleanup path, dependency handling, stale-result prevention, functional update, memo boundary, ref ownership, or SSR browser guard.
+Mounted flags can prevent updates but do not cancel work. Prefer real cancellation/token sequencing where available and define latest/order/duplicate behavior.
 
+Use functional updates when callbacks depend on prior state. Refs hold mutable non-render values such as DOM nodes, timer IDs, previous values, and external instances; UI-visible state belongs in state/reducer/store.
+
+## Custom Hooks
+
+Extract hooks for reusable stateful behavior or to isolate a complex external lifecycle, not merely to move code. Keep typed input/output contracts small and expose state/actions rather than implementation internals.
+
+Custom hooks obey hook rules and should not conditionally call hooks. Avoid hidden global singletons, implicit routing, or broad API/error behavior inside a generic hook.
+
+For async hooks, expose meaningful idle/loading/ready/empty/error/refreshing/mutating state and cancellation/retry semantics. Do not return only `data | null` when failures matter.
+
+## Memoization
+
+Use `useMemo` for measured expensive derivation or required stable identity, `useCallback` for consumers that rely on function identity, and `memo` at proven component boundaries.
+
+Memoization is not semantic correctness and can retain stale dependencies/objects or cost more than recomputation. Do not wrap every handler/value.
+
+React Compiler or framework optimization may change manual memo needs; follow accepted tooling/version and verify behavior/performance rather than deleting/adding memo mechanically.
+
+## Browser APIs And SSR
+
+Initialize browser-only values lazily/effect-side with a deterministic server/first render when SSR/pre-rendering is possible. Guard storage, media queries, ResizeObserver, window/document, and third-party widgets.
+
+Storage events, media subscriptions, and external stores need `useSyncExternalStore` or a correct subscription snapshot contract when multiple components must stay consistent.
+
+Validate persisted data and clear/re-scope it on identity/tenant/schema changes. Browser storage is not secure storage.
+
+## Debounce, Timers, And Events
+
+Debounce/throttle based on product behavior and cancel pending work on unmount/input changes. Avoid recreating debounced functions each render or closing over stale values.
+
+Event handlers are preferable to effects for user-caused operations. Do not set a flag then use an effect solely to notice the flag and submit.
+
+## Verification
+
+- Test setup/cleanup replay, unmount disposal, and dependency-driven resubscription.
+- Prove stale request/timer results cannot overwrite newer state.
+- Verify debounce/throttle timing and cancellation with controlled timers only when owned.
+- Test SSR/missing browser API, persisted-data validation, identity clearing, and external-store updates.
+- Exercise custom hook public state/actions, not private refs/effect count alone.
+
+## Delivery Evidence
+
+Name the external system/lifecycle and cleanup/cancellation assertion proving it. A complete dependency array or passing happy-path hook render cannot prove stale-result safety, strict-mode replay, resource disposal, or SSR behavior.
+
+## Unsafe Defaults
+
+- Effects used for derived values or user-event commands.
+- Hook lint disabled instead of fixing dependencies.
+- Mounted flags treated as cancellation.
+- Refs used for UI state or mutable globals hidden in hooks.
+- Universal useMemo/useCallback/memo.
+- Browser APIs read during SSR initial render without a stable fallback.

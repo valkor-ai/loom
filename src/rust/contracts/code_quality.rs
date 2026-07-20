@@ -39,38 +39,30 @@ pub struct CodeReferenceSelection {
     pub unmapped_signals: Vec<CodeStackSignal>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CodeReferenceTaskContext {
+    pub application_architecture: bool,
+    pub security: bool,
+    pub async_processing: bool,
+    pub integration: bool,
+    pub resilience: bool,
+    pub observability: bool,
+}
+
 pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
     if signals.is_empty() {
         return Value::Null;
     }
-    let reference_groups = baseline_reference_groups(&signals);
-    let reference_load_plan = code_reference_load_plan(&reference_groups);
-    let package_naming_policy = package_naming_policy_for_reference_groups(&reference_groups);
+    let required = signals.iter().any(|signal| !signal_is_unmapped(signal));
     json!({
-        "required": !reference_groups.is_empty(),
+        "required": required,
         "qualityLevel": "production_code_implementation",
         "codeStackSignals": signals,
         "unmappedSignals": signals
             .iter()
             .filter(|signal| signal_is_unmapped(signal))
-            .collect::<Vec<_>>(),
-        "techReferenceProfile": {
-            "loadMode": "mcp_reference_load_plan",
-            "groups": {
-                "code": reference_groups
-            },
-            "referenceLoadPlan": reference_load_plan
-        },
-        "packageNamingPolicy": package_naming_policy,
-        "generationRules": [
-            "Use TechnicalBaseline.stack only as the source fact for stack signals; do not reselect or reconfirm the technology stack.",
-            "Use codeStackSignals as derived signals, then select code references by current task scope.",
-            "Read only files listed in techReferenceProfile.referenceLoadPlan; selected code groups are semantic evidence labels, not path maps.",
-            "Do not attach SQL references to every backend task merely because a database exists; attach SQL only for schema, migration, query, reporting, dialect, or optimization work.",
-            "For JVM production source, derive package names from existing repository package roots, build group metadata, or confirmed organization/project identity; never create com.example/org.example/com.company/demo/sample package roots.",
-            "If a stack signal is low confidence or unmapped, preserve existing repository style and verification instead of guessing a nearby language profile."
-        ]
+            .collect::<Vec<_>>()
     })
 }
 
@@ -79,7 +71,7 @@ pub fn code_quality_enum_refs() -> Value {
         "knownReferenceGroups": {
             "code": {
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
-                "springboot": ["web", "data", "security", "testing", "runtime", "cloud"],
+                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability"],
                 "django": ["models", "serializers", "views", "security", "testing"],
                 "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
                 "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
@@ -94,16 +86,22 @@ pub fn code_quality_enum_refs() -> Value {
                 "javascript": ["core", "async", "modules", "node", "browser", "testing"],
                 "python": ["core", "typing", "async", "packaging", "testing"],
                 "go": ["core", "concurrency", "interfaces", "structure", "generics", "testing"],
-                "csharp": ["core", "aspnet", "persistence", "blazor", "performance", "testing"],
+                "csharp": ["core", "modern", "persistence", "blazor", "performance", "testing"],
                 "cpp": ["core", "modern", "templates", "performance", "concurrency", "build", "testing"],
-                "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "testing"],
-                "php": ["core", "laravel", "symfony", "async", "testing"],
+                "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "dsl", "testing"],
+                "php": ["core", "modern", "laravel", "symfony", "async", "testing"],
                 "rust": ["core", "ownership", "traits", "errors", "async", "testing"],
                 "swift": ["core", "swiftui", "concurrency", "protocols", "memory", "testing"],
-                "sql": ["schema", "queries", "dialects", "optimization", "windows"]
+                "sql": [
+                    "schema", "queries", "dialects", "optimization", "windows",
+                    "mysql.schema", "mysql.queries", "mysql.transactions",
+                    "postgresql.schema", "postgresql.queries", "postgresql.transactions",
+                    "sqlserver.schema", "sqlserver.queries", "sqlserver.transactions",
+                    "oracle.schema", "oracle.queries", "oracle.transactions"
+                ]
             }
         },
-        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
+        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "resilience", "observability", "cloud", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -112,11 +110,28 @@ pub fn code_reference_selection_for_task(
     baseline: &TechnicalBaselineContract,
     task: &TaskDefinition,
 ) -> Option<CodeReferenceSelection> {
+    code_reference_selection_for_task_with_context(
+        baseline,
+        task,
+        &CodeReferenceTaskContext::default(),
+    )
+}
+
+pub fn code_reference_selection_for_task_with_context(
+    baseline: &TechnicalBaselineContract,
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) -> Option<CodeReferenceSelection> {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
     if signals.is_empty() {
         return None;
     }
-    let focus_tags = task_focus_tags(task);
+    let stack_frameworks = signals
+        .iter()
+        .flat_map(|signal| signal.frameworks.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut focus_tags = task_focus_tags(task);
+    extend_focus_tags_from_context(&mut focus_tags, context);
     let mut selected_signals = Vec::new();
     let mut reference_groups = BTreeMap::<String, BTreeSet<String>>::new();
     let mut unmapped_signals = Vec::new();
@@ -129,12 +144,13 @@ pub fn code_reference_selection_for_task(
             continue;
         }
         let items = if signal.language.is_some() {
-            reference_items_for_signal(&signal, &focus_tags)
+            reference_items_for_signal(&signal, &focus_tags, task, &stack_frameworks)
         } else {
             BTreeSet::new()
         };
-        let backend_items = backend_reference_items_for_signal(&signal, &focus_tags);
-        let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags);
+        let backend_items =
+            backend_reference_items_for_signal(&signal, &stack_frameworks, task, context);
+        let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags, task);
         if !items.is_empty() || !backend_items.is_empty() || !frontend_items.is_empty() {
             selected_signals.push(signal.clone());
             if let Some(language) = &signal.language {
@@ -226,34 +242,6 @@ pub fn code_stack_signals_from_baseline(stack: &Value) -> Vec<CodeStackSignal> {
     dedupe_signals(signals)
 }
 
-fn baseline_reference_groups(signals: &[CodeStackSignal]) -> BTreeMap<String, Vec<String>> {
-    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
-    let focus_tags = vec![
-        "api".to_string(),
-        "frontend".to_string(),
-        "persistence".to_string(),
-        "configuration".to_string(),
-    ];
-    for signal in signals {
-        if let Some(language) = &signal.language {
-            groups
-                .entry(language.clone())
-                .or_default()
-                .extend(reference_items_for_signal(signal, &focus_tags));
-        }
-        for (framework, items) in backend_reference_items_for_signal(signal, &focus_tags) {
-            groups.entry(framework).or_default().extend(items);
-        }
-        for (framework, items) in frontend_reference_items_for_signal(signal, &focus_tags) {
-            groups.entry(framework).or_default().extend(items);
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(language, items)| (language, items.into_iter().collect()))
-        .collect()
-}
-
 fn stack_track_selection(value: &Value) -> Option<String> {
     let status = value
         .get("status")
@@ -332,33 +320,11 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         ) {
             push_unique(&mut roles, "backend");
         }
-    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"]) {
+    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"])
+        && !contains_any(&haystack, &["kotlin", "ktor", "android", "kmp"])
+    {
         language = Some("java".to_string());
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_boot",
-            &["spring boot", "springboot", "spring"],
-        );
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_cloud",
-            &[
-                "spring cloud",
-                "cloud gateway",
-                "spring cloud gateway",
-                "config server",
-                "spring cloud config",
-                "eureka",
-            ],
-        );
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_data_jpa",
-            &["spring data", "jpa", "hibernate"],
-        );
+        push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
         push_backend_unless_persistence_track(&mut roles);
     } else if contains_any(
         &haystack,
@@ -388,11 +354,20 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_if_contains(
             &haystack,
             &mut frameworks,
+            "minimal_api",
+            &["minimal api", "minimal-api"],
+        );
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
             "entity_framework",
             &["entity framework", "ef core"],
         );
         push_if_contains(&haystack, &mut frameworks, "blazor", &["blazor"]);
         push_backend_unless_persistence_track(&mut roles);
+        if frameworks.iter().any(|item| item == "blazor") {
+            push_unique(&mut roles, "frontend");
+        }
     } else if contains_any(
         &haystack,
         &["golang", " go ", "gin", "gofiber", "fiber", "grpc"],
@@ -443,13 +418,42 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_unique(&mut roles, "frontend");
     } else if contains_any(&haystack, &["kotlin", "ktor", "android", "compose", "kmp"]) {
         language = Some("kotlin".to_string());
-        push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
+        if contains_any(&haystack, &["ktor client", "ktor-client"]) {
+            push_unique(&mut frameworks, "ktor_client");
+        } else {
+            push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
+        }
         push_if_contains(&haystack, &mut frameworks, "compose", &["compose"]);
         push_if_contains(&haystack, &mut frameworks, "kmp", &["kmp", "multiplatform"]);
+        push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
+        if frameworks.iter().any(|framework| {
+            matches!(
+                framework.as_str(),
+                "spring_boot"
+                    | "spring_framework"
+                    | "spring_cloud"
+                    | "spring_data_jpa"
+                    | "jpa_orm"
+                    | "spring_webflux"
+                    | "project_reactor"
+                    | "r2dbc"
+            )
+        }) {
+            push_backend_unless_persistence_track(&mut roles);
+        }
     } else if contains_any(&haystack, &["php", "laravel", "symfony"]) {
         language = Some("php".to_string());
         push_if_contains(&haystack, &mut frameworks, "laravel", &["laravel"]);
         push_if_contains(&haystack, &mut frameworks, "symfony", &["symfony"]);
+        push_if_contains(&haystack, &mut frameworks, "swoole", &["swoole"]);
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
+            "reactphp",
+            &["reactphp", "react php"],
+        );
+        push_if_contains(&haystack, &mut frameworks, "amphp", &["amphp", "amp php"]);
+        push_if_contains(&haystack, &mut frameworks, "fibers", &["fiber", "fibers"]);
         push_unique(&mut roles, "backend");
     } else if contains_any(&haystack, &["swift", "swiftui", "vapor"]) {
         language = Some("swift".to_string());
@@ -483,6 +487,7 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
             &["postgres", "postgresql"],
         );
         push_if_contains(&haystack, &mut dialects, "mysql", &["mysql"]);
+        push_if_contains(&haystack, &mut dialects, "mariadb", &["mariadb"]);
         push_if_contains(&haystack, &mut dialects, "sqlite", &["sqlite"]);
         push_if_contains(
             &haystack,
@@ -580,11 +585,69 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
         push_unique(&mut tags, "persistence");
         push_unique(&mut tags, "sql");
     }
+    if task_owns_sql_schema(task) {
+        push_unique(&mut tags, "sql_schema");
+    }
+    if task_owns_sql_query(task) {
+        push_unique(&mut tags, "sql_query");
+    }
+    if task_owns_sql_transaction(task) {
+        push_unique(&mut tags, "sql_transaction");
+    }
+    if task_owns_sql_performance(task) {
+        push_unique(&mut tags, "performance");
+    }
+    if task_owns_sql_analytics(task) {
+        push_unique(&mut tags, "analytics");
+    }
+    if task_owns_sql_tests(task) {
+        push_unique(&mut tags, "sql_test");
+        push_unique(&mut tags, "sql");
+    }
     if task_is_backend_task(task) {
         push_unique(&mut tags, "backend");
     }
     if matches!(task.task_kind, TaskKind::ConfigurationSupport) {
         push_unique(&mut tags, "configuration");
+    }
+    for action in &task.implementation_actions {
+        match action {
+            ImplementationAction::AddOrUpdateConfig => push_unique(&mut tags, "configuration"),
+            ImplementationAction::CreateOrUpdateFrontendNavigation => {
+                push_unique(&mut tags, "routing")
+            }
+            ImplementationAction::ImplementReactiveClientFlow => push_unique(&mut tags, "async"),
+            ImplementationAction::ImplementSharedClientState => push_unique(&mut tags, "state"),
+            ImplementationAction::OptimizeFrontendPerformance => {
+                push_unique(&mut tags, "performance")
+            }
+            ImplementationAction::ImplementServerRenderedComponent => {
+                push_unique(&mut tags, "server_components")
+            }
+            ImplementationAction::ImplementServerMutation => {
+                push_unique(&mut tags, "server_actions")
+            }
+            ImplementationAction::ImplementAuthenticationOrAuthorization => {
+                push_unique(&mut tags, "security")
+            }
+            ImplementationAction::ImplementAsyncProcessing => push_unique(&mut tags, "async"),
+            ImplementationAction::ImplementCachePolicy => push_unique(&mut tags, "cache"),
+            ImplementationAction::ImplementExternalServiceIntegration => {
+                push_unique(&mut tags, "integration")
+            }
+            ImplementationAction::ImplementResiliencePolicy => push_unique(&mut tags, "resilience"),
+            ImplementationAction::ConfigureServiceRoutingOrDiscovery => {
+                push_unique(&mut tags, "cloud")
+            }
+            ImplementationAction::ImplementObservability => push_unique(&mut tags, "observability"),
+            ImplementationAction::MigrateFrameworkImplementation => {
+                push_unique(&mut tags, "migration")
+            }
+            ImplementationAction::ImplementRuntimeDeliveryContract => {
+                push_unique(&mut tags, "runtime")
+            }
+            _ => {}
+        }
     }
     let text = normalized(&format!(
         "{} {} {:?}",
@@ -914,33 +977,42 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     if contains_any(
         &text,
         &[
-            "auth",
-            "security",
-            "login",
-            "jwt",
-            "oauth",
-            "permission",
-            "权限",
-            "认证",
-            "授权",
-        ],
-    ) {
-        push_unique(&mut tags, "security");
-    }
-    if contains_any(
-        &text,
-        &[
             "async",
             "concurrent",
             "queue",
             "stream",
-            "reactive",
             "websocket",
             "并发",
             "异步",
         ],
     ) {
         push_unique(&mut tags, "async");
+    }
+    if task_is_backend_task(task)
+        && contains_any(
+            &text,
+            &[
+                "spring cache",
+                "cachemanager",
+                "cache manager",
+                "cacheable",
+                "cacheevict",
+                "caffeine",
+                "redis cache",
+                "application cache",
+                "in-memory cache",
+                "cache aside",
+                "cache-aside",
+                "cache hit",
+                "cache miss",
+                "缓存",
+                "缓存键",
+                "缓存失效",
+                "缓存策略",
+            ],
+        )
+    {
+        push_unique(&mut tags, "cache");
     }
     if contains_any(
         &text,
@@ -1069,45 +1141,21 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     ) {
         push_unique(&mut tags, "generics");
     }
-    if contains_any(
-        &text,
-        &[
-            "analytics",
-            "report",
-            "window function",
-            "row number",
-            "rank",
-            "dense rank",
-            "lag",
-            "lead",
-            "running total",
-            "cohort",
-            "percentile",
-            "top n",
-            "报表",
-            "统计",
-            "排名",
-            "窗口函数",
-        ],
-    ) {
-        push_unique(&mut tags, "analytics");
-    }
-    if contains_any(
-        &text,
-        &[
-            "memory",
-            "allocation",
-            "retain cycle",
-            "arc",
-            "instruments",
-            "leak",
-            "内存",
-            "泄漏",
-        ],
-    ) {
-        push_unique(&mut tags, "memory");
-    }
     tags
+}
+
+fn extend_focus_tags_from_context(tags: &mut Vec<String>, context: &CodeReferenceTaskContext) {
+    for (selected, tag) in [
+        (context.security, "security"),
+        (context.async_processing, "async"),
+        (context.integration, "integration"),
+        (context.resilience, "resilience"),
+        (context.observability, "observability"),
+    ] {
+        if selected {
+            push_unique(tags, tag);
+        }
+    }
 }
 
 fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bool {
@@ -1124,57 +1172,82 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                 || has_focus("performance")
                 || has_focus("analytics")
         }
-        Some("typescript") | Some("javascript") => {
+        Some("typescript") => {
             has_focus("frontend")
-                || (roles.contains("backend") && (has_focus("api") || has_focus("backend")))
+                || has_focus("configuration")
+                || has_focus("runtime")
+                || has_focus("migration")
+                || (roles.contains("backend")
+                    && (has_focus("api") || has_focus("backend") || has_focus("testing")))
+        }
+        Some("javascript") => {
+            has_focus("frontend")
+                || (roles.contains("backend")
+                    && (has_focus("api") || has_focus("backend") || has_focus("testing")))
         }
         Some(_) => {
-            if roles.contains("frontend") {
-                has_focus("frontend")
-            } else if roles.contains("backend") {
-                has_focus("backend")
+            let frontend_applies = roles.contains("frontend") && has_focus("frontend");
+            let backend_applies = roles.contains("backend")
+                && (has_focus("backend")
                     || has_focus("api")
                     || has_focus("persistence")
                     || has_focus("security")
-                    || has_focus("async")
-                    || has_focus("performance")
                     || has_focus("configuration")
                     || has_focus("runtime")
                     || has_focus("integration")
                     || has_focus("migration")
                     || has_focus("architecture")
-            } else if roles.contains("persistence") {
-                has_focus("persistence")
-            } else {
-                has_focus("api")
+                    || has_focus("testing"));
+            let persistence_applies = roles.contains("persistence") && has_focus("persistence");
+            let unclassified_applies = roles.is_empty()
+                && (has_focus("api")
                     || has_focus("backend")
                     || has_focus("persistence")
                     || has_focus("security")
-                    || has_focus("async")
-                    || has_focus("performance")
                     || has_focus("configuration")
-            }
+                    || has_focus("runtime"));
+            frontend_applies || backend_applies || persistence_applies || unclassified_applies
         }
         None => roles.contains("frontend") && has_focus("frontend"),
     }
 }
 
-fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -> BTreeSet<String> {
+fn reference_items_for_signal(
+    signal: &CodeStackSignal,
+    focus_tags: &[String],
+    task: &TaskDefinition,
+    stack_frameworks: &BTreeSet<String>,
+) -> BTreeSet<String> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut items = BTreeSet::new();
     match signal.language.as_deref() {
         Some("java") => {
             items.insert("core".to_string());
-            if has_focus("api") || signal.frameworks.iter().any(|item| item == "spring_boot") {
+            if signal
+                .frameworks
+                .iter()
+                .any(|item| item == "spring_framework")
+            {
                 items.insert("spring".to_string());
             }
-            if has_focus("persistence") {
+            if has_focus("persistence") && signal.frameworks.iter().any(|item| item == "jpa_orm") {
                 items.insert("persistence".to_string());
             }
             if has_focus("security") {
                 items.insert("security".to_string());
             }
-            if has_focus("async") {
+            if has_focus("reactive")
+                || (has_focus("api")
+                    && signal
+                        .frameworks
+                        .iter()
+                        .any(|item| item == "spring_webflux"))
+                || ((has_focus("api") || has_focus("persistence"))
+                    && signal
+                        .frameworks
+                        .iter()
+                        .any(|item| matches!(item.as_str(), "project_reactor" | "r2dbc")))
+            {
                 items.insert("reactive".to_string());
             }
             if has_focus("testing") {
@@ -1182,7 +1255,16 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("typescript") => {
-            items.extend(["core", "types", "config", "patterns"].map(str::to_string));
+            items.insert("core".to_string());
+            if task_owns_typescript_type_modeling(task) {
+                items.insert("types".to_string());
+            }
+            if task_owns_typescript_configuration(task) {
+                items.insert("config".to_string());
+            }
+            if task_owns_typescript_pattern(task) {
+                items.insert("patterns".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
@@ -1193,7 +1275,7 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
         Some("javascript") => {
             items.insert("core".to_string());
             items.insert("modules".to_string());
-            if has_focus("async") || has_focus("api") || has_focus("api_client") {
+            if has_focus("async") {
                 items.insert("async".to_string());
             }
             if signal.roles.iter().any(|role| role == "frontend") {
@@ -1206,56 +1288,114 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("python") => {
-            items.extend(["core", "typing", "packaging"].map(str::to_string));
+            items.extend(["core", "typing"].map(str::to_string));
+            if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+                || task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature)
+                || task_has_action(task, ImplementationAction::RefactorModuleStructure)
+            {
+                items.insert("packaging".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") || signal.frameworks.iter().any(|item| item == "fastapi") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("async".to_string());
             }
         }
         Some("go") => {
-            items.extend(["core", "interfaces", "structure"].map(str::to_string));
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) {
+                items.insert("core".to_string());
+            }
+            if task_owns_test_implementation(task) {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") || has_focus("api") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
-            if has_focus("generics") {
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
                 items.insert("generics".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction) {
+                items.insert("interfaces".to_string());
+            }
+            if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+                || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+                || task_has_action(task, ImplementationAction::RefactorModuleStructure)
+            {
+                items.insert("structure".to_string());
             }
         }
         Some("csharp") => {
-            items.insert("core".to_string());
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) || (stack_frameworks.contains("blazor") && task_owns_frontend_implementation(task))
+            {
+                items.insert("core".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+            }
+            if task_owns_test_implementation(task)
+                && (!stack_frameworks.contains("aspnet_core") || task_is_frontend_task(task))
+            {
                 items.insert("testing".to_string());
             }
-            if has_focus("api") || signal.frameworks.iter().any(|item| item == "aspnet_core") {
-                items.insert("aspnet".to_string());
-            }
-            if has_focus("persistence") {
+            if task_owns_persistence(task)
+                && stack_frameworks.contains("entity_framework")
+                && !stack_frameworks.contains("aspnet_core")
+            {
                 items.insert("persistence".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "blazor") {
+            if stack_frameworks.contains("blazor") && task_owns_frontend_implementation(task) {
                 items.insert("blazor".to_string());
             }
-            if has_focus("performance") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("performance".to_string());
             }
         }
         Some("cpp") => {
-            items.extend(["core", "modern", "build"].map(str::to_string));
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) {
+                items.insert("core".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+                items.insert("build".to_string());
+            }
+            if task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            {
+                items.insert("build".to_string());
+            }
+            if task_owns_test_implementation(task) {
                 items.insert("testing".to_string());
             }
-            if has_focus("generics") {
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
                 items.insert("templates".to_string());
             }
-            if has_focus("performance") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("performance".to_string());
             }
-            if has_focus("async") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
         }
@@ -1267,18 +1407,24 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             if has_focus("async") {
                 items.insert("coroutines".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "ktor") || has_focus("api") {
+            if signal.frameworks.iter().any(|item| item == "ktor") {
                 items.insert("ktor".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "compose") || has_focus("frontend") {
+            if signal.frameworks.iter().any(|item| item == "compose") {
                 items.insert("compose".to_string());
             }
             if signal.frameworks.iter().any(|item| item == "kmp") {
                 items.insert("multiplatform".to_string());
             }
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
+                items.insert("dsl".to_string());
+            }
         }
         Some("php") => {
             items.insert("core".to_string());
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
@@ -1293,42 +1439,142 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("rust") => {
-            items.extend(["core", "ownership", "traits", "errors"].map(str::to_string));
+            items.insert("core".to_string());
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction)
+                || task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction)
+            {
+                items.insert("traits".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction)
+                || task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction)
+                || task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+                || task_has_action(task, ImplementationAction::OptimizeRuntimePerformance)
+                || task_has_action(task, ImplementationAction::RefactorModuleStructure)
+            {
+                items.insert("ownership".to_string());
+            }
+            if task_has_action(task, ImplementationAction::CreateOrUpdateInterface)
+                || task_has_action(task, ImplementationAction::CreateOrUpdateBusinessRule)
+                || task_has_action(
+                    task,
+                    ImplementationAction::ImplementExternalServiceIntegration,
+                )
+                || task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+            {
+                items.insert("errors".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") || signal.frameworks.iter().any(|item| item == "tokio") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("async".to_string());
             }
         }
         Some("swift") => {
-            items.extend(["core", "protocols"].map(str::to_string));
+            items.insert("core".to_string());
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction)
+                || task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction)
+            {
+                items.insert("protocols".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
-            if has_focus("performance") || has_focus("memory") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("memory".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "swiftui") || has_focus("frontend") {
+            if signal.frameworks.iter().any(|item| item == "swiftui") {
                 items.insert("swiftui".to_string());
             }
         }
         Some("sql") => {
-            if has_focus("persistence") {
+            let owns_schema = task_owns_sql_schema(task);
+            let owns_query = task_owns_sql_query(task);
+            let owns_transaction = task_owns_sql_transaction(task);
+            let owns_tests = task_owns_sql_tests(task);
+            let owns_performance = task_owns_sql_performance(task);
+            let owns_analytics = task_owns_sql_analytics(task);
+            let task_scoped_sql = owns_schema || owns_query || owns_transaction || owns_tests;
+            if owns_schema || (task_owns_persistence(task) && !task_scoped_sql) {
                 items.insert("schema".to_string());
+            }
+            if owns_schema
+                || owns_query
+                || owns_transaction
+                || owns_tests
+                || owns_performance
+                || owns_analytics
+            {
                 items.insert("dialects".to_string());
             }
-            if has_focus("performance") {
+            if owns_query {
+                items.insert("queries".to_string());
+            }
+            if owns_performance {
                 items.insert("optimization".to_string());
             }
-            if has_focus("analytics") {
+            if owns_analytics {
                 items.insert("windows".to_string());
             }
-            if has_focus("api") || has_focus("persistence") || has_focus("analytics") {
+            if owns_query || owns_analytics || owns_tests {
                 items.insert("queries".to_string());
+            }
+            if owns_schema || owns_query || owns_transaction || owns_tests {
+                if signal.dialects.iter().any(|dialect| dialect == "mysql") {
+                    if owns_schema || owns_tests {
+                        items.insert("mysql.schema".to_string());
+                    }
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
+                        items.insert("mysql.queries".to_string());
+                    }
+                    if owns_transaction || owns_tests {
+                        items.insert("mysql.transactions".to_string());
+                    }
+                }
+                if signal
+                    .dialects
+                    .iter()
+                    .any(|dialect| dialect == "postgresql")
+                {
+                    if owns_schema || owns_tests {
+                        items.insert("postgresql.schema".to_string());
+                    }
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
+                        items.insert("postgresql.queries".to_string());
+                    }
+                    if owns_transaction || owns_tests {
+                        items.insert("postgresql.transactions".to_string());
+                    }
+                }
+                if signal
+                    .dialects
+                    .iter()
+                    .any(|dialect| dialect == "sql_server")
+                {
+                    if owns_schema || owns_tests {
+                        items.insert("sqlserver.schema".to_string());
+                    }
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
+                        items.insert("sqlserver.queries".to_string());
+                    }
+                    if owns_transaction || owns_tests {
+                        items.insert("sqlserver.transactions".to_string());
+                    }
+                }
+                if signal.dialects.iter().any(|dialect| dialect == "oracle") {
+                    if owns_schema || owns_tests {
+                        items.insert("oracle.schema".to_string());
+                    }
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
+                        items.insert("oracle.queries".to_string());
+                    }
+                    if owns_transaction || owns_tests {
+                        items.insert("oracle.transactions".to_string());
+                    }
+                }
             }
         }
         _ => {}
@@ -1338,119 +1584,219 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
 
 fn backend_reference_items_for_signal(
     signal: &CodeStackSignal,
-    focus_tags: &[String],
+    stack_frameworks: &BTreeSet<String>,
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
     if signal.frameworks.iter().any(|item| item == "spring_boot") {
-        let items = groups.entry("springboot".to_string()).or_default();
-        if has_focus("testing") {
-            items.insert("testing".to_string());
-        }
-        if has_focus("api") {
-            items.insert("web".to_string());
-        }
-        if has_focus("persistence") {
-            items.insert("data".to_string());
-        }
-        if has_focus("security") {
-            items.insert("security".to_string());
-        }
-        if has_focus("configuration") || has_focus("runtime") || has_focus("performance") {
-            items.insert("runtime".to_string());
-        }
-        if has_focus("integration") || signal.frameworks.iter().any(|item| item == "spring_cloud") {
-            items.insert("cloud".to_string());
+        let mut items = BTreeSet::new();
+        extend_spring_boot_task_references(&mut items, stack_frameworks, task, context);
+        if !items.is_empty() {
+            groups.insert("springboot".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "django") {
-        let items = groups.entry("django".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) && stack_frameworks.contains("django_rest_framework") {
             items.insert("views".to_string());
             items.insert("serializers".to_string());
         }
-        if has_focus("persistence") || has_focus("performance") {
+        if task_owns_persistence(task) {
             items.insert("models".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("django".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "fastapi") {
-        let items = groups.entry("fastapi".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) {
             items.insert("routing".to_string());
             items.insert("schemas".to_string());
         }
-        if has_focus("persistence")
-            || (has_focus("migration") && signal.frameworks.iter().any(|item| item == "sqlalchemy"))
-        {
+        if task_owns_persistence(task) && stack_frameworks.contains("sqlalchemy") {
             items.insert("data".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("fastapi".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "aspnet_core") {
-        let items = groups.entry("aspnetcore".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) && !task_is_frontend_task(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) && stack_frameworks.contains("minimal_api") {
             items.insert("minimal".to_string());
         }
-        if has_focus("architecture") {
+        if context.application_architecture && task_is_backend_task(task) {
             items.insert("architecture".to_string());
         }
-        if has_focus("persistence") {
+        if task_owns_persistence(task) && stack_frameworks.contains("entity_framework") {
             items.insert("data".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("configuration")
-            || has_focus("runtime")
-            || has_focus("performance")
-            || has_focus("integration")
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+            || task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+            || task_has_action(task, ImplementationAction::ImplementCachePolicy)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementExternalServiceIntegration,
+            )
+            || task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+            || task_has_action(
+                task,
+                ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+            )
+            || task_has_action(task, ImplementationAction::ImplementObservability)
+            || context.integration
+            || context.resilience
+            || context.observability
         {
             items.insert("runtime".to_string());
         }
+        if !items.is_empty() {
+            groups.insert("aspnetcore".to_string(), items);
+        }
     }
     if signal.frameworks.iter().any(|item| item == "nestjs") {
-        let items = groups.entry("nestjs".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) {
             items.insert("controllers".to_string());
             items.insert("dtos".to_string());
             items.insert("services".to_string());
         }
-        if has_focus("backend") || has_focus("persistence") || has_focus("architecture") {
+        if task_owns_nest_service_boundary(task) {
             items.insert("services".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("nestjs".to_string(), items);
         }
     }
     groups
 }
 
+fn extend_spring_boot_task_references(
+    items: &mut BTreeSet<String>,
+    stack_frameworks: &BTreeSet<String>,
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) {
+    if task_owns_test_implementation(task) {
+        items.insert("testing".to_string());
+    }
+    if task_owns_api_contract(task) {
+        items.insert("web".to_string());
+    }
+    if task_owns_persistence(task) && stack_frameworks.contains("spring_data_jpa") {
+        items.insert("data".to_string());
+    }
+    if context.security
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementAuthenticationOrAuthorization,
+        )
+    {
+        items.insert("security".to_string());
+    }
+    if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+        || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+    {
+        items.insert("runtime".to_string());
+    }
+    if context.async_processing
+        || task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+    {
+        items.insert("async".to_string());
+    }
+    if task_has_action(task, ImplementationAction::ImplementCachePolicy) {
+        items.insert("cache".to_string());
+    }
+    if context.integration
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementExternalServiceIntegration,
+        )
+    {
+        items.insert("integration".to_string());
+    }
+    if context.resilience || task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+    {
+        items.insert("resilience".to_string());
+    }
+    if task_has_action(
+        task,
+        ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+    ) && stack_frameworks.contains("spring_cloud")
+    {
+        items.insert("cloud".to_string());
+    }
+    if context.observability || task_has_action(task, ImplementationAction::ImplementObservability)
+    {
+        items.insert("observability".to_string());
+    }
+}
+
+fn task_has_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| *action == expected)
+}
+
 fn frontend_reference_items_for_signal(
     signal: &CodeStackSignal,
     focus_tags: &[String],
+    task: &TaskDefinition,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
@@ -1458,126 +1804,236 @@ fn frontend_reference_items_for_signal(
         return groups;
     }
     if signal.frameworks.iter().any(|item| item == "nextjs") {
-        let items = groups.entry("nextjs".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("app-router".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+        {
+            items.insert("app-router".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("data_fetching") || has_focus("performance") || has_focus("persistence") {
+        if task_uses_api_client_binding(task)
+            || task_owns_persistence(task)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+        {
             items.insert("data".to_string());
         }
-        if has_focus("server_actions") {
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::ImplementServerMutation)
+        {
             items.insert("actions".to_string());
         }
-        if has_focus("server_components") {
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+        {
             items.insert("server-components".to_string());
         }
-        if has_focus("runtime") || has_focus("configuration") || has_focus("performance") {
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+            || task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+        {
             items.insert("runtime".to_string());
         }
+        groups.insert("nextjs".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "react") {
-        let items = groups.entry("react".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("hooks".to_string());
-        items.insert("state".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        let nextjs_owns_framework_boundary = signal.frameworks.iter().any(|item| item == "nextjs");
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if task_has_action(task, ImplementationAction::ImplementReactiveClientFlow) {
+            items.insert("hooks".to_string());
+        }
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
+            items.insert("state".to_string());
+        }
+        if task_owns_test_implementation(task) && !nextjs_owns_framework_boundary {
             items.insert("testing".to_string());
         }
-        if has_focus("performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("performance".to_string());
         }
-        if has_focus("server_components") {
+        if signal
+            .frameworks
+            .iter()
+            .any(|item| item == "react_server_components")
+            && task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("server-components".to_string());
         }
-        if has_focus("react19") {
+        if signal.frameworks.iter().any(|item| item == "react19")
+            && task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+            )
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("react19".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
         }
+        groups.insert("react".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "vue") {
-        let items = groups.entry("vue".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("components".to_string());
-        items.insert("state".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        let owns_vue_component = task_owns_frontend_surface(task)
+            || task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+            || task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+            || task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+            );
+        if owns_vue_component {
+            items.insert("core".to_string());
+        }
+        if task_owns_frontend_surface(task) {
+            items.insert("components".to_string());
+        }
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+            || task_has_action(task, ImplementationAction::ImplementClientStorage)
+        {
+            items.insert("state".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if signal.language.as_deref() == Some("typescript") {
+        if signal.language.as_deref() == Some("typescript") && owns_vue_component {
             items.insert("typescript".to_string());
         }
-        if has_focus("nuxt") || signal.frameworks.iter().any(|item| item == "nuxt") {
+        if signal.frameworks.iter().any(|item| item == "nuxt")
+            && (task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+                || task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+                || task_has_action(task, ImplementationAction::ImplementServerMutation)
+                || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation))
+        {
             items.insert("nuxt".to_string());
         }
-        if has_focus("build_tooling")
-            || has_focus("runtime")
-            || has_focus("configuration")
-            || has_focus("performance")
+        if task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
         {
             items.insert("build".to_string());
         }
-        if has_focus("mobile") {
+        if signal
+            .frameworks
+            .iter()
+            .any(|item| matches!(item.as_str(), "quasar" | "capacitor" | "pwa"))
+            && task_has_action(task, ImplementationAction::ImplementMobilePlatformBehavior)
+        {
             items.insert("mobile".to_string());
         }
+        groups.insert("vue".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "angular") {
-        let items = groups.entry("angular".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("components".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+            items.insert("components".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("routing".to_string());
         }
-        if has_focus("rxjs") || has_focus("async") || has_focus("data_fetching") {
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+        {
             items.insert("rxjs".to_string());
         }
-        if has_focus("ngrx") {
+        if signal.frameworks.iter().any(|item| item == "ngrx")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("ngrx".to_string());
         }
+        groups.insert("angular".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "reactnative") {
-        let items = groups.entry("reactnative".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("structure".to_string());
-        items.insert("platform".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            )
+        {
+            items.insert("structure".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "expo") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("navigation".to_string());
         }
-        if has_focus("list_performance") || has_focus("performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance) {
             items.insert("lists".to_string());
         }
-        if has_focus("storage") {
+        if task_has_action(task, ImplementationAction::ImplementMobilePlatformBehavior) {
+            items.insert("platform".to_string());
+        }
+        if task_has_action(task, ImplementationAction::ImplementClientStorage) {
             items.insert("storage".to_string());
         }
+        groups.insert("reactnative".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "flutter") {
-        let items = groups.entry("flutter".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("structure".to_string());
-        items.insert("widgets".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if task_owns_frontend_surface(task) {
+            items.insert("widgets".to_string());
+        }
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            )
+        {
+            items.insert("structure".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "gorouter") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("navigation".to_string());
         }
-        if has_focus("riverpod") || signal.frameworks.iter().any(|item| item == "riverpod") {
+        if signal.frameworks.iter().any(|item| item == "riverpod")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("riverpod".to_string());
         }
-        if has_focus("bloc") || signal.frameworks.iter().any(|item| item == "bloc") {
+        if signal.frameworks.iter().any(|item| item == "bloc")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("bloc".to_string());
         }
-        if has_focus("performance") || has_focus("list_performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance) {
             items.insert("performance".to_string());
         }
+        groups.insert("flutter".to_string(), items);
     }
     groups
 }
@@ -1614,6 +2070,27 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
             ),
         };
     }
+    if group_key == "sql" {
+        if let Some((provider, subject)) = group.split_once('.') {
+            if matches!(provider, "mysql" | "postgresql" | "sqlserver" | "oracle")
+                && matches!(subject, "schema" | "queries" | "transactions")
+            {
+                let label = match provider {
+                    "mysql" => "MySQL",
+                    "postgresql" => "PostgreSQL",
+                    "sqlserver" => "SQL Server",
+                    _ => "Oracle",
+                };
+                return ReferenceLoadPlanItem {
+                    ref_id: format!("tech.code.sql.{provider}.{subject}"),
+                    path: format!("tech/code/sql/{provider}/{subject}.md"),
+                    reason: format!(
+                        "Selected {label} {subject} dialect reference for this persistence task."
+                    ),
+                };
+            }
+        }
+    }
     ReferenceLoadPlanItem {
         ref_id: format!("tech.code.{group_key}.{group}"),
         path: format!("tech/code/{group_key}/{group}.md"),
@@ -1633,18 +2110,71 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
+                    | ImplementationAction::ImplementMobilePlatformBehavior
+                    | ImplementationAction::ImplementClientStorage
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
         })
 }
 
+fn task_owns_frontend_implementation(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::CreateOrUpdateFrontendNavigation
+                | ImplementationAction::ImplementReactiveClientFlow
+                | ImplementationAction::ImplementSharedClientState
+                | ImplementationAction::OptimizeFrontendPerformance
+                | ImplementationAction::ImplementServerRenderedComponent
+                | ImplementationAction::ImplementServerMutation
+                | ImplementationAction::ImplementFrontendFrameworkVersionFeature
+                | ImplementationAction::WireReferenceInApiOrUi
+                | ImplementationAction::CreateEntityAdminPage
+                | ImplementationAction::ImplementFrontendExperienceContract
+        )
+    })
+}
+
+fn task_owns_frontend_surface(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::CreateEntityAdminPage
+                | ImplementationAction::ImplementFrontendExperienceContract
+        )
+    })
+}
+
 fn task_owns_test_implementation(task: &TaskDefinition) -> bool {
-    matches!(task.task_kind, TaskKind::VerificationIncrement)
-        || task
-            .implementation_actions
-            .iter()
-            .any(|action| matches!(action, ImplementationAction::AddOrUpdateTests))
+    if matches!(task.task_kind, TaskKind::VerificationIncrement) {
+        return true;
+    }
+    if task_is_frontend_task(task) {
+        return false;
+    }
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::AddOrUpdateTests
+                | ImplementationAction::AddOrUpdatePersistenceTests
+        )
+    })
 }
 
 fn task_is_backend_task(task: &TaskDefinition) -> bool {
@@ -1671,7 +2201,20 @@ fn task_is_backend_task(task: &TaskDefinition) -> bool {
                 | ImplementationAction::WireReferenceInApiOrUi
                 | ImplementationAction::CreateEntityCrud
                 | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::ImplementPersistenceTransaction
+                | ImplementationAction::OptimizePersistenceQuery
+                | ImplementationAction::ImplementAnalyticalQuery
+                | ImplementationAction::AddOrUpdatePersistenceTests
                 | ImplementationAction::ImplementEntityLifecycle
+                | ImplementationAction::ImplementAuthenticationOrAuthorization
+                | ImplementationAction::ImplementAsyncProcessing
+                | ImplementationAction::ImplementCachePolicy
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+                | ImplementationAction::ConfigureServiceRoutingOrDiscovery
+                | ImplementationAction::ImplementObservability
+                | ImplementationAction::MigrateFrameworkImplementation
                 | ImplementationAction::RefactorSupportingCode
         )
     })
@@ -1694,11 +2237,63 @@ fn task_owns_api_contract(task: &TaskDefinition) -> bool {
 
 fn task_uses_api_client_binding(task: &TaskDefinition) -> bool {
     task_is_frontend_task(task)
-        && (!task.write_boundary.artifact_refs.interfaces.is_empty()
+        && (!task
+            .write_boundary
+            .artifact_refs
+            .all_interfaces()
+            .is_empty()
             || task
                 .implementation_actions
                 .iter()
                 .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi)))
+}
+
+fn task_owns_typescript_type_modeling(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateEntity
+                | ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::ImplementGenericTypeAbstraction
+                | ImplementationAction::AddReferenceField
+                | ImplementationAction::ValidateReferenceFormat
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn task_owns_typescript_configuration(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateConfig
+                    | ImplementationAction::ImplementLanguageVersionFeature
+                    | ImplementationAction::RefactorModuleStructure
+                    | ImplementationAction::MigrateFrameworkImplementation
+            )
+        })
+}
+
+fn task_owns_typescript_pattern(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::ImplementSharedClientState
+                | ImplementationAction::ImplementGenericTypeAbstraction
+                | ImplementationAction::ImplementDependencyAbstraction
+                | ImplementationAction::WireReferenceInApiOrUi
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+        )
+    })
 }
 
 fn task_owns_persistence(task: &TaskDefinition) -> bool {
@@ -1711,8 +2306,89 @@ fn task_owns_persistence(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateEntityMigration
                     | ImplementationAction::CreateEntityRepository
                     | ImplementationAction::CreateEntityCrud
+                    | ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | ImplementationAction::ImplementPersistenceTransaction
+                    | ImplementationAction::OptimizePersistenceQuery
+                    | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
+}
+
+fn task_owns_nest_service_boundary(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::ImplementPersistenceTransaction
+                | ImplementationAction::ImplementEntityLifecycle
+                | ImplementationAction::ImplementAsyncProcessing
+                | ImplementationAction::ImplementCachePolicy
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+                | ImplementationAction::ImplementObservability
+                | ImplementationAction::RefactorSupportingCode
+        )
+    })
+}
+
+fn task_owns_sql_schema(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::CreateEntityCrud
+            )
+        })
+}
+
+fn task_owns_sql_query(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::OptimizePersistenceQuery
+                | ImplementationAction::ImplementAnalyticalQuery
+        )
+    })
+}
+
+fn task_owns_sql_transaction(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdatePersistence
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::ImplementPersistenceTransaction
+        )
+    })
+}
+
+fn task_owns_sql_performance(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::OptimizePersistenceQuery))
+}
+
+fn task_owns_sql_analytics(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementAnalyticalQuery))
+}
+
+fn task_owns_sql_tests(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::AddOrUpdatePersistenceTests))
 }
 
 fn dedupe_signals(signals: Vec<CodeStackSignal>) -> Vec<CodeStackSignal> {
@@ -1823,6 +2499,7 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
         "nextjs",
         &["next", "nextjs", "next js", "app router"],
     );
+    push_if_contains(haystack, frameworks, "app_router", &["app router"]);
     if !react_native {
         push_if_contains(
             haystack,
@@ -1831,14 +2508,83 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
             &["react", "next", "nextjs", "next js"],
         );
     }
+    push_if_contains(haystack, frameworks, "react19", &["react 19", "react19"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "react_server_components",
+        &[
+            "react server component",
+            "server components",
+            " rsc ",
+            "app router",
+        ],
+    );
     push_if_contains(haystack, frameworks, "vue", &["vue", "nuxt"]);
     push_if_contains(haystack, frameworks, "nuxt", &["nuxt"]);
+    push_if_contains(haystack, frameworks, "quasar", &["quasar"]);
+    push_if_contains(haystack, frameworks, "capacitor", &["capacitor"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "pwa",
+        &["progressive web app", " pwa ", "pwa+", "+pwa"],
+    );
     push_if_contains(haystack, frameworks, "angular", &["angular", "ngrx"]);
+    push_if_contains(haystack, frameworks, "ngrx", &["ngrx"]);
     push_if_contains(haystack, frameworks, "svelte", &["svelte"]);
 }
 
 fn selection_mentions_flutter_framework(haystack: &str) -> bool {
     contains_any(haystack, &["flutter", "riverpod", "go router", "gorouter"])
+}
+
+fn push_spring_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<String>) {
+    push_if_contains(haystack, frameworks, "spring_framework", &["spring"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_boot",
+        &["spring boot", "springboot"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_cloud",
+        &[
+            "spring cloud",
+            "cloud gateway",
+            "spring cloud gateway",
+            "config server",
+            "spring cloud config",
+            "eureka",
+        ],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_data_jpa",
+        &["spring data jpa", "spring-data-jpa"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "jpa_orm",
+        &["jpa", "hibernate", "eclipselink"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_webflux",
+        &["spring webflux", "webflux"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "project_reactor",
+        &["project reactor", "reactor"],
+    );
+    push_if_contains(haystack, frameworks, "r2dbc", &["r2dbc"]);
 }
 
 fn push_unique(output: &mut Vec<String>, value: &str) {
@@ -1907,6 +2653,8 @@ pub fn forbidden_jvm_package_prefixes() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
     use crate::{
         ConfidenceLevel, ProjectKind, TaskArtifactRefs, TaskWriteBoundary,
@@ -1997,6 +2745,7 @@ mod tests {
         assert!(selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"schema".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"dialects".to_string()));
@@ -2020,11 +2769,6 @@ mod tests {
         assert!(policy
             .forbidden_package_prefixes
             .contains(&"com.example".to_string()));
-        let seed = build_code_quality_seed(&baseline);
-        assert_eq!(
-            seed["packageNamingPolicy"]["fallbackPackageTemplate"],
-            json!("app.<project_slug>")
-        );
     }
 
     #[test]
@@ -2042,18 +2786,13 @@ mod tests {
                 .map(Vec::len),
             Some(0)
         );
-        assert!(seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|item| item.get("path").and_then(Value::as_str)
-                == Some("tech/frontend/react/core.md")));
+        assert!(seed.get("techReferenceProfile").is_none());
         let mut task = task(
             TaskKind::UiFlowIncrement,
             vec![
                 ImplementationAction::CreateOrUpdateUiFlow,
                 ImplementationAction::WireReferenceInApiOrUi,
+                ImplementationAction::ImplementReactiveClientFlow,
             ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
@@ -2095,13 +2834,7 @@ mod tests {
             }
         }));
         let seed = build_code_quality_seed(&baseline);
-        assert!(!seed["techReferenceProfile"]["referenceLoadPlan"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["path"]
-                .as_str()
-                .is_some_and(|path| path.ends_with("/testing.md"))));
+        assert!(seed.get("techReferenceProfile").is_none());
 
         let mut implementation_task = task(
             TaskKind::UiFlowIncrement,
@@ -2134,6 +2867,131 @@ mod tests {
     }
 
     #[test]
+    fn typescript_references_are_scoped_to_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+
+        let mut ui_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        ui_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let ui = code_reference_selection_for_task(&baseline, &ui_task).unwrap();
+        let typescript = &ui.reference_groups["typescript"];
+        assert!(typescript.contains(&"core".to_string()));
+        assert!(!typescript.contains(&"types".to_string()));
+        assert!(!typescript.contains(&"config".to_string()));
+        assert!(!typescript.contains(&"patterns".to_string()));
+        assert!(!typescript.contains(&"guards".to_string()));
+
+        let mut api_client_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::WireReferenceInApiOrUi],
+        );
+        api_client_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let api_client = code_reference_selection_for_task(&baseline, &api_client_task).unwrap();
+        let api_typescript = &api_client.reference_groups["typescript"];
+        assert!(api_typescript.contains(&"core".to_string()));
+        assert!(api_typescript.contains(&"types".to_string()));
+        assert!(api_typescript.contains(&"guards".to_string()));
+        assert!(api_typescript.contains(&"patterns".to_string()));
+        assert!(!api_typescript.contains(&"config".to_string()));
+
+        let config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let config = code_reference_selection_for_task(&baseline, &config_task).unwrap();
+        let config_typescript = &config.reference_groups["typescript"];
+        assert!(config_typescript.contains(&"core".to_string()));
+        assert!(config_typescript.contains(&"config".to_string()));
+        assert!(!config_typescript.contains(&"types".to_string()));
+        assert!(!config_typescript.contains(&"patterns".to_string()));
+        assert!(!config_typescript.contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn typescript_specialized_references_ignore_prose_without_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+        let mut prose_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_task.objective =
+            "Use advanced generics, utility types, a builder, and a strict tsconfig.".to_string();
+
+        let selection = code_reference_selection_for_task(&baseline, &prose_task).unwrap();
+        let typescript = &selection.reference_groups["typescript"];
+        assert!(typescript.contains(&"core".to_string()));
+        assert!(!typescript.contains(&"types".to_string()));
+        assert!(!typescript.contains(&"config".to_string()));
+        assert!(!typescript.contains(&"patterns".to_string()));
+    }
+
+    #[test]
+    fn typescript_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/typescript/core.md",
+                40,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/types.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/guards.md",
+                40,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/config.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/patterns.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/testing.md",
+                40,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn maps_framework_only_react_baseline_to_frontend_refs() {
         let baseline = baseline(json!({
             "tracks": {
@@ -2151,7 +3009,7 @@ mod tests {
         assert!(selection.unmapped_signals.is_empty());
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
-            item.ref_id == "fe.react.state" && item.path == "tech/frontend/react/state.md"
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
         }));
     }
 
@@ -2159,15 +3017,22 @@ mod tests {
     fn react_specialized_refs_are_task_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "React + TypeScript"}
+                "web": {"selection": "React 19 + React Server Components + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::MigrateFrameworkImplementation,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::OptimizeFrontendPerformance,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Migrate a class component to hooks and add React 19 useActionState optimistic form state with server components while optimizing table performance.".to_string();
+        task.objective =
+            "Implement the accepted React modernization and rendering boundary.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let react_refs = &selection.reference_groups["react"];
         assert!(react_refs.contains(&"migration".to_string()));
@@ -2188,20 +3053,74 @@ mod tests {
     }
 
     #[test]
+    fn react_specialized_references_ignore_prose_and_require_stack_capabilities() {
+        let specialized_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "React 19 + React Server Components + TypeScript"}}
+        }));
+        let react18_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "React 18 + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Migrate classes to hooks, add React 19 useActionState, Server Components, memo performance, and tests.".to_string();
+        let mut unsupported = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+                ImplementationAction::ImplementServerRenderedComponent,
+            ],
+        );
+        unsupported.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let prose = code_reference_selection_for_task(&specialized_baseline, &prose_only).unwrap();
+        let unsupported_selection =
+            code_reference_selection_for_task(&react18_baseline, &unsupported).unwrap();
+        let tests = code_reference_selection_for_task(&react18_baseline, &testing).unwrap();
+
+        for specialized in [
+            "hooks",
+            "state",
+            "performance",
+            "server-components",
+            "react19",
+            "migration",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["react"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported_selection.reference_groups["react"]
+            .contains(&"server-components".to_string()));
+        assert!(!unsupported_selection.reference_groups["react"].contains(&"react19".to_string()));
+        assert!(tests.reference_groups["react"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"hooks".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"state".to_string()));
+    }
+
+    #[test]
     fn maps_nextjs_typescript_to_nextjs_react_and_typescript_refs() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Next.js + TypeScript"}
+                "web": {"selection": "Next.js App Router + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective =
-            "Create an App Router dashboard page with loading.tsx and error.tsx boundaries."
-                .to_string();
+        task.objective = "Implement the accepted dashboard route surface.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("nextjs"));
         assert!(selection.reference_groups["nextjs"].contains(&"core".to_string()));
@@ -2226,21 +3145,30 @@ mod tests {
     fn nextjs_specialized_refs_are_task_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Next.js + TypeScript"}
+                "web": {"selection": "Next.js App Router + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementServerMutation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::ImplementReactiveClientFlow,
+                ImplementationAction::OptimizeFrontendPerformance,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Add Server Actions with revalidatePath, no-store data fetching, Suspense server components, runtime config, and next build validation.".to_string();
+        task.objective = "Implement the accepted server-backed Next.js workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let next_refs = &selection.reference_groups["nextjs"];
         assert!(next_refs.contains(&"actions".to_string()));
         assert!(next_refs.contains(&"data".to_string()));
         assert!(next_refs.contains(&"server-components".to_string()));
         assert!(next_refs.contains(&"runtime".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"server-components".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"performance".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.next.actions" && item.path == "tech/frontend/nextjs/actions.md"
@@ -2254,6 +3182,58 @@ mod tests {
     }
 
     #[test]
+    fn nextjs_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let app_router_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Next.js App Router + TypeScript"}}
+        }));
+        let generic_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Next.js + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add App Router layouts, Server Components, Server Actions, cached fetch, runtime config, and tests.".to_string();
+        let mut unsupported_server = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::ImplementServerMutation,
+            ],
+        );
+        unsupported_server.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&app_router_baseline, &prose_only).unwrap();
+        let unsupported =
+            code_reference_selection_for_task(&generic_baseline, &unsupported_server).unwrap();
+        let tests = code_reference_selection_for_task(&generic_baseline, &testing).unwrap();
+
+        for specialized in [
+            "app-router",
+            "actions",
+            "server-components",
+            "data",
+            "runtime",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["nextjs"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"app-router".to_string()));
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"actions".to_string()));
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"server-components".to_string()));
+        assert!(tests.reference_groups["nextjs"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["nextjs"].contains(&"core".to_string()));
+    }
+
+    #[test]
     fn maps_vue_typescript_to_vue_and_typescript_refs() {
         let baseline = baseline(json!({
             "tracks": {
@@ -2262,10 +3242,13 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Build a Vue 3 Composition API purchase request list with typed props, Pinia store state, and component tests.".to_string();
+        task.objective = "Implement the accepted Vue purchase request workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("vue"));
         assert!(selection.reference_groups["vue"].contains(&"core".to_string()));
@@ -2304,15 +3287,21 @@ mod tests {
     fn nuxt_specialized_refs_are_task_scoped_to_vue() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Nuxt 3 + TypeScript"}
+                "web": {"selection": "Nuxt 3 + Quasar + Capacitor + PWA + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::AddOrUpdateConfig,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Implement a Nuxt page with useFetch, runtimeConfig, ClientOnly hydration guard, Vite build optimization, and mobile PWA offline state.".to_string();
+        task.objective = "Implement the accepted Nuxt hybrid application boundary.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let vue_refs = &selection.reference_groups["vue"];
         assert!(vue_refs.contains(&"nuxt".to_string()));
@@ -2334,18 +3323,86 @@ mod tests {
     }
 
     #[test]
+    fn vue_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let specialized_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Nuxt 3 + Quasar + Capacitor + PWA + TypeScript"}}
+        }));
+        let vue_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Vue 3 + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective =
+            "Add Pinia, Nuxt SSR routes, Vite optimization, Capacitor PWA behavior, and tests."
+                .to_string();
+        let mut unsupported_mobile = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+            ],
+        );
+        unsupported_mobile.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let server_mutation = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementServerMutation],
+        );
+        let performance = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::OptimizeFrontendPerformance],
+        );
+
+        let prose = code_reference_selection_for_task(&specialized_baseline, &prose_only).unwrap();
+        let unsupported =
+            code_reference_selection_for_task(&vue_baseline, &unsupported_mobile).unwrap();
+        let tests = code_reference_selection_for_task(&vue_baseline, &testing).unwrap();
+        let server =
+            code_reference_selection_for_task(&specialized_baseline, &server_mutation).unwrap();
+        let performance_selection =
+            code_reference_selection_for_task(&vue_baseline, &performance).unwrap();
+
+        for specialized in ["state", "nuxt", "build", "mobile", "testing"] {
+            assert!(!prose.reference_groups["vue"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported.reference_groups["vue"].contains(&"mobile".to_string()));
+        assert!(tests.reference_groups["vue"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"components".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(server.reference_groups["vue"].contains(&"nuxt".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"components".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(performance_selection.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!performance_selection.reference_groups["vue"].contains(&"build".to_string()));
+    }
+
+    #[test]
     fn maps_angular_typescript_to_task_scoped_angular_refs() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Angular 17 + TypeScript"}
+                "web": {"selection": "Angular 17 + NgRx + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementReactiveClientFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Build standalone purchase approval components with signals, route guard and resolver, RxJS switchMap search, NgRx entity adapter state, and component tests.".to_string();
+        task.objective = "Implement the accepted purchase approval frontend workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("angular"));
         assert!(selection.reference_groups.contains_key("typescript"));
@@ -2388,6 +3445,52 @@ mod tests {
     }
 
     #[test]
+    fn angular_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let angular_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Angular 17 + TypeScript"}}
+        }));
+        let ngrx_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Angular 17 + NgRx + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective =
+            "Add Angular routes, RxJS streams, resolvers, selectors, effects, and an NgRx store."
+                .to_string();
+        let mut state_without_ngrx = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
+        );
+        state_without_ngrx.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&ngrx_baseline, &prose_only).unwrap();
+        let state =
+            code_reference_selection_for_task(&angular_baseline, &state_without_ngrx).unwrap();
+        let tests = code_reference_selection_for_task(&angular_baseline, &testing).unwrap();
+
+        for specialized in ["routing", "rxjs", "ngrx", "testing"] {
+            assert!(!prose.reference_groups["angular"].contains(&specialized.to_string()));
+        }
+        assert!(!state.reference_groups["angular"].contains(&"ngrx".to_string()));
+        assert!(tests.reference_groups["angular"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"components".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"routing".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"rxjs".to_string()));
+    }
+
+    #[test]
     fn maps_react_native_typescript_without_web_react_refs() {
         let baseline = baseline(json!({
             "tracks": {
@@ -2396,10 +3499,17 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::OptimizeFrontendPerformance,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+                ImplementationAction::ImplementClientStorage,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Create a mobile purchase request screen with Expo Router navigation, iOS and Android SafeArea keyboard handling, FlatList pull to refresh, and MMKV storage.".to_string();
+        task.objective = "Implement the accepted mobile purchase request workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("reactnative"));
         assert!(selection.reference_groups.contains_key("typescript"));
@@ -2434,7 +3544,10 @@ mod tests {
             baseline(json!({"tracks": {"app": {"selection": "Expo Router + React Native"}}}));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
@@ -2449,6 +3562,61 @@ mod tests {
     }
 
     #[test]
+    fn react_native_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let baseline =
+            baseline(json!({"tracks": {"app": {"selection": "Expo Router + React Native"}}}));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add Expo routes, safe areas, keyboard handling, FlatList performance, MMKV persistence, and tests.".to_string();
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let storage = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::ImplementClientStorage],
+        );
+        let platform = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementMobilePlatformBehavior],
+        );
+
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let storage_selection = code_reference_selection_for_task(&baseline, &storage).unwrap();
+        let platform_selection = code_reference_selection_for_task(&baseline, &platform).unwrap();
+
+        assert!(prose.reference_groups["reactnative"].contains(&"core".to_string()));
+        for specialized in [
+            "structure",
+            "navigation",
+            "platform",
+            "lists",
+            "storage",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["reactnative"].contains(&specialized.to_string()));
+        }
+        assert!(tests.reference_groups["reactnative"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"structure".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"platform".to_string()));
+        assert!(storage_selection.reference_groups["reactnative"].contains(&"storage".to_string()));
+        assert!(
+            storage_selection.reference_groups["reactnative"].contains(&"structure".to_string())
+        );
+        assert!(!storage_selection.reference_groups["reactnative"].contains(&"core".to_string()));
+        assert!(
+            platform_selection.reference_groups["reactnative"].contains(&"platform".to_string())
+        );
+        assert!(!platform_selection.reference_groups["reactnative"].contains(&"core".to_string()));
+    }
+
+    #[test]
     fn maps_flutter_stack_to_task_scoped_flutter_refs() {
         let baseline = baseline(json!({
             "tracks": {
@@ -2457,10 +3625,16 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementSharedClientState,
+                ImplementationAction::OptimizeFrontendPerformance,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Create a purchase approval Flutter screen with GoRouter route params, ConsumerWidget Riverpod AsyncValue state, ListView.builder rows, and jank profiling.".to_string();
+        task.objective = "Implement the accepted purchase approval Flutter workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("flutter"));
         let flutter_refs = &selection.reference_groups["flutter"];
@@ -2495,10 +3669,13 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Implement a Flutter wizard using Cubit, BlocBuilder, BlocListener, immutable states, and widget tests.".to_string();
+        task.objective = "Implement the accepted multi-step Flutter workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let flutter_refs = &selection.reference_groups["flutter"];
         assert!(flutter_refs.contains(&"bloc".to_string()));
@@ -2528,10 +3705,61 @@ mod tests {
         assert!(!selection.reference_groups.contains_key("javascript"));
         assert!(!selection.reference_groups.contains_key("kotlin"));
         assert!(!selection.reference_groups["flutter"].contains(&"bloc".to_string()));
+        assert!(!selection.reference_groups["flutter"].contains(&"structure".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.flutter.widgets" && item.path == "tech/frontend/flutter/widgets.md"
         }));
+    }
+
+    #[test]
+    fn flutter_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let selected_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Flutter 3 + Riverpod + GoRouter"}}
+        }));
+        let plain_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Flutter 3"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add GoRouter navigation, Riverpod providers, Bloc state, profile list rebuilds, and widget tests.".to_string();
+        let mut shared_without_library = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
+        );
+        shared_without_library.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&selected_baseline, &prose_only).unwrap();
+        let shared =
+            code_reference_selection_for_task(&plain_baseline, &shared_without_library).unwrap();
+        let tests = code_reference_selection_for_task(&plain_baseline, &testing).unwrap();
+
+        for specialized in [
+            "navigation",
+            "riverpod",
+            "bloc",
+            "performance",
+            "structure",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["flutter"].contains(&specialized.to_string()));
+        }
+        assert!(!shared.reference_groups["flutter"].contains(&"riverpod".to_string()));
+        assert!(!shared.reference_groups["flutter"].contains(&"bloc".to_string()));
+        assert!(tests.reference_groups["flutter"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["flutter"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["flutter"].contains(&"widgets".to_string()));
     }
 
     #[test]
@@ -2540,10 +3768,7 @@ mod tests {
         let seed = build_code_quality_seed(&baseline);
         assert_eq!(seed["required"], false);
         assert_eq!(seed["unmappedSignals"][0]["confidence"], "low");
-        assert!(seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty));
+        assert!(seed.get("techReferenceProfile").is_none());
     }
 
     #[test]
@@ -2571,6 +3796,158 @@ mod tests {
     }
 
     #[test]
+    fn csharp_references_are_capability_scoped_without_aspnet_duplication() {
+        let aspnet_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 + ASP.NET Core Minimal APIs"},
+                "dataAccess": {"selection": "Entity Framework Core"}
+            }
+        }));
+        let worker_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 C# worker"},
+                "dataAccess": {"selection": "Entity Framework Core"}
+            }
+        }));
+        let blazor_baseline = baseline(json!({
+            "tracks": {"web": {"selection": ".NET 8 + ASP.NET Core + Blazor WebAssembly + C#"}}
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let persistence_task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+        let mut blazor_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        blazor_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut blazor_testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        blazor_testing_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let api = code_reference_selection_for_task(&aspnet_baseline, &api_task).unwrap();
+        let aspnet_data =
+            code_reference_selection_for_task(&aspnet_baseline, &persistence_task).unwrap();
+        let worker_data =
+            code_reference_selection_for_task(&worker_baseline, &persistence_task).unwrap();
+        let blazor = code_reference_selection_for_task(&blazor_baseline, &blazor_task).unwrap();
+        let blazor_testing =
+            code_reference_selection_for_task(&blazor_baseline, &blazor_testing_task).unwrap();
+
+        assert!(api.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(!api.reference_groups["csharp"].contains(&"aspnet".to_string()));
+        assert!(api.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        assert!(aspnet_data.reference_groups["aspnetcore"].contains(&"data".to_string()));
+        assert!(!aspnet_data.reference_groups["csharp"].contains(&"persistence".to_string()));
+        assert!(worker_data.reference_groups["csharp"].contains(&"persistence".to_string()));
+        assert!(!worker_data.reference_groups.contains_key("aspnetcore"));
+        assert!(blazor.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(blazor.reference_groups["csharp"].contains(&"blazor".to_string()));
+        assert!(blazor_testing.reference_groups["csharp"].contains(&"testing".to_string()));
+        assert!(!blazor_testing
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"testing".to_string())));
+    }
+
+    #[test]
+    fn csharp_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": ".NET 8 + C# 12"}}
+        }));
+        let owned = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementLanguageVersionFeature,
+                ImplementationAction::OptimizeRuntimePerformance,
+            ],
+        );
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective =
+            "Use C# 12 primary constructors, Span, ArrayPool, BenchmarkDotNet, and tests."
+                .to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+
+        assert!(selected.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(selected.reference_groups["csharp"].contains(&"modern".to_string()));
+        assert!(selected.reference_groups["csharp"].contains(&"performance".to_string()));
+        assert_eq!(prose.reference_groups["csharp"], vec!["core".to_string()]);
+        assert_eq!(
+            tests.reference_groups["csharp"],
+            vec!["testing".to_string()]
+        );
+    }
+
+    #[test]
+    fn go_references_are_task_scoped_without_api_or_prose_defaults() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Go 1.23 + Gin"}}
+        }));
+        let api = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let owned = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+                ImplementationAction::ImplementDependencyAbstraction,
+                ImplementationAction::RefactorModuleStructure,
+            ],
+        );
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective = "Add goroutines, channels, worker pools, interfaces, generics, cmd/internal structure, fuzzing, and tests.".to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let api_selection = code_reference_selection_for_task(&baseline, &api).unwrap();
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let structure = code_reference_selection_for_task(&baseline, &config).unwrap();
+
+        assert_eq!(
+            api_selection.reference_groups["go"],
+            vec!["core".to_string()]
+        );
+        for expected in ["core", "concurrency", "generics", "interfaces", "structure"] {
+            assert!(selected.reference_groups["go"].contains(&expected.to_string()));
+        }
+        assert_eq!(prose.reference_groups["go"], vec!["core".to_string()]);
+        assert_eq!(tests.reference_groups["go"], vec!["testing".to_string()]);
+        assert_eq!(
+            structure.reference_groups["go"],
+            vec!["structure".to_string()]
+        );
+    }
+
+    #[test]
     fn maps_cpp_without_losing_plus_signs() {
         let baseline = baseline(json!({"tracks": {"backend": {"selection": "C++20 + CMake"}}}));
         let task = task(
@@ -2579,7 +3956,59 @@ mod tests {
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("cpp"));
-        assert!(selection.reference_groups["cpp"].contains(&"build".to_string()));
+        assert!(selection.reference_groups["cpp"].contains(&"core".to_string()));
+        assert!(!selection.reference_groups["cpp"].contains(&"build".to_string()));
+        assert!(!selection.reference_groups["cpp"].contains(&"modern".to_string()));
+    }
+
+    #[test]
+    fn cpp_specialized_references_require_explicit_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "C++23 + CMake + Clang"}}
+        }));
+        let mut owned = task(
+            TaskKind::FeatureIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementLanguageVersionFeature,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+                ImplementationAction::OptimizeRuntimePerformance,
+                ImplementationAction::ImplementAsyncProcessing,
+            ],
+        );
+        owned.objective = "Implement the accepted C++ processing boundary.".to_string();
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective = "Use C++23 concepts, templates, coroutines, SIMD performance, CMake, sanitizers, and tests.".to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let build = code_reference_selection_for_task(&baseline, &config).unwrap();
+
+        for expected in [
+            "core",
+            "modern",
+            "build",
+            "templates",
+            "performance",
+            "concurrency",
+        ] {
+            assert!(selected.reference_groups["cpp"].contains(&expected.to_string()));
+        }
+        assert_eq!(prose.reference_groups["cpp"], vec!["core".to_string()]);
+        assert_eq!(tests.reference_groups["cpp"], vec!["testing".to_string()]);
+        assert_eq!(build.reference_groups["cpp"], vec!["build".to_string()]);
     }
 
     #[test]
@@ -2587,18 +4016,24 @@ mod tests {
         let cpp_baseline = baseline(json!({"tracks": {"backend": {"selection": "C++20 + CMake"}}}));
         let mut cpp_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+            ],
         );
-        cpp_task.objective = "Implement a template-based generic rules registry.".to_string();
+        cpp_task.objective = "Implement the accepted reusable rules registry.".to_string();
         let cpp_selection = code_reference_selection_for_task(&cpp_baseline, &cpp_task).unwrap();
         assert!(cpp_selection.reference_groups["cpp"].contains(&"templates".to_string()));
 
         let go_baseline = baseline(json!({"tracks": {"backend": {"selection": "Go + Gin"}}}));
         let mut go_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+            ],
         );
-        go_task.objective = "Create generic collection helpers with type parameters.".to_string();
+        go_task.objective = "Implement the accepted collection helper contract.".to_string();
         let go_selection = code_reference_selection_for_task(&go_baseline, &go_task).unwrap();
         assert!(go_selection.reference_groups["go"].contains(&"generics".to_string()));
 
@@ -2608,8 +4043,10 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateUiFlow],
         );
         swift_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        swift_task.objective =
-            "Fix memory leak and retain cycle in SwiftUI detail flow.".to_string();
+        swift_task.objective = "Fix SwiftUI detail flow state.".to_string();
+        swift_task
+            .implementation_actions
+            .push(ImplementationAction::OptimizeRuntimePerformance);
         let swift_selection =
             code_reference_selection_for_task(&swift_baseline, &swift_task).unwrap();
         assert!(swift_selection.reference_groups["swift"].contains(&"memory".to_string()));
@@ -2618,13 +4055,28 @@ mod tests {
             baseline(json!({"tracks": {"persistence": {"selection": "PostgreSQL"}}}));
         let mut sql_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![ImplementationAction::ImplementAnalyticalQuery],
         );
         sql_task.objective =
             "Add reporting query with window function ranking and running total.".to_string();
         let sql_selection = code_reference_selection_for_task(&sql_baseline, &sql_task).unwrap();
         assert!(sql_selection.reference_groups["sql"].contains(&"queries".to_string()));
         assert!(sql_selection.reference_groups["sql"].contains(&"windows".to_string()));
+        assert!(sql_selection.reference_groups["sql"].contains(&"dialects".to_string()));
+        assert!(sql_selection.reference_groups["sql"].contains(&"postgresql.queries".to_string()));
+    }
+
+    #[test]
+    fn sql_reference_selection_does_not_infer_subject_from_prose() {
+        let baseline = baseline(json!({"tracks": {"persistence": {"selection": "PostgreSQL"}}}));
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective =
+            "Add a reporting query with a window function and running total.".to_string();
+
+        assert!(code_reference_selection_for_task(&baseline, &prose_only).is_none());
     }
 
     #[test]
@@ -2635,12 +4087,14 @@ mod tests {
                 "dataAccess": {"selection": "Spring Data JPA"}
             }
         }));
-        let mut task = task(
+        let security_task = task(
             TaskKind::InterfaceIncrement,
-            vec![ImplementationAction::CreateOrUpdateInterface],
+            vec![
+                ImplementationAction::CreateOrUpdateInterface,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            ],
         );
-        task.objective = "Add JWT login endpoint and role-based permission checks.".to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &security_task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"security".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"security".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2656,6 +4110,16 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.ref_id == "bk.spring.security"));
+
+        let mut prose_only = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        prose_only.objective =
+            "Add JWT login and role-based permission checks to the endpoint.".to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection.reference_groups["java"].contains(&"security".to_string()));
+        assert!(!prose_selection.reference_groups["springboot"].contains(&"security".to_string()));
     }
 
     #[test]
@@ -2675,6 +4139,7 @@ mod tests {
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups.contains_key("sql"));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2690,6 +4155,208 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/backend/springboot/data.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
+    }
+
+    #[test]
+    fn spring_boot_testing_reference_requires_test_implementation_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let test_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &test_task).unwrap();
+
+        assert!(selection.reference_groups["java"].contains(&"testing".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
+    }
+
+    #[test]
+    fn spring_boot_async_and_cache_task_loads_only_owned_framework_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let task = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementCachePolicy,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"async".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"cache".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/async.md"));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/cache.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/java/reactive.md"));
+    }
+
+    #[test]
+    fn structured_task_context_selects_owned_spring_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        let context = CodeReferenceTaskContext {
+            application_architecture: false,
+            security: true,
+            async_processing: true,
+            integration: true,
+            resilience: true,
+            observability: true,
+        };
+
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+        let spring = &selection.reference_groups["springboot"];
+
+        for expected in [
+            "security",
+            "async",
+            "integration",
+            "resilience",
+            "observability",
+        ] {
+            assert!(spring.contains(&expected.to_string()));
+        }
+        assert!(!spring.contains(&"cloud".to_string()));
+    }
+
+    #[test]
+    fn spring_boot_reactive_task_loads_reactive_without_runtime() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot + WebFlux"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/java/reactive.md"));
+    }
+
+    #[test]
+    fn project_reactor_does_not_imply_spring_boot_or_webflux() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Project Reactor"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(!selection.reference_groups.contains_key("springboot"));
+    }
+
+    #[test]
+    fn spring_boot_persistence_performance_does_not_load_runtime() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Spring Data JPA"},
+                "persistence": {"selection": "PostgreSQL"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::OptimizePersistenceQuery],
+        );
+        task.objective = "Optimize a Spring Data JPA query plan and index path.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
+    }
+
+    #[test]
+    fn spring_data_reference_requires_spring_data_stack_selection() {
+        let hibernate_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Hibernate ORM"}
+            }
+        }));
+        let jooq_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "jOOQ"}
+            }
+        }));
+        let spring_data_jdbc_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Spring Data JDBC"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateEntityRepository],
+        );
+
+        let hibernate = code_reference_selection_for_task(&hibernate_baseline, &task).unwrap();
+        let jooq = code_reference_selection_for_task(&jooq_baseline, &task).unwrap();
+        let spring_data_jdbc =
+            code_reference_selection_for_task(&spring_data_jdbc_baseline, &task).unwrap();
+
+        assert!(hibernate.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!hibernate
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+        assert!(!jooq.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!jooq
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+        assert!(!spring_data_jdbc.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!spring_data_jdbc
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
     }
 
     #[test]
@@ -2716,26 +4383,598 @@ mod tests {
     }
 
     #[test]
-    fn spring_boot_cloud_reference_is_integration_scoped() {
+    fn spring_boot_integration_resilience_and_cloud_are_independently_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "backend": {"selection": "Java + Spring Boot + Spring Cloud"}
+                "backend": {"selection": "Java + Spring Boot"},
+                "cloud": {"selection": "Spring Cloud"}
             }
         }));
-        let mut task = task(
-            TaskKind::InterfaceIncrement,
-            vec![ImplementationAction::CreateOrUpdateInterface],
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![
+                ImplementationAction::ImplementExternalServiceIntegration,
+                ImplementationAction::ImplementResiliencePolicy,
+                ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+            ],
         );
-        task.objective =
-            "Add WebClient downstream integration with timeout retry and gateway fallback."
-                .to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"integration".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"resilience".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"cloud".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.integration"
+                && item.path == "tech/backend/springboot/integration.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.resilience"
+                && item.path == "tech/backend/springboot/resilience.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.spring.cloud" && item.path == "tech/backend/springboot/cloud.md"
         }));
+    }
+
+    #[test]
+    fn integration_task_kind_does_not_imply_external_spring_integration() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(!selection
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"integration".to_string())));
+    }
+
+    #[test]
+    fn spring_cloud_baseline_does_not_attach_cloud_to_data_task() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot + Spring Cloud"},
+                "dataAccess": {"selection": "Spring Data JPA"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateEntityRepository],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"cloud".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"integration".to_string()));
+    }
+
+    #[test]
+    fn non_spring_boot_stacks_never_receive_spring_boot_references() {
+        for selection in [
+            "Java + Spring Framework",
+            "Java + Quarkus",
+            "Kotlin + Ktor",
+            "C# + ASP.NET Core",
+            "Python + Django",
+        ] {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": selection}}
+            }));
+            let task = task(
+                TaskKind::InterfaceIncrement,
+                vec![
+                    ImplementationAction::CreateOrUpdateInterface,
+                    ImplementationAction::ImplementAuthenticationOrAuthorization,
+                    ImplementationAction::ImplementAsyncProcessing,
+                    ImplementationAction::ImplementCachePolicy,
+                    ImplementationAction::ImplementExternalServiceIntegration,
+                    ImplementationAction::ImplementResiliencePolicy,
+                    ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+                    ImplementationAction::ImplementObservability,
+                ],
+            );
+            let selected = code_reference_selection_for_task(&baseline, &task);
+            assert!(selected
+                .as_ref()
+                .is_none_or(|selected| !selected.reference_groups.contains_key("springboot")));
+        }
+    }
+
+    #[test]
+    fn kotlin_spring_boot_uses_kotlin_and_spring_boot_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Kotlin + Spring Boot + Spring WebFlux"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups.contains_key("kotlin"));
+        assert!(selection.reference_groups.contains_key("springboot"));
+        assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!selection.reference_groups.contains_key("java"));
+    }
+
+    #[test]
+    fn kotlin_dsl_reference_requires_owned_generic_abstraction() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Kotlin + Ktor"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let dsl_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementGenericTypeAbstraction],
+        );
+
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+        let dsl = code_reference_selection_for_task(&baseline, &dsl_task).unwrap();
+
+        assert!(!ordinary.reference_groups["kotlin"].contains(&"dsl".to_string()));
+        assert!(dsl.reference_groups["kotlin"].contains(&"dsl".to_string()));
+        assert!(code_reference_load_plan(&dsl.reference_groups)
+            .iter()
+            .any(|item| {
+                item.ref_id == "tech.code.kotlin.dsl" && item.path == "tech/code/kotlin/dsl.md"
+            }));
+    }
+
+    #[test]
+    fn kotlin_framework_references_require_selected_frameworks() {
+        let ktor_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Kotlin + Ktor"}}
+        }));
+        let ktor_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let ktor = code_reference_selection_for_task(&ktor_baseline, &ktor_task).unwrap();
+        assert!(ktor.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"compose".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"multiplatform".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"testing".to_string()));
+
+        let compose_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Kotlin + Jetpack Compose"}}
+        }));
+        let mut compose_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        compose_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let compose = code_reference_selection_for_task(&compose_baseline, &compose_task).unwrap();
+        assert!(compose.reference_groups["kotlin"].contains(&"compose".to_string()));
+        assert!(!compose.reference_groups["kotlin"].contains(&"ktor".to_string()));
+
+        let kmp_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Kotlin Multiplatform + Ktor Client"}}
+        }));
+        let kmp_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        let kmp = code_reference_selection_for_task(&kmp_baseline, &kmp_task).unwrap();
+        assert!(kmp.reference_groups["kotlin"].contains(&"multiplatform".to_string()));
+        assert!(!kmp.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!kmp.reference_groups["kotlin"].contains(&"compose".to_string()));
+    }
+
+    #[test]
+    fn kotlin_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/coroutines.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/ktor.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/compose.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/multiplatform.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/dsl.md",
+                30,
+                &["## Implementation Focus", "## Failure Modes"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn java_api_without_spring_does_not_load_spring_container_reference() {
+        for stack in ["Java 21", "Java + Quarkus"] {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let task = task(
+                TaskKind::InterfaceIncrement,
+                vec![ImplementationAction::CreateOrUpdateInterface],
+            );
+
+            let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+            assert!(!selection.reference_groups["java"].contains(&"spring".to_string()));
+            assert!(!selection.reference_groups.contains_key("springboot"));
+        }
+    }
+
+    #[test]
+    fn php_references_are_framework_and_capability_scoped() {
+        let laravel_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Laravel"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        let ordinary =
+            code_reference_selection_for_task(&laravel_baseline, &ordinary_task).unwrap();
+        assert!(ordinary.reference_groups["php"].contains(&"core".to_string()));
+        assert!(ordinary.reference_groups["php"].contains(&"laravel".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"modern".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"testing".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"async".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"symfony".to_string()));
+
+        let modern_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementLanguageVersionFeature],
+        );
+        let modern = code_reference_selection_for_task(&laravel_baseline, &modern_task).unwrap();
+        assert!(modern.reference_groups["php"].contains(&"modern".to_string()));
+        assert!(code_reference_load_plan(&modern.reference_groups)
+            .iter()
+            .any(|item| item.path == "tech/code/php/modern.md"));
+
+        let async_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Swoole"}}
+        }));
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection =
+            code_reference_selection_for_task(&async_baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["php"].contains(&"async".to_string()));
+
+        let symfony_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Symfony"}}
+        }));
+        let symfony = code_reference_selection_for_task(&symfony_baseline, &ordinary_task).unwrap();
+        assert!(symfony.reference_groups["php"].contains(&"core".to_string()));
+        assert!(symfony.reference_groups["php"].contains(&"symfony".to_string()));
+        assert!(!symfony.reference_groups["php"].contains(&"laravel".to_string()));
+    }
+
+    #[test]
+    fn php_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/php/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/modern.md",
+                30,
+                &["## Implementation Focus", "## Failure Modes"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/async.md",
+                35,
+                &["## Runtime Selection", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/laravel.md",
+                35,
+                &["## Delivery Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/symfony.md",
+                35,
+                &["## Delivery Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rust_references_are_capability_scoped_even_with_tokio_baseline() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Rust 2021 + Tokio"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+        assert_eq!(ordinary.reference_groups["rust"], vec!["core", "errors"]);
+        assert!(!ordinary.reference_groups["rust"].contains(&"async".to_string()));
+        assert!(!ordinary.reference_groups["rust"].contains(&"ownership".to_string()));
+        assert!(!ordinary.reference_groups["rust"].contains(&"traits".to_string()));
+        assert!(!ordinary.reference_groups["rust"].contains(&"testing".to_string()));
+
+        let generic_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementDependencyAbstraction],
+        );
+        let generic = code_reference_selection_for_task(&baseline, &generic_task).unwrap();
+        assert!(generic.reference_groups["rust"].contains(&"ownership".to_string()));
+        assert!(generic.reference_groups["rust"].contains(&"traits".to_string()));
+        assert!(!generic.reference_groups["rust"].contains(&"async".to_string()));
+
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection = code_reference_selection_for_task(&baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["rust"].contains(&"async".to_string()));
+        assert!(async_selection.reference_groups["rust"].contains(&"ownership".to_string()));
+    }
+
+    #[test]
+    fn rust_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/rust/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/rust/ownership.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/rust/traits.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/rust/errors.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/rust/async.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/rust/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swift_references_are_capability_and_framework_scoped() {
+        let ui_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Swift + SwiftUI"}}
+        }));
+        let mut ui_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        ui_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let ui = code_reference_selection_for_task(&ui_baseline, &ui_task).unwrap();
+        assert!(ui.reference_groups["swift"].contains(&"core".to_string()));
+        assert!(ui.reference_groups["swift"].contains(&"swiftui".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"protocols".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"concurrency".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"memory".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"testing".to_string()));
+
+        let backend_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Swift + Vapor"}}
+        }));
+        let protocol_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementDependencyAbstraction],
+        );
+        let protocols =
+            code_reference_selection_for_task(&backend_baseline, &protocol_task).unwrap();
+        assert!(protocols.reference_groups["swift"].contains(&"protocols".to_string()));
+        assert!(!protocols.reference_groups["swift"].contains(&"swiftui".to_string()));
+
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection =
+            code_reference_selection_for_task(&backend_baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["swift"].contains(&"concurrency".to_string()));
+        assert!(!async_selection.reference_groups["swift"].contains(&"protocols".to_string()));
+
+        let mut performance_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::OptimizeRuntimePerformance,
+            ],
+        );
+        performance_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let performance =
+            code_reference_selection_for_task(&ui_baseline, &performance_task).unwrap();
+        assert!(performance.reference_groups["swift"].contains(&"memory".to_string()));
+    }
+
+    #[test]
+    fn swift_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/swift/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/protocols.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/concurrency.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/memory.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/swiftui.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spring_boot_observability_requires_structured_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Java + Spring Boot"}}
+        }));
+        let observability_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::ImplementObservability],
+        );
+        let ordinary_config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let observability =
+            code_reference_selection_for_task(&baseline, &observability_task).unwrap();
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_config_task).unwrap();
+
+        assert!(observability.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(!ordinary.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(ordinary.reference_groups["springboot"].contains(&"runtime".to_string()));
     }
 
     #[test]
@@ -2794,6 +5033,64 @@ mod tests {
     }
 
     #[test]
+    fn django_rest_framework_references_require_drf_stack_selection() {
+        let django_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django"}
+            }
+        }));
+        let drf_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django"},
+                "apiFramework": {"selection": "Django REST Framework"}
+            }
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let django = code_reference_selection_for_task(&django_baseline, &api_task).unwrap();
+        let drf = code_reference_selection_for_task(&drf_baseline, &api_task).unwrap();
+
+        assert!(!django
+            .reference_groups
+            .get("django")
+            .is_some_and(|items| items.contains(&"views".to_string())));
+        assert!(!django
+            .reference_groups
+            .get("django")
+            .is_some_and(|items| items.contains(&"serializers".to_string())));
+        assert!(drf.reference_groups["django"].contains(&"views".to_string()));
+        assert!(drf.reference_groups["django"].contains(&"serializers".to_string()));
+    }
+
+    #[test]
+    fn django_security_and_testing_references_require_owned_actions() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django + Django REST Framework"}
+            }
+        }));
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+
+        assert!(security.reference_groups["django"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["django"].contains(&"security".to_string()));
+    }
+
+    #[test]
     fn fastapi_api_task_loads_routing_and_schemas_without_data() {
         let baseline = baseline(json!({
             "tracks": {
@@ -2805,7 +5102,8 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateInterface],
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
-        assert!(selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!selection.reference_groups["python"].contains(&"packaging".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"routing".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"schemas".to_string()));
         assert!(!selection.reference_groups["fastapi"].contains(&"testing".to_string()));
@@ -2824,32 +5122,156 @@ mod tests {
     }
 
     #[test]
+    fn python_specialized_references_require_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Python 3.11"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+        assert!(ordinary.reference_groups["python"].contains(&"core".to_string()));
+        assert!(ordinary.reference_groups["python"].contains(&"typing".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"packaging".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"testing".to_string()));
+
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection = code_reference_selection_for_task(&baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!async_selection.reference_groups["python"].contains(&"packaging".to_string()));
+
+        let packaging_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let packaging = code_reference_selection_for_task(&baseline, &packaging_task).unwrap();
+        assert!(packaging.reference_groups["python"].contains(&"packaging".to_string()));
+        assert!(!packaging.reference_groups["python"].contains(&"async".to_string()));
+    }
+
+    #[test]
+    fn python_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/python/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/typing.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/async.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/packaging.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fastapi_migration_reference_is_explicitly_scoped() {
         let baseline = baseline(json!({
             "tracks": {
                 "backend": {"selection": "Python + FastAPI + SQLAlchemy"}
             }
         }));
-        let mut task = task(
+        let migration_task = task(
             TaskKind::IntegrationIncrement,
-            vec![ImplementationAction::RefactorSupportingCode],
+            vec![ImplementationAction::MigrateFrameworkImplementation],
         );
-        task.objective = "Migrate the existing Django REST Framework order endpoint to FastAPI while preserving response behavior.".to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &migration_task).unwrap();
         assert!(selection.reference_groups["fastapi"].contains(&"migration".to_string()));
-        assert!(selection.reference_groups["fastapi"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["fastapi"].contains(&"data".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.fastapi.migration"
                 && item.path == "tech/backend/fastapi/migration.md"
         }));
+
+        let mut prose_only = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        prose_only.objective = "Migrate a Django endpoint to FastAPI.".to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection
+            .reference_groups
+            .get("fastapi")
+            .is_some_and(|items| items.contains(&"migration".to_string())));
+    }
+
+    #[test]
+    fn fastapi_data_reference_requires_sqlalchemy_stack_and_persistence_ownership() {
+        let sqlalchemy_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI"},
+                "dataAccess": {"selection": "SQLAlchemy 2"}
+            }
+        }));
+        let tortoise_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI"},
+                "dataAccess": {"selection": "Tortoise ORM"}
+            }
+        }));
+        let persistence_task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+
+        let sqlalchemy =
+            code_reference_selection_for_task(&sqlalchemy_baseline, &persistence_task).unwrap();
+        let tortoise =
+            code_reference_selection_for_task(&tortoise_baseline, &persistence_task).unwrap();
+
+        assert!(sqlalchemy.reference_groups["fastapi"].contains(&"data".to_string()));
+        assert!(!tortoise
+            .reference_groups
+            .get("fastapi")
+            .is_some_and(|items| items.contains(&"data".to_string())));
     }
 
     #[test]
     fn aspnet_core_api_task_loads_minimal_without_data_or_architecture() {
         let baseline = baseline(json!({
             "tracks": {
-                "backend": {"selection": ".NET 8 + ASP.NET Core + Entity Framework Core"}
+                "backend": {"selection": ".NET 8 + ASP.NET Core Minimal APIs + Entity Framework Core"}
             }
         }));
         let task = task(
@@ -2857,7 +5279,8 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateInterface],
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
-        assert!(selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
+        assert!(selection.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(!selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
         assert!(selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"data".to_string()));
@@ -2885,7 +5308,18 @@ mod tests {
         task.objective =
             "Introduce clean architecture CQRS handlers and dependency injection boundaries."
                 .to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let prose_only = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(!prose_only
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"architecture".to_string())));
+
+        let context = CodeReferenceTaskContext {
+            application_architecture: true,
+            ..CodeReferenceTaskContext::default()
+        };
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
         assert!(selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
@@ -2894,6 +5328,107 @@ mod tests {
             item.ref_id == "bk.aspnet.architecture"
                 && item.path == "tech/backend/aspnetcore/architecture.md"
         }));
+    }
+
+    #[test]
+    fn aspnet_core_minimal_reference_requires_minimal_api_stack_selection() {
+        let minimal_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core Minimal APIs"}
+            }
+        }));
+        let controller_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core MVC Controllers"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let minimal = code_reference_selection_for_task(&minimal_baseline, &task).unwrap();
+        let controllers = code_reference_selection_for_task(&controller_baseline, &task).unwrap();
+
+        assert!(minimal.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        assert!(!controllers
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"minimal".to_string())));
+    }
+
+    #[test]
+    fn aspnet_core_data_reference_requires_ef_core_and_persistence_ownership() {
+        let ef_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"},
+                "dataAccess": {"selection": "Entity Framework Core 8"}
+            }
+        }));
+        let dapper_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"},
+                "dataAccess": {"selection": "Dapper"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+
+        let ef = code_reference_selection_for_task(&ef_baseline, &task).unwrap();
+        let dapper = code_reference_selection_for_task(&dapper_baseline, &task).unwrap();
+
+        assert!(ef.reference_groups["aspnetcore"].contains(&"data".to_string()));
+        assert!(!dapper
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+    }
+
+    #[test]
+    fn aspnet_core_security_testing_and_runtime_references_are_task_owned() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"}
+            }
+        }));
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let capability_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementCachePolicy,
+            ],
+        );
+
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+        let runtime = code_reference_selection_for_task(&baseline, &config_task).unwrap();
+        let capability = code_reference_selection_for_task(&baseline, &capability_task).unwrap();
+
+        assert!(security.reference_groups["aspnetcore"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["aspnetcore"].contains(&"security".to_string()));
+        assert!(!testing
+            .reference_groups
+            .get("csharp")
+            .is_some_and(|items| items.contains(&"testing".to_string())));
+        assert!(runtime.reference_groups["aspnetcore"].contains(&"runtime".to_string()));
+        assert!(!runtime.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(capability.reference_groups["aspnetcore"].contains(&"runtime".to_string()));
     }
 
     #[test]
@@ -2931,20 +5466,195 @@ mod tests {
                 "backend": {"selection": "TypeScript + NestJS"}
             }
         }));
-        let mut task = task(
+        let migration_task = task(
             TaskKind::IntegrationIncrement,
-            vec![ImplementationAction::RefactorSupportingCode],
+            vec![ImplementationAction::MigrateFrameworkImplementation],
         );
-        task.objective =
-            "Migrate existing Express routers and middleware into NestJS modules and controllers."
-                .to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &migration_task).unwrap();
         assert!(selection.reference_groups["nestjs"].contains(&"migration".to_string()));
-        assert!(selection.reference_groups["nestjs"].contains(&"services".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.nest.migration" && item.path == "tech/backend/nestjs/migration.md"
         }));
+
+        let mut prose_only = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        prose_only.objective =
+            "Migrate existing Express routers and middleware into NestJS modules and controllers."
+                .to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection.reference_groups["nestjs"].contains(&"migration".to_string()));
+        assert!(prose_selection.reference_groups["nestjs"].contains(&"services".to_string()));
+    }
+
+    #[test]
+    fn nestjs_testing_and_security_references_require_owned_actions() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS"}
+            }
+        }));
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+
+        assert!(testing.reference_groups["nestjs"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["typescript"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["nestjs"].contains(&"security".to_string()));
+        assert!(security.reference_groups["nestjs"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["nestjs"].contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn nestjs_entity_only_task_does_not_assume_service_or_transport_work() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS + TypeORM"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdateEntity],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(!selection
+            .reference_groups
+            .get("nestjs")
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    matches!(
+                        item.as_str(),
+                        "controllers" | "dtos" | "services" | "testing"
+                    )
+                })
+            }));
+    }
+
+    #[test]
+    fn javascript_async_reference_requires_async_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "JavaScript + Node.js"}}
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+
+        let api = code_reference_selection_for_task(&baseline, &api_task).unwrap();
+        let async_selection = code_reference_selection_for_task(&baseline, &async_task).unwrap();
+
+        assert!(api.reference_groups["javascript"].contains(&"core".to_string()));
+        assert!(api.reference_groups["javascript"].contains(&"modules".to_string()));
+        assert!(api.reference_groups["javascript"].contains(&"node".to_string()));
+        assert!(!api.reference_groups["javascript"].contains(&"async".to_string()));
+        assert!(async_selection.reference_groups["javascript"].contains(&"async".to_string()));
+    }
+
+    #[test]
+    fn javascript_frontend_task_loads_browser_without_node_reference() {
+        let baseline = baseline(json!({
+            "tracks": {"web": {"selection": "JavaScript"}}
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let javascript = &selection.reference_groups["javascript"];
+
+        assert!(javascript.contains(&"browser".to_string()));
+        assert!(!javascript.contains(&"node".to_string()));
+    }
+
+    #[test]
+    fn javascript_references_are_complete_and_task_scoped() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/javascript/core.md",
+                30,
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/async.md",
+                45,
+                &[
+                    "### Combinator And Failure Selection",
+                    "### Timeout And Cancellation Ownership",
+                    "### Queue And Stream Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/browser.md",
+                40,
+                &[
+                    "### Worker And Observer Ownership",
+                    "### Storage And Cache Evolution",
+                    "### Permission And Main-Thread Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/modules.md",
+                35,
+                &["### Resolution And Publication"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/node.md",
+                35,
+                &[
+                    "### Process And Child Boundaries",
+                    "### HTTP And Stream Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/testing.md",
+                30,
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                ][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
@@ -2969,18 +5679,20 @@ mod tests {
             .pointer("/unmappedSignals")
             .and_then(Value::as_array)
             .is_some_and(Vec::is_empty));
-        let load_plan = seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .unwrap();
+        assert!(seed.get("techReferenceProfile").is_none());
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
-            item.get("refId").and_then(Value::as_str) == Some("fe.react.core")
-                && item.get("path").and_then(Value::as_str) == Some("tech/frontend/react/core.md")
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
         }));
-        assert!(!load_plan.iter().any(|item| item
-            .get("path")
-            .and_then(Value::as_str)
-            .is_some_and(|path| path.starts_with("tech/code/typescript/"))));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path.starts_with("tech/code/typescript/")));
     }
 
     #[test]
@@ -2989,5 +5701,395 @@ mod tests {
         let seed = build_code_quality_seed(&baseline);
         assert_eq!(seed["required"], false);
         assert_eq!(seed["unmappedSignals"][0]["confidence"], "low");
+    }
+
+    #[test]
+    fn mysql_schema_task_loads_only_schema_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MySQL 8"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityMigration,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"mysql.schema".to_string()));
+        assert!(!sql.contains(&"queries".to_string()));
+        assert!(!sql.contains(&"mysql.queries".to_string()));
+        assert!(!sql.contains(&"mysql.transactions".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.mysql.schema"
+                && item.path == "tech/code/sql/mysql/schema.md"
+        }));
+    }
+
+    #[test]
+    fn postgresql_query_task_loads_query_without_transaction_or_schema_overlays() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL 16"}}
+        }));
+        let task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistenceQuery],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"queries".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"postgresql.queries".to_string()));
+        assert!(!sql.contains(&"postgresql.transactions".to_string()));
+        assert!(!sql.contains(&"schema".to_string()));
+        assert!(!sql.contains(&"postgresql.schema".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/sql/postgresql/transactions.md"));
+    }
+
+    #[test]
+    fn postgresql_transaction_task_loads_transaction_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL 16"}}
+        }));
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementPersistenceTransaction],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"postgresql.transactions".to_string()));
+        assert!(!sql.contains(&"postgresql.schema".to_string()));
+        assert!(!sql.contains(&"postgresql.queries".to_string()));
+        assert!(code_reference_load_plan(&selection.reference_groups)
+            .iter()
+            .any(|item| {
+                item.ref_id == "tech.code.sql.postgresql.transactions"
+                    && item.path == "tech/code/sql/postgresql/transactions.md"
+            }));
+    }
+
+    #[test]
+    fn sqlserver_schema_task_loads_only_sqlserver_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "SQL Server 2022"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityMigration,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"sqlserver.schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("oracle.")));
+        assert!(!sql.contains(&"queries".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.sqlserver.schema"
+                && item.path == "tech/code/sql/sqlserver/schema.md"
+        }));
+    }
+
+    #[test]
+    fn oracle_query_task_loads_query_without_transaction_or_schema_overlays() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "Oracle Database 19c"}}
+        }));
+        let task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistenceQuery],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"queries".to_string()));
+        assert!(sql.contains(&"oracle.queries".to_string()));
+        assert!(!sql.contains(&"oracle.transactions".to_string()));
+        assert!(!sql.contains(&"schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("sqlserver.")));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/sql/oracle/transactions.md"));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.oracle.queries"
+                && item.path == "tech/code/sql/oracle/queries.md"
+        }));
+    }
+
+    #[test]
+    fn generic_tests_do_not_load_sql_references() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MySQL"}}
+        }));
+        let task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        assert!(code_reference_selection_for_task(&baseline, &task).is_none());
+    }
+
+    #[test]
+    fn mariadb_does_not_silently_load_mysql_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MariaDB"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdateEntity],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+    }
+
+    #[test]
+    fn baseline_seed_does_not_expose_reference_routes() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL"}}
+        }));
+        let seed = build_code_quality_seed(&baseline);
+        assert_eq!(seed["required"], true);
+        assert!(seed.get("techReferenceProfile").is_none());
+    }
+
+    #[test]
+    fn sql_dialect_references_are_complete_and_non_operational() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let files = [
+            "plugins/shared/loom/references/tech/code/sql/mysql/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/mysql/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/mysql/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/transactions.md",
+        ];
+        let excluded_operations = [
+            "replication",
+            "backup",
+            "pitr",
+            "wal",
+            "vacuum",
+            "pgbouncer",
+            "pgpool",
+            "pg_stat",
+            "my.cnf",
+            "max_connections",
+            "innodb_buffer_pool",
+            "create user",
+        ];
+        for relative in files {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 55,
+                "{} is too thin",
+                path.display()
+            );
+            for section in [
+                "## When To Use",
+                "## Implementation Focus",
+                "## Verification Focus",
+                "## Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+            let lower = content.to_ascii_lowercase();
+            for term in excluded_operations {
+                assert!(
+                    !lower.contains(term),
+                    "{} contains excluded operation {term}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sql_common_references_cover_design_query_plan_and_analytics_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/sql/schema.md",
+                50,
+                &[
+                    "## Temporal, Audit, And Soft-Delete Data",
+                    "## Migration Compatibility",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/queries.md",
+                45,
+                &[
+                    "### Subqueries And Set Operations",
+                    "### Mutation Result Boundary",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/optimization.md",
+                55,
+                &[
+                    "### Plan Reading",
+                    "### Before And After Proof",
+                    "## Risks To Avoid",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/windows.md",
+                45,
+                &[
+                    "### Function And Frame Selection",
+                    "### Analytic Cost Boundary",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/dialects.md",
+                60,
+                &[
+                    "## Provider Decision Matrix",
+                    "## Provider Overlays",
+                    "SQL Server",
+                    "Oracle",
+                ][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn java_references_are_complete_and_keep_framework_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/java/core.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/spring.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/persistence.md",
+                &[
+                    "## Query Shape And Pagination",
+                    "## Batch And Bulk Boundaries",
+                    "## Cache And Measurement",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/reactive.md",
+                &[
+                    "## R2DBC Mapping Boundary",
+                    "## Reactive Client Boundary",
+                    "## Verification Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/security.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/testing.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+        ];
+
+        for (relative, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 38,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+
+        let persistence = fs::read_to_string(
+            root.join("plugins/shared/loom/references/tech/code/java/persistence.md"),
+        )
+        .expect("read Java persistence reference");
+        assert!(persistence.contains("Spring Data repositories"));
+        assert!(persistence.contains("selected provider"));
+
+        let reactive = fs::read_to_string(
+            root.join("plugins/shared/loom/references/tech/code/java/reactive.md"),
+        )
+        .expect("read Java reactive reference");
+        assert!(reactive.contains("dedicated external-service integration reference"));
+        assert!(reactive.contains("StepVerifier"));
     }
 }

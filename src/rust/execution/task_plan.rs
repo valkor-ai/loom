@@ -5,17 +5,18 @@ use std::{
 
 use contracts::{
     architecture::ArchitectureDetailCoverageEntry, build_code_quality_seed, code_quality_enum_refs,
-    code_reference_load_plan, code_reference_selection_for_task, execution::TaskArtifactRefs,
-    package_naming_policy_for_reference_groups, planning::RequirementDetailItem,
-    ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
-    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
-    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
-    ReferenceLoadPlanItem, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
-    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
-    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
+    code_reference_load_plan, code_reference_selection_for_task_with_context,
+    execution::TaskArtifactRefs, package_naming_policy_for_reference_groups,
+    planning::RequirementDetailItem, ui_surface_decision_enum_refs, AcceptancePriority,
+    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
+    BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
+    BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
+    EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
+    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
+    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
+    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
+    TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -76,9 +77,22 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
     "create_entity_repository",
     "create_entity_admin_page",
     "create_entity_migration",
+    "create_or_update_persistence_query",
+    "implement_persistence_transaction",
+    "optimize_persistence_query",
+    "implement_analytical_query",
     "implement_entity_lifecycle",
     "add_or_update_tests",
+    "add_or_update_persistence_tests",
     "add_or_update_config",
+    "implement_authentication_or_authorization",
+    "implement_async_processing",
+    "implement_cache_policy",
+    "implement_external_service_integration",
+    "implement_resilience_policy",
+    "configure_service_routing_or_discovery",
+    "implement_observability",
+    "migrate_framework_implementation",
     "implement_frontend_experience_contract",
     "implement_runtime_delivery_contract",
     "refactor_supporting_code",
@@ -265,7 +279,6 @@ fn build_request_root(
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
-    let architecture_quality_template = architecture_quality_requirement_template(aac);
     let phase_api_interfaces =
         interfaces_for_refs(project_api_contract, &aac.current_phase_interface_refs);
     let api_contract_template = api_contract_requirement_template(&phase_api_interfaces);
@@ -322,10 +335,6 @@ fn build_request_root(
         output_contract["engineeringQualityRequirementTemplate"] =
             engineering_quality_template.clone();
     }
-    if !architecture_quality_template.is_null() {
-        output_contract["architectureQualityRequirementTemplate"] =
-            architecture_quality_template.clone();
-    }
     if !api_contract_template.is_null() {
         output_contract["apiContractRequirementTemplate"] = api_contract_template.clone();
     }
@@ -379,7 +388,6 @@ fn build_request_root(
                 &runtime_requirement_template,
                 &runtime_closure_template,
                 &engineering_quality_template,
-                &architecture_quality_template,
                 &api_contract_template,
                 &code_quality_template,
                 &code_quality_seed
@@ -421,7 +429,6 @@ fn taskplan_read_groups(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
-    architecture_quality_template: &Value,
     api_contract_template: &Value,
     code_quality_template: &Value,
     code_quality_seed: &Value,
@@ -448,15 +455,6 @@ fn taskplan_read_groups(
         "contextProjection.planningContractId",
         "contextProjection.architectureArtifactContractId",
         "contextProjection.technicalBaseline.stack",
-        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-        "contextProjection.requirementDetailTransfer.currentPhaseScope",
-        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-        "contextProjection.requirementDetailTransfer.businessFlowDetails",
-        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-        "contextProjection.requirementDetailTransfer.architectureDetails",
-        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-        "contextProjection.requirementDetailTransfer.conceptRefs",
-        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
         "allowedRefs.scopeRefs",
         "allowedRefs.acceptanceRefs",
         "allowedRefs.deferredScopeRefs",
@@ -477,10 +475,6 @@ fn taskplan_read_groups(
             "codeQualitySeed.qualityLevel",
             "codeQualitySeed.codeStackSignals",
             "codeQualitySeed.unmappedSignals",
-            "codeQualitySeed.techReferenceProfile.loadMode",
-            "codeQualitySeed.techReferenceProfile.groups.code",
-            "codeQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "codeQualitySeed.generationRules",
         ]);
     }
     if !api_contract_template.is_null() {
@@ -493,9 +487,43 @@ fn taskplan_read_groups(
         json!({
             "groupId": "taskplan_core_context",
             "required": true,
-            "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
+            "purpose": "Read the compact phase identity, technical baseline signal, and allowed ownership indexes before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
             "selectors": read_selectors_value_from_paths(core_fields)
+        }),
+        json!({
+            "groupId": "taskplan_requirement_context",
+            "required": true,
+            "purpose": "Read the current-phase requirement detail index, acceptance and business-flow summaries, workflow closure requirements, and task field mapping.",
+            "whenToRead": "Read after taskplan_core_context and before assigning task ownership.",
+            "projectionMode": "semantic_index",
+            "selectors": read_selectors_value_from_paths([
+                "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+                "contextProjection.requirementDetailTransfer.currentPhaseScope",
+                "contextProjection.requirementDetailTransfer.acceptanceDetails",
+                "contextProjection.requirementDetailTransfer.businessFlowDetails",
+                "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+                "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+                "contextProjection.requirementDetailTransfer.conceptRefs",
+                "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping"
+            ])
+        }),
+        json!({
+            "groupId": "taskplan_artifact_context",
+            "required": true,
+            "purpose": "Read compact artifact ownership, interface, runtime, UI operation-path, architecture-quality, and verification projections.",
+            "whenToRead": "Read after taskplan_requirement_context and before writing group files.",
+            "projectionMode": "artifact_ownership_projection",
+            "selectors": read_selectors_value_from_paths([
+                "contextProjection.requirementDetailTransfer.architectureDetails.modules",
+                "contextProjection.requirementDetailTransfer.architectureDetails.applicationInteractions",
+                "contextProjection.requirementDetailTransfer.architectureDetails.entities",
+                "contextProjection.requirementDetailTransfer.architectureDetails.interfaces",
+                "contextProjection.requirementDetailTransfer.architectureDetails.userFlows",
+                "contextProjection.requirementDetailTransfer.architectureDetails.stateMachines",
+                "contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
+                "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality"
+            ])
         }),
         json!({
             "groupId": "taskplan_generation_rules",
@@ -528,7 +556,6 @@ fn taskplan_read_groups(
                 runtime_requirement_template,
                 runtime_closure_template,
                 engineering_quality_template,
-                architecture_quality_template,
                 api_contract_template,
                 code_quality_template
             ))
@@ -542,7 +569,6 @@ fn taskplan_candidate_contract_fields(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
-    architecture_quality_template: &Value,
     api_contract_template: &Value,
     code_quality_template: &Value,
 ) -> Vec<&'static str> {
@@ -568,9 +594,6 @@ fn taskplan_candidate_contract_fields(
     }
     if !engineering_quality_template.is_null() {
         fields.push("outputContract.engineeringQualityRequirementTemplate");
-    }
-    if !architecture_quality_template.is_null() {
-        fields.push("outputContract.architectureQualityRequirementTemplate");
     }
     if !api_contract_template.is_null() {
         fields.push("outputContract.apiContractRequirementTemplate");
@@ -794,6 +817,7 @@ where
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let mut group_value = read_project_json_value(root, &group_file)?;
+        normalize_taskplan_candidate_null_arrays(&mut group_value);
         normalize_taskplan_group_envelope(
             &mut group_value,
             &authorized.request_id,
@@ -824,13 +848,24 @@ where
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
     normalize_runtime_delivery_requirements(&mut tasks, &aac);
+    normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements =
         normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
-    let code_quality_requirements = normalize_code_quality_requirements(&baseline, &mut tasks);
+    normalize_structured_verification_intents(&aac, &mut tasks);
+    normalize_task_verification_detail_refs(&mut tasks, &pgc, &aac);
+    let code_quality_requirements =
+        normalize_code_quality_requirements(&baseline, &aac, &mut tasks);
+    issues.extend(validate_quality_requirement_ownership(
+        &tasks,
+        &engineering_quality_requirements,
+        &architecture_quality_requirements,
+        &api_contract_requirements,
+        &code_quality_requirements,
+    ));
     normalize_browser_verification_assignments(&mut tasks);
     issues.extend(validate_browser_verification_assignments(&tasks));
     let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
@@ -842,6 +877,11 @@ where
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
     if !issues.is_empty() {
+        // Preserve the actionable ownership diagnosis even when an earlier
+        // structural check already requires repair. Otherwise a candidate
+        // with no eligible owner is reported only as a generic preflight
+        // failure and the agent cannot repair the missing assignment.
+        issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
@@ -952,6 +992,11 @@ where
             "updatedAt": run.updated_at
         }),
     )?;
+    state::store::remove_file_if_exists(&from_project_relative(root, &outline_ref)?)?;
+    for group in &outline.groups {
+        let group_file = group_pattern.replace("{groupId}", &group.group_id);
+        state::store::remove_file_if_exists(&from_project_relative(root, &group_file)?)?;
+    }
 
     let store = FileTransitionStore;
     let mut status = store
@@ -1150,6 +1195,56 @@ fn normalize_taskplan_group_envelope(
     object.insert("deliveryId".to_string(), json!(delivery_id));
     object.insert("phaseId".to_string(), json!(phase_id));
     object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn normalize_taskplan_candidate_null_arrays(raw: &mut Value) {
+    const ARRAY_FIELDS: &[&str] = &[
+        "acceptanceRefs",
+        "acceptableEvidence",
+        "affectedContractFields",
+        "conceptRefs",
+        "conceptResponsibilities",
+        "conceptVerificationIntents",
+        "consumedInterfaces",
+        "dependsOn",
+        "decisions",
+        "entities",
+        "forbiddenActions",
+        "forbiddenPaths",
+        "implementationActions",
+        "interfaces",
+        "modules",
+        "nfrs",
+        "preferredEvidence",
+        "requirementDetailRefs",
+        "requiredCodeLevelChecks",
+        "risks",
+        "scopeRefs",
+        "stateMachines",
+        "userFlows",
+        "verificationIntents",
+    ];
+    normalize_named_null_arrays(raw, ARRAY_FIELDS);
+}
+
+fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_named_null_arrays(item, array_fields);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if value.is_null() && array_fields.contains(&key.as_str()) {
+                    *value = Value::Array(vec![]);
+                } else {
+                    normalize_named_null_arrays(value, array_fields);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn validate_outline(
@@ -1416,6 +1511,14 @@ fn validate_taskplan_refs(
             &mut issues,
         );
         validate_ref_list(
+            &task.write_boundary.artifact_refs.consumed_interfaces,
+            &allowed_set(allowed_refs, "interfaceRefs"),
+            "UNKNOWN_INTERFACE_REF",
+            "tasks[].writeBoundary.artifactRefs.consumedInterfaces",
+            &task.task_id,
+            &mut issues,
+        );
+        validate_ref_list(
             &task.write_boundary.artifact_refs.user_flows,
             &allowed_set(allowed_refs, "userFlowRefs"),
             "UNKNOWN_USER_FLOW_REF",
@@ -1480,6 +1583,10 @@ fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition], allowed_ref
             &interface_refs,
         );
         clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.consumed_interfaces,
+            &interface_refs,
+        );
+        clear_refs_when_unavailable(
             &mut task.write_boundary.artifact_refs.user_flows,
             &user_flow_refs,
         );
@@ -1508,11 +1615,738 @@ fn normalize_taskplan_candidate_relationships(
     pgc: &contracts::PlanningGenerationContract,
     aac: &ArchitectureArtifactContract,
 ) {
-    normalize_frontend_experience_requirements(tasks, aac);
-    normalize_verification_detail_parent_refs(tasks);
-    normalize_missing_requirement_detail_task_refs(tasks, pgc, aac);
-    normalize_task_verification_detail_refs(tasks, pgc, aac);
     normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+    canonicalize_task_ownership(groups, tasks, pgc, aac);
+    normalize_frontend_experience_requirements(tasks, aac);
+}
+
+fn canonicalize_task_ownership(
+    groups: &mut [TaskPlanGroup],
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    let included_scope_refs = pgc
+        .phase_scope
+        .included
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let deferred_or_excluded = pgc
+        .phase_scope
+        .deferred
+        .iter()
+        .chain(pgc.phase_scope.excluded.iter())
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let covered = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| (entry.detail_id.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    for task in tasks.iter_mut() {
+        task.requirement_detail_refs.clear();
+        for intent in &mut task.verification_intents {
+            intent.requirement_detail_refs.clear();
+        }
+    }
+    for task in tasks.iter_mut().filter(|task| is_business_owner_task(task)) {
+        task.scope_refs.clear();
+        task.acceptance_refs.clear();
+    }
+    for task in tasks
+        .iter_mut()
+        .filter(|task| !is_business_owner_task(task))
+    {
+        let consumed_interfaces = if task_can_consume_api_contract(task) {
+            task.write_boundary.artifact_refs.all_interfaces()
+        } else {
+            Vec::new()
+        };
+        task.scope_refs.clear();
+        task.acceptance_refs.clear();
+        task.requirement_detail_refs.clear();
+        task.write_boundary.artifact_refs = TaskArtifactRefs::default();
+        task.write_boundary.artifact_refs.consumed_interfaces = consumed_interfaces;
+        for intent in &mut task.verification_intents {
+            intent.requirement_detail_refs.clear();
+        }
+    }
+
+    for detail in pgc.requirement_details.items.iter().filter(|detail| {
+        detail.required_for_current_phase
+            && detail.scope_refs.iter().all(|scope| {
+                included_scope_refs.contains(scope.as_str())
+                    && !deferred_or_excluded.contains(scope.as_str())
+            })
+            && covered.contains_key(detail.detail_id.as_str())
+    }) {
+        let Some(coverage) = covered.get(detail.detail_id.as_str()) else {
+            continue;
+        };
+        let Some(owner_index) = choose_unique_owner(tasks, detail, coverage) else {
+            continue;
+        };
+        let owner = &mut tasks[owner_index];
+        push_unique(&mut owner.requirement_detail_refs, detail.detail_id.clone());
+        merge_detail_artifact_refs(
+            &mut owner.write_boundary.artifact_refs,
+            &coverage.artifact_refs,
+        );
+        for scope_ref in &detail.scope_refs {
+            push_unique(&mut owner.scope_refs, scope_ref.clone());
+        }
+        for acceptance_ref in &detail.acceptance_refs {
+            push_unique(&mut owner.acceptance_refs, acceptance_ref.clone());
+        }
+        if let Some(intent) = owner.verification_intents.first_mut() {
+            push_unique(
+                &mut intent.requirement_detail_refs,
+                detail.detail_id.clone(),
+            );
+            for acceptance_ref in &detail.acceptance_refs {
+                push_unique(&mut intent.acceptance_refs, acceptance_ref.clone());
+            }
+        }
+    }
+
+    canonicalize_acceptance_owners(tasks, pgc);
+    normalize_artifact_refs(tasks, aac);
+    canonicalize_workflow_closure_owners(tasks, aac);
+    canonicalize_group_ownership(groups, tasks);
+}
+
+fn canonicalize_group_ownership(groups: &mut [TaskPlanGroup], tasks: &[TaskDefinition]) {
+    for group in groups {
+        let group_tasks = tasks
+            .iter()
+            .filter(|task| task.group_id == group.group_id)
+            .collect::<Vec<_>>();
+        group.scope_refs = group_tasks
+            .iter()
+            .filter(|task| is_business_owner_task(task))
+            .flat_map(|task| task.scope_refs.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        group.acceptance_refs = group_tasks
+            .iter()
+            .filter(|task| is_business_owner_task(task))
+            .flat_map(|task| task.acceptance_refs.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+}
+
+fn canonicalize_acceptance_owners(
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+) {
+    let candidates = &pgc.phase_scope.acceptance_candidates;
+    if candidates.is_empty() {
+        return;
+    }
+
+    let detail_acceptance_owners = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| is_business_owner_task(task))
+        .flat_map(|(index, task)| {
+            task.requirement_detail_refs
+                .iter()
+                .flat_map(move |detail_id| {
+                    pgc.requirement_details
+                        .items
+                        .iter()
+                        .find(|detail| detail.detail_id == *detail_id)
+                        .into_iter()
+                        .flat_map(|detail| detail.acceptance_refs.iter())
+                        .map(move |acceptance_id| (acceptance_id.clone(), index))
+                })
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for acceptance in candidates {
+        let owner_index = detail_acceptance_owners
+            .get(&acceptance.id)
+            .copied()
+            .or_else(|| choose_acceptance_owner(tasks, acceptance));
+        let Some(owner_index) = owner_index else {
+            continue;
+        };
+        for task in tasks.iter_mut() {
+            task.acceptance_refs
+                .retain(|reference| reference != &acceptance.id);
+            for intent in &mut task.verification_intents {
+                intent
+                    .acceptance_refs
+                    .retain(|reference| reference != &acceptance.id);
+            }
+        }
+        let owner = &mut tasks[owner_index];
+        push_unique(&mut owner.acceptance_refs, acceptance.id.clone());
+        if let Some(intent) = owner.verification_intents.first_mut() {
+            push_unique(&mut intent.acceptance_refs, acceptance.id.clone());
+        }
+    }
+}
+
+fn choose_acceptance_owner(
+    tasks: &[TaskDefinition],
+    acceptance: &contracts::AcceptanceCandidate,
+) -> Option<usize> {
+    let source_refs = acceptance
+        .source_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let capability_refs = acceptance
+        .capability_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut candidates = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| is_business_owner_task(task))
+        .map(|(index, task)| {
+            let mut score = task_owner_rank(task);
+            score += task
+                .scope_refs
+                .iter()
+                .filter(|reference| source_refs.contains(reference.as_str()))
+                .count() as u32
+                * 20;
+            score += task
+                .write_boundary
+                .artifact_refs
+                .modules
+                .iter()
+                .filter(|reference| capability_refs.contains(reference.as_str()))
+                .count() as u32
+                * 20;
+            score += task
+                .write_boundary
+                .artifact_refs
+                .user_flows
+                .iter()
+                .filter(|reference| source_refs.contains(reference.as_str()))
+                .count() as u32
+                * 15;
+            (index, score, task.task_id.clone())
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.2.cmp(&right.2)));
+    candidates.first().map(|candidate| candidate.0)
+}
+
+fn is_business_owner_task(task: &TaskDefinition) -> bool {
+    !matches!(
+        task.task_kind,
+        TaskKind::VerificationIncrement
+            | TaskKind::RuntimeDeliveryClosure
+            | TaskKind::BrowserQualityClosure
+    )
+}
+
+fn merge_detail_artifact_refs(
+    task_refs: &mut TaskArtifactRefs,
+    detail_refs: &contracts::architecture::DetailCoverageArtifactRefs,
+) {
+    for reference in &detail_refs.modules {
+        push_unique(&mut task_refs.modules, reference.clone());
+    }
+    for reference in &detail_refs.entities {
+        push_unique(&mut task_refs.entities, reference.clone());
+    }
+    for reference in &detail_refs.interfaces {
+        push_unique(&mut task_refs.interfaces, reference.clone());
+    }
+    for reference in &detail_refs.user_flows {
+        push_unique(&mut task_refs.user_flows, reference.clone());
+    }
+    for reference in &detail_refs.state_machines {
+        push_unique(&mut task_refs.state_machines, reference.clone());
+    }
+}
+
+fn choose_unique_owner(
+    tasks: &[TaskDefinition],
+    detail: &RequirementDetailItem,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> Option<usize> {
+    let mut candidates = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| is_business_owner_task(task))
+        .map(|(index, task)| {
+            (
+                index,
+                requirement_detail_owner_score(task, detail, coverage),
+                task_owner_rank(task),
+                task.task_id.clone(),
+            )
+        })
+        .filter(|(_, score, _, _)| *score > 0)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task_can_own_requirement_detail(task))
+            .max_by(|left, right| {
+                task_owner_rank(left.1)
+                    .cmp(&task_owner_rank(right.1))
+                    .then_with(|| right.1.task_id.cmp(&left.1.task_id))
+            })
+            .map(|(index, _)| index);
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.2.cmp(&left.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    candidates.first().map(|candidate| candidate.0)
+}
+
+fn task_owner_rank(task: &TaskDefinition) -> u32 {
+    let kind_rank = match task.task_kind {
+        TaskKind::DataModelIncrement => 100,
+        TaskKind::InterfaceIncrement => 95,
+        TaskKind::FeatureIncrement => 90,
+        TaskKind::UiFlowIncrement | TaskKind::FrontendExperience => 85,
+        TaskKind::IntegrationIncrement => 75,
+        TaskKind::RefactorSupport => 40,
+        TaskKind::ConfigurationSupport => 30,
+        _ => 10,
+    };
+    let action_rank = task
+        .implementation_actions
+        .iter()
+        .map(|action| match action {
+            ImplementationAction::CreateOrUpdateEntity
+            | ImplementationAction::CreateOrUpdatePersistence
+            | ImplementationAction::CreateOrUpdatePersistenceQuery
+            | ImplementationAction::CreateEntityRepository => 20,
+            ImplementationAction::CreateOrUpdateInterface
+            | ImplementationAction::CreateEntityCrud => 18,
+            ImplementationAction::CreateOrUpdateUiFlow
+            | ImplementationAction::ImplementFrontendExperienceContract => 16,
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    kind_rank + action_rank
+}
+
+fn normalize_artifact_refs(tasks: &mut [TaskDefinition], aac: &ArchitectureArtifactContract) {
+    let allowed = accepted_artifact_ref_sets(aac);
+    for field in [
+        "modules",
+        "entities",
+        "interfaces",
+        "user_flows",
+        "state_machines",
+        "decisions",
+        "nfrs",
+        "risks",
+    ] {
+        let occurrences = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| is_business_owner_task(task))
+            .flat_map(|(index, task)| {
+                artifact_refs_for_field(&task.write_boundary.artifact_refs, field)
+                    .iter()
+                    .cloned()
+                    .map(move |artifact_ref| (artifact_ref, index))
+            })
+            .fold(
+                BTreeMap::<String, Vec<usize>>::new(),
+                |mut map, (artifact_ref, index)| {
+                    map.entry(artifact_ref).or_default().push(index);
+                    map
+                },
+            );
+        let duplicate_owners = occurrences
+            .iter()
+            .filter(|(_, indices)| indices.len() > 1)
+            .map(|(artifact_ref, indices)| {
+                (
+                    artifact_ref.clone(),
+                    choose_artifact_owner(artifact_ref, field, indices, tasks, aac),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for task in tasks.iter_mut() {
+            if !is_business_owner_task(task) {
+                continue;
+            }
+            let consumed = {
+                let refs =
+                    artifact_refs_for_field_mut(&mut task.write_boundary.artifact_refs, field);
+                let original = refs.clone();
+                refs.retain(|artifact_ref| {
+                    allowed
+                        .get(field)
+                        .is_some_and(|accepted| accepted.contains(artifact_ref))
+                        && duplicate_owners
+                            .get(artifact_ref)
+                            .is_none_or(|owner| owner == &task.task_id)
+                });
+                if field == "interfaces" {
+                    original
+                        .into_iter()
+                        .filter(|interface_ref| {
+                            !refs.contains(interface_ref)
+                                && allowed
+                                    .get("interfaces")
+                                    .is_some_and(|accepted| accepted.contains(interface_ref))
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            };
+            for interface_ref in consumed {
+                push_unique(
+                    &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                    interface_ref,
+                );
+            }
+        }
+        if field == "interfaces" {
+            for task in tasks.iter_mut().filter(|task| is_business_owner_task(task)) {
+                if !task_owns_api_contract(task) {
+                    let non_owner_refs =
+                        std::mem::take(&mut task.write_boundary.artifact_refs.interfaces);
+                    for interface_ref in non_owner_refs {
+                        push_unique(
+                            &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                            interface_ref,
+                        );
+                    }
+                }
+                task.write_boundary
+                    .artifact_refs
+                    .consumed_interfaces
+                    .retain(|reference| {
+                        !task
+                            .write_boundary
+                            .artifact_refs
+                            .interfaces
+                            .contains(reference)
+                    });
+            }
+        }
+    }
+}
+
+fn choose_artifact_owner(
+    artifact_ref: &str,
+    field: &str,
+    candidate_indices: &[usize],
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> String {
+    let eligible_indices = if field == "interfaces" {
+        let api_owners = candidate_indices
+            .iter()
+            .copied()
+            .filter(|index| task_owns_api_contract(&tasks[*index]))
+            .collect::<Vec<_>>();
+        if api_owners.is_empty() {
+            candidate_indices.to_vec()
+        } else {
+            api_owners
+        }
+    } else {
+        candidate_indices.to_vec()
+    };
+    let workflow_owners = eligible_indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            task_is_workflow_closure_artifact_owner(&tasks[*index], field, artifact_ref, aac)
+        })
+        .collect::<Vec<_>>();
+    let detail_owners = eligible_indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            tasks[*index]
+                .requirement_detail_refs
+                .iter()
+                .any(|detail_id| {
+                    aac.detail_coverage
+                        .iter()
+                        .find(|coverage| coverage.detail_id == *detail_id)
+                        .is_some_and(|coverage| {
+                            coverage_status_is_covered(coverage)
+                                && coverage_artifact_refs_contain(
+                                    &coverage.artifact_refs,
+                                    field,
+                                    artifact_ref,
+                                )
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    let candidates = if !workflow_owners.is_empty() {
+        workflow_owners
+    } else if detail_owners.len() == 1 {
+        detail_owners
+    } else {
+        eligible_indices
+    };
+    candidates
+        .into_iter()
+        .max_by(|left, right| {
+            task_owner_rank(&tasks[*left])
+                .cmp(&task_owner_rank(&tasks[*right]))
+                .then_with(|| tasks[*right].task_id.cmp(&tasks[*left].task_id))
+        })
+        .map(|index| tasks[index].task_id.clone())
+        .unwrap_or_default()
+}
+
+fn task_is_workflow_closure_artifact_owner(
+    task: &TaskDefinition,
+    field: &str,
+    artifact_ref: &str,
+    aac: &ArchitectureArtifactContract,
+) -> bool {
+    if !task.frontend_experience_requirement.is_some()
+        || !task
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+    {
+        return false;
+    }
+    workflow_closure_requirements(aac)
+        .iter()
+        .any(|requirement| {
+            let workflow_matches = field == "user_flows"
+                && requirement.get("workflowRef").and_then(Value::as_str) == Some(artifact_ref);
+            let interface_matches = field == "interfaces"
+                && string_array_at(requirement, "interfaceRefs")
+                    .iter()
+                    .any(|reference| reference == artifact_ref);
+            (workflow_matches || interface_matches)
+                && requirement
+                    .get("workflowRef")
+                    .and_then(Value::as_str)
+                    .is_some_and(|workflow_ref| {
+                        task.write_boundary
+                            .artifact_refs
+                            .user_flows
+                            .iter()
+                            .any(|reference| reference == workflow_ref)
+                    })
+        })
+}
+
+fn coverage_status_is_covered(coverage: &ArchitectureDetailCoverageEntry) -> bool {
+    matches!(coverage.coverage_status, CoverageStatus::Covered)
+}
+
+fn coverage_artifact_refs_contain(
+    refs: &contracts::architecture::DetailCoverageArtifactRefs,
+    field: &str,
+    artifact_ref: &str,
+) -> bool {
+    match field {
+        "modules" => refs.modules.as_slice(),
+        "entities" => refs.entities.as_slice(),
+        "interfaces" => refs.interfaces.as_slice(),
+        "user_flows" => refs.user_flows.as_slice(),
+        "state_machines" => refs.state_machines.as_slice(),
+        _ => &[],
+    }
+    .iter()
+    .any(|reference| reference == artifact_ref)
+}
+
+fn artifact_refs_for_field<'a>(refs: &'a TaskArtifactRefs, field: &str) -> &'a [String] {
+    match field {
+        "modules" => refs.modules.as_slice(),
+        "entities" => refs.entities.as_slice(),
+        "interfaces" => refs.interfaces.as_slice(),
+        "user_flows" => refs.user_flows.as_slice(),
+        "state_machines" => refs.state_machines.as_slice(),
+        "decisions" => refs.decisions.as_slice(),
+        "nfrs" => refs.nfrs.as_slice(),
+        "risks" => refs.risks.as_slice(),
+        _ => &[],
+    }
+}
+
+fn canonicalize_workflow_closure_owners(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    for requirement in workflow_closure_requirements(aac) {
+        let Some(workflow_ref) = requirement.get("workflowRef").and_then(Value::as_str) else {
+            continue;
+        };
+        let required_interfaces = string_array_at(&requirement, "interfaceRefs");
+        let required_acceptance = string_array_at(&requirement, "acceptanceRefs");
+        let mut candidates = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                is_business_owner_task(task)
+                    && task.frontend_experience_requirement.is_some()
+                    && task
+                        .write_boundary
+                        .artifact_refs
+                        .user_flows
+                        .iter()
+                        .any(|reference| reference == workflow_ref)
+                    && task.implementation_actions.iter().any(|action| {
+                        matches!(action, ImplementationAction::WireReferenceInApiOrUi)
+                    })
+            })
+            .map(|(index, task)| {
+                let acceptance_match =
+                    intersection_count(&task.acceptance_refs, &required_acceptance) as u32;
+                let intent_match = task.verification_intents.iter().any(|intent| {
+                    required_acceptance.iter().all(|acceptance_ref| {
+                        intent
+                            .acceptance_refs
+                            .iter()
+                            .any(|reference| reference == acceptance_ref)
+                    })
+                }) as u32;
+                (
+                    index,
+                    task_owner_rank(task) + acceptance_match * 10 + intent_match * 20,
+                    task.task_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.2.cmp(&right.2)));
+        let Some((owner_index, _, _)) = candidates.first() else {
+            continue;
+        };
+        let owner = &mut tasks[*owner_index];
+        push_unique(
+            &mut owner.write_boundary.artifact_refs.user_flows,
+            workflow_ref.to_string(),
+        );
+        for interface_ref in required_interfaces {
+            push_unique(
+                &mut owner.write_boundary.artifact_refs.consumed_interfaces,
+                interface_ref,
+            );
+        }
+        for acceptance_ref in required_acceptance {
+            push_unique(&mut owner.acceptance_refs, acceptance_ref.clone());
+            if let Some(intent) = owner.verification_intents.first_mut() {
+                push_unique(&mut intent.acceptance_refs, acceptance_ref);
+            }
+        }
+    }
+}
+
+fn accepted_artifact_ref_sets(
+    aac: &ArchitectureArtifactContract,
+) -> BTreeMap<&'static str, BTreeSet<String>> {
+    let mut sets = BTreeMap::new();
+    sets.insert(
+        "modules",
+        aac.modules
+            .iter()
+            .filter_map(|value| value_id(value, "moduleId"))
+            .collect(),
+    );
+    sets.insert(
+        "entities",
+        aac.data_model
+            .get("entities")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value_id(value, "entityId"))
+            .collect(),
+    );
+    sets.insert(
+        "interfaces",
+        aac.interfaces
+            .iter()
+            .filter_map(|value| value_id(value, "interfaceId"))
+            .collect(),
+    );
+    sets.insert(
+        "user_flows",
+        aac.user_flows
+            .iter()
+            .filter_map(|value| value_id(value, "flowId"))
+            .collect(),
+    );
+    sets.insert(
+        "state_machines",
+        aac.state_machines
+            .iter()
+            .filter_map(|value| value_id(value, "stateMachineId"))
+            .collect(),
+    );
+    sets.insert(
+        "decisions",
+        aac.architecture_quality
+            .decisions
+            .iter()
+            .map(|value| value.decision_id.clone())
+            .collect(),
+    );
+    sets.insert(
+        "nfrs",
+        aac.architecture_quality
+            .nfrs
+            .iter()
+            .map(|value| value.nfr_id.clone())
+            .collect(),
+    );
+    sets.insert(
+        "risks",
+        aac.architecture_quality
+            .risks
+            .iter()
+            .map(|value| value.risk_id.clone())
+            .collect(),
+    );
+    sets
+}
+
+fn value_id(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn artifact_refs_for_field_mut<'a>(
+    refs: &'a mut TaskArtifactRefs,
+    field: &str,
+) -> &'a mut Vec<String> {
+    match field {
+        "modules" => &mut refs.modules,
+        "entities" => &mut refs.entities,
+        "interfaces" => &mut refs.interfaces,
+        "user_flows" => &mut refs.user_flows,
+        "state_machines" => &mut refs.state_machines,
+        "decisions" => &mut refs.decisions,
+        "nfrs" => &mut refs.nfrs,
+        "risks" => &mut refs.risks,
+        _ => &mut refs.modules,
+    }
 }
 
 fn normalize_runtime_delivery_requirements(
@@ -1529,19 +2363,54 @@ fn normalize_runtime_delivery_requirements(
     let contract_fields = runtime_delivery_closure_fields(runtime_delivery);
     let contract_field_set = contract_fields.iter().cloned().collect::<BTreeSet<_>>();
 
-    for task in tasks {
+    for task in tasks.iter_mut() {
+        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
+        // The closure contract is derived from accepted RuntimeDelivery facts. It
+        // must not depend on the agent copying a second machine-owned object into
+        // the TaskPlan candidate; a missing closure field is therefore materialized
+        // before validation instead of becoming a repair loop.
+        if is_closure && task.runtime_delivery_requirement.is_none() {
+            task.runtime_delivery_requirement = Some(contracts::TaskRuntimeDeliveryRequirement {
+                applies_to_this_task: true,
+                reason: "Final code-level closure for the RuntimeDeliveryContract.".to_string(),
+                runtime_delivery_ref: Some(runtime_ref.to_string()),
+                affected_contract_fields: contract_fields.clone(),
+                required_code_level_checks: contract_fields
+                    .iter()
+                    .map(|field| runtime_delivery_check_for_field(field))
+                    .collect(),
+                evidence_expected_in_task_result: Vec::new(),
+                forbidden_actions: Vec::new(),
+                source: Some("mcp_derived_from_runtime_delivery".to_string()),
+                deployment_failure_ref: None,
+            });
+        }
         let Some(requirement) = task.runtime_delivery_requirement.as_mut() else {
             continue;
         };
-        if !requirement.applies_to_this_task {
+        if is_closure {
+            requirement.applies_to_this_task = true;
+            requirement.reason =
+                "Final code-level closure for the accepted RuntimeDeliveryContract.".to_string();
+            requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
+            requirement.affected_contract_fields = contract_fields.clone();
+            requirement.required_code_level_checks = contract_fields
+                .iter()
+                .map(|field| runtime_delivery_check_for_field(field))
+                .collect();
+            requirement.evidence_expected_in_task_result.clear();
+            requirement.forbidden_actions.clear();
+            requirement.source = Some("mcp_derived_from_runtime_delivery".to_string());
+            requirement.deployment_failure_ref = None;
+            continue;
+        }
+        if !is_closure && !requirement.applies_to_this_task {
             requirement.runtime_delivery_ref = None;
             requirement.affected_contract_fields.clear();
             requirement.required_code_level_checks.clear();
             continue;
         }
-
         requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
-        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
         let requested_fields = if is_closure {
             contract_fields.clone()
         } else {
@@ -1578,6 +2447,50 @@ fn normalize_runtime_delivery_requirements(
             })
             .collect();
     }
+
+    let closure_index = tasks
+        .iter()
+        .position(|task| matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure));
+    let mut field_owners = BTreeMap::<String, usize>::new();
+    for (index, task) in tasks.iter().enumerate() {
+        let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
+            continue;
+        };
+        if !requirement.applies_to_this_task {
+            continue;
+        }
+        for field in &requirement.affected_contract_fields {
+            let replace = field_owners.get(field).is_none_or(|current| {
+                closure_index == Some(index)
+                    || (closure_index != Some(*current)
+                        && task_owner_rank(task) > task_owner_rank(&tasks[*current]))
+            });
+            if replace {
+                field_owners.insert(field.clone(), index);
+            }
+        }
+    }
+    for (index, task) in tasks.iter_mut().enumerate() {
+        let Some(requirement) = task.runtime_delivery_requirement.as_mut() else {
+            continue;
+        };
+        if !requirement.applies_to_this_task {
+            continue;
+        }
+        requirement
+            .affected_contract_fields
+            .retain(|field| field_owners.get(field) == Some(&index));
+        requirement.required_code_level_checks.retain(|check| {
+            check
+                .contract_field
+                .as_ref()
+                .is_some_and(|field| requirement.affected_contract_fields.contains(field))
+        });
+        if requirement.affected_contract_fields.is_empty() {
+            requirement.applies_to_this_task = false;
+            requirement.runtime_delivery_ref = None;
+        }
+    }
 }
 
 fn normalize_frontend_experience_requirements(
@@ -1598,6 +2511,7 @@ fn normalize_frontend_experience_requirements(
         }
         let task_kind = task.task_kind.clone();
         let implementation_actions = task.implementation_actions.clone();
+        let task_scope_projection = task_owned_ui_scope(task, aac);
         let Some(requirement) = task.frontend_experience_requirement.as_mut() else {
             let mut normalized = template.clone();
             normalize_ui_task_scope(
@@ -1605,6 +2519,7 @@ fn normalize_frontend_experience_requirements(
                 &template,
                 &task_kind,
                 &implementation_actions,
+                &task_scope_projection,
             );
             task.frontend_experience_requirement = Some(normalized);
             continue;
@@ -1621,17 +2536,18 @@ fn normalize_frontend_experience_requirements(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
-        normalize_ui_task_scope(requirement, &template, &task_kind, &implementation_actions);
+        normalize_ui_task_scope(
+            requirement,
+            &template,
+            &task_kind,
+            &implementation_actions,
+            &task_scope_projection,
+        );
         if let Some(surface_contract) = expected_surface_contract.as_ref() {
             requirement["uiSurfaceDecisionContractRef"] = json!(
                 "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
             );
-            normalize_ui_surface_ownership(requirement, surface_contract);
-            if let Some(object) = requirement.as_object_mut() {
-                object.remove("uiQualityContractRef");
-                object.remove("uiQualityContract");
-                object.remove("uiTaskQualityGates");
-            }
+            normalize_ui_task_scope_contract(requirement, surface_contract);
         }
     }
 }
@@ -1641,6 +2557,7 @@ fn normalize_ui_task_scope(
     template: &Value,
     task_kind: &TaskKind,
     implementation_actions: &[ImplementationAction],
+    task_scope_projection: &Value,
 ) {
     if !requirement
         .get("uiTaskScope")
@@ -1651,11 +2568,14 @@ fn normalize_ui_task_scope(
             .cloned()
             .unwrap_or_else(|| json!({}));
     }
-    let mut dimensions = existing_ui_ownership_dimensions(requirement);
-    push_unique_strings(
-        &mut dimensions,
-        derived_ui_ownership_dimensions(requirement, task_kind, implementation_actions),
-    );
+    if let Some(scope) = task_scope_projection.as_object() {
+        requirement["uiTaskScope"] = Value::Object(scope.clone());
+    }
+    // ownershipDimensions is a projection of the canonical task scope. The
+    // candidate's value is never an input because it can describe a broader
+    // surface than the task actually owns.
+    let mut dimensions =
+        derived_ui_ownership_dimensions(requirement, task_kind, implementation_actions);
     if dimensions.is_empty() {
         dimensions = vec![
             "surface".to_string(),
@@ -1667,21 +2587,410 @@ fn normalize_ui_task_scope(
     requirement["uiTaskScope"]["ownershipDimensions"] = json!(dimensions);
 }
 
-fn existing_ui_ownership_dimensions(requirement: &Value) -> Vec<String> {
-    requirement
-        .pointer("/uiTaskScope/ownershipDimensions")
+fn task_owned_ui_scope(task: &TaskDefinition, aac: &ArchitectureArtifactContract) -> Value {
+    let mut holder = json!({"uiTaskScope": {}});
+    apply_task_owned_ui_scope(&mut holder, task, aac);
+    holder
+        .get("uiTaskScope")
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+fn apply_task_owned_ui_scope(
+    requirement: &mut Value,
+    task: &TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+) {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return;
+    };
+    let (surface_ids, view_ids, action_ids, operation_path_ids, workflow_ids, interface_ids) =
+        task_owned_frontend_ids(task, aac, frontend);
+    let Some(scope) = requirement
+        .get_mut("uiTaskScope")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    scope.insert(
+        "surfacesInScope".to_string(),
+        Value::Array(selected_frontend_scope_values(
+            frontend,
+            "surfaces",
+            "surfaceId",
+            &surface_ids,
+            true,
+        )),
+    );
+    scope.insert(
+        "dataViewsInScope".to_string(),
+        Value::Array(selected_frontend_scope_values(
+            frontend,
+            "dataViews",
+            "viewId",
+            &view_ids,
+            false,
+        )),
+    );
+    scope.insert(
+        "actionsInScope".to_string(),
+        Value::Array(selected_frontend_scope_values(
+            frontend,
+            "actions",
+            "actionId",
+            &action_ids,
+            false,
+        )),
+    );
+    scope.insert(
+        "operationPathsInScope".to_string(),
+        Value::Array(selected_frontend_scope_values(
+            frontend,
+            "operationPaths",
+            "pathId",
+            &operation_path_ids,
+            false,
+        )),
+    );
+    scope.insert(
+        "frontendBackendBindings".to_string(),
+        Value::Array(
+            aac.interfaces
+                .iter()
+                .filter(|interface| {
+                    string_at(interface, "interfaceId")
+                        .is_some_and(|id| interface_ids.contains(&id))
+                })
+                .map(|interface| {
+                    json!({
+                        "bindingId": format!("ui-binding:{}", string_at(interface, "interfaceId").unwrap_or_default()),
+                        "workflowRefs": workflow_ids.clone(),
+                        "operationPathRefs": operation_path_ids.clone(),
+                        "interfaces": [interface],
+                        "completionRule": "Wire the task-owned UI action or surface to this accepted interface when the task owns the interaction."
+                    })
+                })
+                .collect(),
+        ),
+    );
+    if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+        let region_values = selected_contract_scope_values(
+            surface_contract,
+            "regionModel",
+            "regionId",
+            &surface_ids,
+            &view_ids,
+            &action_ids,
+            &operation_path_ids,
+        );
+        let region_ids = region_values
+            .iter()
+            .filter_map(|region| string_at(region, "regionId"))
+            .collect::<BTreeSet<_>>();
+        scope.insert("regionsInScope".to_string(), Value::Array(region_values));
+        scope.insert(
+            "actionsInContract".to_string(),
+            Value::Array(selected_contract_values_by_ids(
+                surface_contract,
+                "actionModel",
+                "actionId",
+                &action_ids,
+            )),
+        );
+        let state_ids = selected_state_ids(
+            frontend,
+            surface_contract,
+            &surface_ids,
+            &operation_path_ids,
+            &region_ids,
+        );
+        scope.insert(
+            "statesInContract".to_string(),
+            Value::Array(selected_contract_values_by_ids(
+                surface_contract,
+                "stateModel",
+                "state",
+                &state_ids,
+            )),
+        );
+        scope.insert(
+            "qualityRulesInScope".to_string(),
+            Value::Array(selected_quality_rule_values(
+                surface_contract,
+                &surface_ids,
+                &view_ids,
+                &action_ids,
+                &operation_path_ids,
+            )),
+        );
+    }
+}
+
+fn selected_contract_values_by_ids(
+    contract: &Value,
+    array_key: &str,
+    id_key: &str,
+    ids: &BTreeSet<String>,
+) -> Vec<Value> {
+    contract
+        .get(array_key)
         .and_then(Value::as_array)
-        .map(|items| {
-            unique_strings(
-                items
-                    .iter()
+        .into_iter()
+        .flatten()
+        .filter(|value| string_at(value, id_key).is_some_and(|id| ids.contains(&id)))
+        .cloned()
+        .collect()
+}
+
+fn selected_contract_scope_values(
+    contract: &Value,
+    array_key: &str,
+    id_key: &str,
+    surface_ids: &BTreeSet<String>,
+    view_ids: &BTreeSet<String>,
+    action_ids: &BTreeSet<String>,
+    operation_path_ids: &BTreeSet<String>,
+) -> Vec<Value> {
+    contract
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|value| {
+            string_at(value, id_key).is_some_and(|id| {
+                let refs = value
+                    .get("surfaceRefs")
+                    .or_else(|| value.get("surfaceIds"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
                     .filter_map(Value::as_str)
-                    .filter(|dimension| UI_OWNERSHIP_DIMENSION_VALUES.contains(dimension))
-                    .map(str::to_string)
-                    .collect(),
-            )
+                    .collect::<BTreeSet<_>>();
+                refs.is_empty() && array_key == "regionModel"
+                    || refs
+                        .iter()
+                        .any(|reference| surface_ids.contains(*reference))
+                    || surface_ids.contains(&id)
+                    || view_ids.contains(&id)
+                    || action_ids.contains(&id)
+                    || operation_path_ids.contains(&id)
+            })
         })
-        .unwrap_or_default()
+        .cloned()
+        .collect()
+}
+
+fn selected_state_ids(
+    frontend: &Value,
+    contract: &Value,
+    surface_ids: &BTreeSet<String>,
+    operation_path_ids: &BTreeSet<String>,
+    region_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for surface in frontend_surface_values(frontend) {
+        if string_at(surface, "surfaceId").is_some_and(|id| surface_ids.contains(&id)) {
+            ids.extend(string_array_at(surface, "stateRefs"));
+            if let Some(model) = surface
+                .get("statePlacementModel")
+                .and_then(Value::as_object)
+            {
+                ids.extend(model.keys().cloned());
+            }
+        }
+    }
+    for path in array_at(frontend, "operationPaths") {
+        if string_at(path, "pathId").is_some_and(|id| operation_path_ids.contains(&id)) {
+            ids.extend(string_array_at(path, "stateRefs"));
+        }
+    }
+    let declared = contract
+        .get("stateModel")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| string_at(item, "state"))
+        .collect::<BTreeSet<_>>();
+    // A task that owns a rendered region owns the complete state contract for
+    // that region. Execution reconstructs the same rule when it builds the
+    // task-scoped frontend contract, so the TaskPlan projection must expose
+    // every declared state instead of making valid execution evidence look
+    // invented during Review.
+    if !region_ids.is_empty() {
+        return declared;
+    }
+    ids.intersection(&declared).cloned().collect()
+}
+
+fn selected_quality_rule_values(
+    contract: &Value,
+    surface_ids: &BTreeSet<String>,
+    view_ids: &BTreeSet<String>,
+    action_ids: &BTreeSet<String>,
+    operation_path_ids: &BTreeSet<String>,
+) -> Vec<Value> {
+    contract
+        .get("qualityRules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|rule| {
+            let refs = rule
+                .get("scopeRefs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>();
+            refs.is_empty()
+                || refs.iter().any(|reference| {
+                    surface_ids.contains(*reference)
+                        || view_ids.contains(*reference)
+                        || action_ids.contains(*reference)
+                        || operation_path_ids.contains(*reference)
+                })
+        })
+        .cloned()
+        .collect()
+}
+
+fn task_owned_frontend_ids(
+    task: &TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+    frontend: &Value,
+) -> (
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+) {
+    let mut views = BTreeSet::new();
+    let mut actions = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut workflows = task
+        .write_boundary
+        .artifact_refs
+        .user_flows
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut interfaces = task
+        .write_boundary
+        .artifact_refs
+        .all_interfaces()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for detail in &aac.detail_coverage {
+        if !task
+            .requirement_detail_refs
+            .iter()
+            .any(|id| id == &detail.detail_id)
+        {
+            continue;
+        }
+        views.extend(detail.artifact_refs.frontend_data_views.iter().cloned());
+        actions.extend(detail.artifact_refs.frontend_actions.iter().cloned());
+        paths.extend(
+            detail
+                .artifact_refs
+                .frontend_operation_paths
+                .iter()
+                .cloned(),
+        );
+        workflows.extend(detail.artifact_refs.user_flows.iter().cloned());
+        interfaces.extend(detail.artifact_refs.interfaces.iter().cloned());
+    }
+    for flow in &aac.user_flows {
+        if string_at(flow, "flowId").is_some_and(|id| workflows.contains(&id)) {
+            for step in array_at(flow, "happyPath") {
+                if let Some(id) = string_at(step, "interactionRef") {
+                    interfaces.insert(id);
+                }
+            }
+        }
+    }
+    for path in array_at(frontend, "operationPaths") {
+        let matches = string_at(path, "pathId").is_some_and(|id| paths.contains(&id))
+            || string_at(path, "workflowRef").is_some_and(|id| workflows.contains(&id))
+            || string_array_at(path, "interfaceRefs")
+                .iter()
+                .any(|id| interfaces.contains(id));
+        if matches {
+            if let Some(id) = string_at(path, "pathId") {
+                paths.insert(id);
+            }
+            views.extend(string_array_at(path, "dataViewRefs"));
+            actions.extend(string_array_at(path, "actionRefs"));
+            workflows.extend(string_at(path, "workflowRef"));
+            interfaces.extend(string_array_at(path, "interfaceRefs"));
+        }
+    }
+    let mut surface_ids = BTreeSet::new();
+    for surface in frontend_surface_values(frontend) {
+        let matches = string_array_at(surface, "dataViewRefs")
+            .iter()
+            .any(|id| views.contains(id))
+            || string_array_at(surface, "actionRefs")
+                .iter()
+                .any(|id| actions.contains(id))
+            || string_array_at(surface, "operationPathRefs")
+                .iter()
+                .any(|id| paths.contains(id))
+            || string_array_at(surface, "workflowRefs")
+                .iter()
+                .any(|id| workflows.contains(id))
+            || string_array_at(surface, "interfaceRefs")
+                .iter()
+                .any(|id| interfaces.contains(id));
+        if matches {
+            if let Some(id) = string_at(surface, "surfaceId") {
+                surface_ids.insert(id);
+            }
+            views.extend(string_array_at(surface, "dataViewRefs"));
+            actions.extend(string_array_at(surface, "actionRefs"));
+            paths.extend(string_array_at(surface, "operationPathRefs"));
+            workflows.extend(string_array_at(surface, "workflowRefs"));
+            interfaces.extend(string_array_at(surface, "interfaceRefs"));
+        }
+    }
+    (surface_ids, views, actions, paths, workflows, interfaces)
+}
+
+fn frontend_surface_values(frontend: &Value) -> Vec<&Value> {
+    let registry = frontend
+        .pointer("/uiSurfaceRegistry/surfaces")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+    if registry.is_empty() {
+        array_at(frontend, "surfaces")
+    } else {
+        registry
+    }
+}
+
+fn selected_frontend_scope_values(
+    frontend: &Value,
+    array_key: &str,
+    id_key: &str,
+    ids: &BTreeSet<String>,
+    use_registry_for_surfaces: bool,
+) -> Vec<Value> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let values = if use_registry_for_surfaces {
+        frontend_surface_values(frontend)
+    } else {
+        array_at(frontend, array_key)
+    };
+    values
+        .into_iter()
+        .filter(|value| string_at(value, id_key).is_some_and(|id| ids.contains(&id)))
+        .cloned()
+        .collect()
 }
 
 fn derived_ui_ownership_dimensions(
@@ -1713,11 +3022,69 @@ fn derived_ui_ownership_dimensions(
     if has_integration || has_action {
         dimensions.push("integration_feedback".to_string());
     }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateFrontendNavigation
+        )
+    }) {
+        dimensions.push("surface".to_string());
+        dimensions.push("action".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementSharedClientState))
+    {
+        dimensions.push("state".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementReactiveClientFlow))
+    {
+        dimensions.push("integration_feedback".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::OptimizeFrontendPerformance))
+    {
+        dimensions.push("layout".to_string());
+    }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::ImplementServerRenderedComponent
+        )
+    }) {
+        dimensions.push("surface".to_string());
+        dimensions.push("state".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementServerMutation))
+    {
+        dimensions.push("action".to_string());
+        dimensions.push("integration_feedback".to_string());
+    }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::ImplementFrontendFrameworkVersionFeature
+        )
+    }) {
+        dimensions.push("surface".to_string());
+    }
     if task_kind_is_frontend(task_kind)
         || implementation_actions.iter().any(|action| {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -1742,89 +3109,12 @@ fn scope_array_has_items(scope: &Value, key: &str) -> bool {
         .is_some_and(|items| !items.is_empty())
 }
 
-fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
-    for task in tasks {
-        let intent_detail_refs = task
-            .verification_intents
-            .iter()
-            .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
-            .collect::<Vec<_>>();
-        for detail_ref in intent_detail_refs {
-            push_unique(&mut task.requirement_detail_refs, detail_ref);
-        }
-    }
-}
-
-fn normalize_missing_requirement_detail_task_refs(
-    tasks: &mut [TaskDefinition],
-    pgc: &contracts::PlanningGenerationContract,
-    aac: &ArchitectureArtifactContract,
-) {
-    let coverage_by_detail = aac
-        .detail_coverage
-        .iter()
-        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
-        .map(|entry| (entry.detail_id.as_str(), entry))
-        .collect::<BTreeMap<_, _>>();
-    if coverage_by_detail.is_empty() {
-        return;
-    }
-    let mut assigned_detail_ids = tasks
-        .iter()
-        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    for detail in pgc
-        .requirement_details
-        .items
-        .iter()
-        .filter(|detail| detail.required_for_current_phase)
-    {
-        if assigned_detail_ids.contains(&detail.detail_id) {
-            continue;
-        }
-        let Some(coverage) = coverage_by_detail.get(detail.detail_id.as_str()) else {
-            continue;
-        };
-        if let Some(task_index) = infer_requirement_detail_owner_task(tasks, detail, coverage) {
-            push_unique(
-                &mut tasks[task_index].requirement_detail_refs,
-                detail.detail_id.clone(),
-            );
-            assigned_detail_ids.insert(detail.detail_id.clone());
-        }
-    }
-}
-
-fn infer_requirement_detail_owner_task(
-    tasks: &[TaskDefinition],
-    detail: &RequirementDetailItem,
-    coverage: &ArchitectureDetailCoverageEntry,
-) -> Option<usize> {
-    let scored = tasks
-        .iter()
-        .enumerate()
-        .filter(|(_, task)| task_can_own_requirement_detail(task))
-        .filter_map(|(index, task)| {
-            let score = requirement_detail_owner_score(task, detail, coverage);
-            (score > 0).then_some((index, score))
-        })
-        .collect::<Vec<_>>();
-    let max_score = scored.iter().map(|(_, score)| *score).max()?;
-    let winners = scored
-        .into_iter()
-        .filter(|(_, score)| *score == max_score)
-        .collect::<Vec<_>>();
-    if winners.len() == 1 {
-        Some(winners[0].0)
-    } else {
-        None
-    }
-}
-
 fn task_can_own_requirement_detail(task: &TaskDefinition) -> bool {
     !matches!(
         task.task_kind,
-        TaskKind::VerificationIncrement | TaskKind::RuntimeDeliveryClosure
+        TaskKind::VerificationIncrement
+            | TaskKind::RuntimeDeliveryClosure
+            | TaskKind::BrowserQualityClosure
     )
 }
 
@@ -1837,13 +3127,11 @@ fn requirement_detail_owner_score(
     let acceptance_score =
         intersection_count(&task.acceptance_refs, &detail.acceptance_refs) as u32 * 2;
     let concept_score = intersection_count(&task.concept_refs, &detail.concept_refs) as u32 * 3;
-    if artifact_score == 0 && acceptance_score == 0 && concept_score == 0 {
-        return 0;
-    }
     artifact_score
         + acceptance_score
         + concept_score
         + semantic_detail_owner_score(task, detail, coverage)
+        + structured_task_kind_owner_score(task, detail, coverage)
 }
 
 fn artifact_ref_owner_score(
@@ -1858,6 +3146,60 @@ fn artifact_ref_owner_score(
     score += intersection_count(&task_refs.state_machines, &refs.constraints) as u32 * 5;
     score += intersection_count(&task_refs.entities, &refs.entities) as u32 * 5;
     score += intersection_count(&task_refs.modules, &refs.modules) as u32 * 3;
+    score
+}
+
+fn structured_task_kind_owner_score(
+    task: &TaskDefinition,
+    detail: &RequirementDetailItem,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> u32 {
+    let refs = &coverage.artifact_refs;
+    let has_data =
+        !refs.entities.is_empty() || !refs.fields.is_empty() || !refs.constraints.is_empty();
+    let has_api = !refs.interfaces.is_empty();
+    let has_ui = !refs.frontend_data_views.is_empty()
+        || !refs.frontend_actions.is_empty()
+        || !refs.frontend_operation_paths.is_empty();
+    let has_flow = !refs.user_flows.is_empty();
+    let has_state = !refs.state_machines.is_empty();
+    let mut score = 0;
+    if has_data && task_directly_owns_persistence_mapping(task) {
+        score += 16;
+    }
+    if has_api && task_owns_interface_behavior(task) {
+        score += 14;
+    }
+    if has_ui && task_is_frontend_task(task) {
+        score += 18;
+    }
+    if has_flow && task_owns_business_flow_behavior(task) {
+        score += 12;
+    }
+    if has_state
+        && task
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::CreateOrUpdateStateMachine))
+    {
+        score += 14;
+    }
+    if !has_data && !has_api && !has_ui && !has_flow && !has_state {
+        score += match task.task_kind {
+            TaskKind::FeatureIncrement | TaskKind::IntegrationIncrement => 6,
+            TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
+                if task_is_frontend_task(task) =>
+            {
+                6
+            }
+            TaskKind::InterfaceIncrement
+                if detail.impact_tags.iter().any(|tag| tag == "interface") =>
+            {
+                6
+            }
+            _ => 0,
+        };
+    }
     score
 }
 
@@ -1909,6 +3251,7 @@ fn task_owns_business_flow_behavior(task: &TaskDefinition) -> bool {
             ImplementationAction::CreateOrUpdateBusinessRule
                 | ImplementationAction::CreateOrUpdateInterface
                 | ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::CreateOrUpdateFrontendNavigation
                 | ImplementationAction::WireReferenceInApiOrUi
         )
     })
@@ -2078,8 +3421,8 @@ fn normalize_runtime_delivery_closure_group(
             title: "Runtime delivery closure".to_string(),
             objective: "Verify the final RuntimeDeliveryContract code-level closure.".to_string(),
             depends_on: vec![],
-            scope_refs: tasks[closure_task_index].scope_refs.clone(),
-            acceptance_refs: tasks[closure_task_index].acceptance_refs.clone(),
+            scope_refs: vec![],
+            acceptance_refs: vec![],
             task_ids: vec![],
         });
     }
@@ -2094,12 +3437,8 @@ fn normalize_runtime_delivery_closure_group(
         .find(|group| group.group_id == closure_group_id)
     {
         group.task_ids = vec![closure_task_id];
-        if group.scope_refs.is_empty() {
-            group.scope_refs = tasks[closure_task_index].scope_refs.clone();
-        }
-        if group.acceptance_refs.is_empty() {
-            group.acceptance_refs = tasks[closure_task_index].acceptance_refs.clone();
-        }
+        group.scope_refs.clear();
+        group.acceptance_refs.clear();
         group.depends_on = dependency_group_ids;
     }
     if let Some(index) = groups
@@ -2217,6 +3556,138 @@ fn validate_runtime_delivery_requirements(
     issues
 }
 
+fn validate_quality_requirement_ownership(
+    tasks: &[TaskDefinition],
+    engineering: &[contracts::EngineeringQualityRequirement],
+    architecture: &[contracts::ArchitectureQualityRequirement],
+    api: &[contracts::ApiContractRequirement],
+    code: &[contracts::CodeQualityRequirement],
+) -> Vec<delivery_core::RepairIssue> {
+    let task_ids = tasks
+        .iter()
+        .map(|task| task.task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut issues = Vec::new();
+
+    for requirement in engineering {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.engineering_quality_requirement_refs.as_slice(),
+            "engineeringQualityRequirements",
+        );
+    }
+    for requirement in architecture {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.architecture_quality_requirement_refs.as_slice(),
+            "architectureQualityRequirements",
+        );
+    }
+    for requirement in api {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.api_contract_requirement_refs.as_slice(),
+            "apiContractRequirements",
+        );
+    }
+    for requirement in code {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.code_quality_requirement_refs.as_slice(),
+            "codeQualityRequirements",
+        );
+    }
+
+    issues
+}
+
+fn validate_requirement_task_ownership<F>(
+    issues: &mut Vec<delivery_core::RepairIssue>,
+    task_ids: &BTreeSet<&str>,
+    requirement_id: &str,
+    applies_to_task_ids: &[String],
+    tasks: &[TaskDefinition],
+    refs_for_task: F,
+    field_name: &str,
+) where
+    F: Fn(&TaskDefinition) -> &[String] + Copy,
+{
+    if applies_to_task_ids.is_empty() {
+        issues.push(issue(
+            "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+            field_name,
+            "Every derived quality requirement must have at least one owning task.",
+            Some(requirement_id),
+        ));
+        return;
+    }
+    for task_id in applies_to_task_ids {
+        if !task_ids.contains(task_id.as_str()) {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "Quality requirement ownership must reference an existing TaskPlan task.",
+                Some(requirement_id),
+            ));
+            continue;
+        }
+        let Some(task) = tasks.iter().find(|task| task.task_id == *task_id) else {
+            continue;
+        };
+        if !refs_for_task(task)
+            .iter()
+            .any(|reference| reference == requirement_id)
+        {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "A quality requirement must be present in the owning task's derived requirement refs.",
+                Some(task_id),
+            ));
+        }
+        if task.verification_intents.is_empty() {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_VERIFICATION_MISSING",
+                "tasks[].verificationIntents",
+                "Every task owning a quality requirement must provide a verification intent for its evidence.",
+                Some(task_id),
+            ));
+        }
+    }
+    for task in tasks {
+        if refs_for_task(task)
+            .iter()
+            .any(|reference| reference == requirement_id)
+            && !applies_to_task_ids
+                .iter()
+                .any(|task_id| task_id == &task.task_id)
+        {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "A task must not claim a quality requirement that does not apply to it.",
+                Some(&task.task_id),
+            ));
+        }
+    }
+}
+
 fn validate_must_acceptance_task_coverage(
     tasks: &[TaskDefinition],
     pgc: &contracts::PlanningGenerationContract,
@@ -2321,7 +3792,7 @@ fn validate_frontend_quality_requirements(
             ));
         }
         if let Some(surface_contract) = expected_surface_contract {
-            validate_ui_surface_ownership(task, requirement, surface_contract, &mut issues);
+            validate_ui_task_scope_contract(task, requirement, surface_contract, &mut issues);
         }
         validate_ui_ownership_dimensions(task, requirement, &mut issues);
     }
@@ -2371,6 +3842,82 @@ fn validate_ui_ownership_dimensions(
                 "ownershipDimensions must use only surface, data_view, action, state, layout, visual_system, content_boundary, or integration_feedback.",
                 Some(&task.task_id),
             ));
+        }
+    }
+}
+
+fn validate_ui_task_scope_contract(
+    task: &TaskDefinition,
+    requirement: &Value,
+    surface_contract: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(scope) = requirement
+        .get("uiTaskScope")
+        .filter(|value| value.is_object())
+    else {
+        issues.push(issue(
+            "FRONTEND_UI_TASK_SCOPE_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiTaskScope",
+            "Frontend tasks must carry one MCP-derived uiTaskScope projection.",
+            Some(&task.task_id),
+        ));
+        return;
+    };
+    for (field, contract_key, id_key, code) in [
+        (
+            "regionsInScope",
+            "regionModel",
+            "regionId",
+            "FRONTEND_UI_REGION_SCOPE_INVALID",
+        ),
+        (
+            "actionsInContract",
+            "actionModel",
+            "actionId",
+            "FRONTEND_UI_ACTION_SCOPE_INVALID",
+        ),
+        (
+            "statesInContract",
+            "stateModel",
+            "state",
+            "FRONTEND_UI_STATE_SCOPE_INVALID",
+        ),
+        (
+            "qualityRulesInScope",
+            "qualityRules",
+            "ruleId",
+            "FRONTEND_UI_QUALITY_RULE_SCOPE_INVALID",
+        ),
+    ] {
+        let Some(items) = scope.get(field).and_then(Value::as_array) else {
+            issues.push(issue(
+                code,
+                &format!("tasks[].frontendExperienceRequirement.uiTaskScope.{field}"),
+                "The MCP-derived UI task scope field must be an array.",
+                Some(&task.task_id),
+            ));
+            continue;
+        };
+        let allowed = contract_string_ids(surface_contract, &format!("/{contract_key}"), id_key);
+        for item in items {
+            let Some(id) = item.get(id_key).and_then(Value::as_str) else {
+                issues.push(issue(
+                    code,
+                    &format!("tasks[].frontendExperienceRequirement.uiTaskScope.{field}"),
+                    "Every UI task scope entry must be a structured object with its canonical id.",
+                    Some(&task.task_id),
+                ));
+                continue;
+            };
+            if !allowed.is_empty() && !allowed.contains(id) {
+                issues.push(issue(
+                    code,
+                    &format!("tasks[].frontendExperienceRequirement.uiTaskScope.{field}"),
+                    "UI task scope entries must reference IDs declared by AAC uiSurfaceDecisionContract.",
+                    Some(&task.task_id),
+                ));
+            }
         }
     }
 }
@@ -2475,7 +4022,7 @@ pub(crate) fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &
     if !required_interfaces.iter().all(|interface_ref| {
         task.write_boundary
             .artifact_refs
-            .interfaces
+            .all_interfaces()
             .iter()
             .any(|item| item == interface_ref)
     }) {
@@ -2769,7 +4316,7 @@ fn validate_browser_verification_assignments(
 ) -> Vec<delivery_core::RepairIssue> {
     tasks
         .iter()
-        .filter(|task| task_requires_browser_verification(task))
+        .filter(|task| task_requires_explicit_browser_owner(task))
         .filter(|task| {
             !task.verification_intents.iter().any(|intent| {
                 intent
@@ -2791,6 +4338,24 @@ fn validate_browser_verification_assignments(
             )
         })
         .collect()
+}
+
+fn task_requires_explicit_browser_owner(task: &TaskDefinition) -> bool {
+    let explicitly_requests_browser_evidence = task.verification_intents.iter().any(|intent| {
+        intent
+            .preferred_evidence
+            .iter()
+            .chain(intent.acceptable_evidence.iter())
+            .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+    });
+    let owns_browser_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
+        && task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateTests | ImplementationAction::AddOrUpdateConfig
+            )
+        });
+    explicitly_requests_browser_evidence || owns_browser_suite_setup
 }
 
 fn materialize_browser_quality_closure(
@@ -2819,8 +4384,6 @@ fn materialize_browser_quality_closure(
         .collect::<BTreeMap<_, _>>();
     let mut checks = Vec::new();
     let mut verification_intents = Vec::new();
-    let mut scope_refs = BTreeSet::new();
-    let mut acceptance_refs = BTreeSet::new();
     let mut surface_refs = BTreeSet::new();
     let mut workflow_refs = BTreeSet::new();
     let mut region_refs = BTreeSet::new();
@@ -2851,8 +4414,6 @@ fn materialize_browser_quality_closure(
             continue;
         };
         let source_task = &mut tasks[task_index];
-        scope_refs.extend(source_task.scope_refs.iter().cloned());
-        acceptance_refs.extend(source_task.acceptance_refs.iter().cloned());
         for source_verification_id in profile.verification_ids {
             let Some(intent) = source_task
                 .verification_intents
@@ -2870,7 +4431,6 @@ fn materialize_browser_quality_closure(
                 check.source_verification_id == source_verification_id
                     && check.enforcement == BrowserEvidenceEnforcement::Required
             });
-            acceptance_refs.extend(intent.acceptance_refs.iter().cloned());
             verification_intents.push(VerificationIntent {
                 verification_id: closure_verification_id.clone(),
                 acceptance_refs: Vec::new(),
@@ -2929,8 +4489,8 @@ fn materialize_browser_quality_closure(
         implementation_actions,
         objective: "Create or adapt the task-scoped browser checks and close required rendered, interaction, and workflow evidence.".to_string(),
         depends_on: Vec::new(),
-        scope_refs: scope_refs.iter().cloned().collect(),
-        acceptance_refs: acceptance_refs.iter().cloned().collect(),
+        scope_refs: Vec::new(),
+        acceptance_refs: Vec::new(),
         requirement_detail_refs: Vec::new(),
         write_boundary: TaskWriteBoundary {
             forbidden_paths: vec![".loom".to_string()],
@@ -2957,8 +4517,8 @@ fn materialize_browser_quality_closure(
         title: "Browser quality closure".to_string(),
         objective: "Close the phase browser evidence after implementation and runtime delivery are complete.".to_string(),
         depends_on: dependency_group_ids,
-        scope_refs: scope_refs.into_iter().collect(),
-        acceptance_refs: acceptance_refs.into_iter().collect(),
+        scope_refs: Vec::new(),
+        acceptance_refs: Vec::new(),
         task_ids: vec![task_id.clone()],
     });
 
@@ -3225,23 +4785,26 @@ fn requirement_detail_transfer(
             "artifactRefHintRule": "artifactRefHints are compact routing hints for task grouping. Use architectureDetails, acceptanceDetails, and businessFlowDetails as the authoritative source for full object shape and behavior."
         },
         "currentPhaseScope": {
-            "included": pgc.phase_scope.included,
-            "deferred": pgc.phase_scope.deferred,
-            "excluded": pgc.phase_scope.excluded
+            "includedRefs": pgc.phase_scope.included.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+            "deferredRefs": pgc.phase_scope.deferred.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+            "excludedRefs": pgc.phase_scope.excluded.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+            "authority": "sourceRefs.planningGenerationContractRef#/phaseScope"
         },
-        "acceptanceDetails": pgc.phase_scope.acceptance_candidates,
-        "businessFlowDetails": pgc.planning_inputs.business_flows,
+        "acceptanceDetails": compact_acceptance_details(&pgc.phase_scope.acceptance_candidates),
+        "businessFlowDetails": compact_business_flow_details(&pgc.planning_inputs.business_flows),
         "objectOperationDetailRules": {
             "taskAssignmentRule": "Task objectives and verification intents must preserve concrete objects, operations, fields, states, blocking rules, and feedback when present.",
             "evidenceRule": "TaskResult must be able to show which concrete behavior was implemented or verified."
         },
         "architectureDetails": {
-            "modules": aac.modules,
-            "entities": aac.data_model.get("entities").cloned().unwrap_or(Value::Array(vec![])),
-            "interfaces": aac.interfaces,
-            "userFlows": aac.user_flows,
-            "stateMachines": aac.state_machines,
-            "frontendOperationPathDetails": frontend_operation_path_details(aac)
+            "modules": compact_artifact_values(&aac.modules, &["moduleId", "name", "responsibilities", "layer", "scopeRefs", "acceptanceRefs"]),
+            "applicationInteractions": compact_application_interactions(aac),
+            "entities": compact_artifact_array(aac.data_model.get("entities"), &["entityId", "name", "fields", "relationships", "scopeRefs", "acceptanceRefs"]),
+            "interfaces": aac.interfaces.iter().map(compact_api_interface_for_task_plan).collect::<Vec<_>>(),
+            "userFlows": compact_artifact_values(&aac.user_flows, &["flowId", "name", "kind", "steps", "actorRefs", "scopeRefs", "acceptanceRefs"]),
+            "stateMachines": compact_artifact_values(&aac.state_machines, &["stateMachineId", "name", "states", "transitions", "scopeRefs", "acceptanceRefs"]),
+            "frontendOperationPathDetails": frontend_operation_path_details(aac),
+            "architectureQuality": compact_architecture_quality(aac)
         },
         "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
@@ -3255,6 +4818,121 @@ fn requirement_detail_transfer(
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
     })
+}
+
+fn compact_acceptance_details(values: &[contracts::AcceptanceCandidate]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|acceptance| {
+            json!({
+                "id": acceptance.id,
+                "statement": acceptance.statement,
+                "capabilityRefs": acceptance.capability_refs,
+                "sourceRefs": acceptance.source_refs,
+                "priority": acceptance.priority
+            })
+        })
+        .collect()
+}
+
+fn compact_business_flow_details(values: &[Value]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|flow| {
+            compact_artifact_value(flow, &["id", "name", "actors", "capabilityRefs", "summary"])
+        })
+        .collect()
+}
+
+fn compact_architecture_quality(aac: &ArchitectureArtifactContract) -> Value {
+    json!({
+        "decisions": aac.architecture_quality.decisions.iter().map(|decision| json!({
+            "decisionId": &decision.decision_id,
+            "category": &decision.category,
+            "decision": &decision.decision,
+            "ownerArtifactRefs": &decision.owner_artifact_refs,
+            "verificationHints": &decision.verification_hints
+        })).collect::<Vec<_>>(),
+        "nfrs": aac.architecture_quality.nfrs.iter().map(|nfr| json!({
+            "nfrId": &nfr.nfr_id,
+            "category": &nfr.category,
+            "target": &nfr.target,
+            "measurement": &nfr.measurement,
+            "ownerArtifactRefs": &nfr.owner_artifact_refs,
+            "verificationStrategy": &nfr.verification_strategy
+        })).collect::<Vec<_>>(),
+        "risks": aac.architecture_quality.risks.iter().map(|risk| json!({
+            "riskId": &risk.risk_id,
+            "category": &risk.category,
+            "impact": &risk.impact,
+            "mitigation": &risk.mitigation,
+            "ownerArtifactRefs": &risk.owner_artifact_refs,
+            "verificationHints": &risk.verification_hints
+        })).collect::<Vec<_>>()
+    })
+}
+
+fn compact_artifact_values(values: &[Value], keys: &[&str]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| compact_artifact_value(value, keys))
+        .collect()
+}
+
+fn compact_artifact_array(value: Option<&Value>, keys: &[&str]) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| compact_artifact_value(item, keys))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+fn compact_artifact_value(value: &Value, keys: &[&str]) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut compact = serde_json::Map::new();
+    for key in keys {
+        if let Some(value) = object.get(*key).filter(|value| !value.is_null()) {
+            compact.insert((*key).to_string(), value.clone());
+        }
+    }
+    Value::Object(compact)
+}
+
+fn compact_application_interactions(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+    aac.engineering_boundary
+        .pointer("/applicationInteractions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|interaction| {
+            let mut compact = serde_json::Map::new();
+            for key in [
+                "interactionId",
+                "providerApplicationRef",
+                "consumerApplicationRefs",
+                "providerModuleRef",
+                "interactionType",
+                "protocol",
+                "interfaceRefs",
+                "qualityTraits",
+                "scopeRefs",
+                "acceptanceRefs",
+            ] {
+                if let Some(value) = interaction.get(key).filter(|value| !value.is_null()) {
+                    compact.insert(key.to_string(), value.clone());
+                }
+            }
+            Value::Object(compact)
+        })
+        .collect()
 }
 
 fn compact_requirement_artifact_hints(artifact_refs: &Value) -> Value {
@@ -3275,14 +4953,7 @@ fn compact_requirement_artifact_hints(artifact_refs: &Value) -> Value {
     }
     let fields = string_array_at(artifact_refs, "fields");
     if !fields.is_empty() {
-        hints.insert(
-            "fieldRefs".to_string(),
-            json!({
-                "count": fields.len(),
-                "examples": fields.iter().take(6).cloned().collect::<Vec<_>>(),
-                "fullSource": "contextProjection.requirementDetailTransfer.architectureDetails.entities"
-            }),
-        );
+        hints.insert("fieldRefs".to_string(), json!(fields));
     }
     Value::Object(hints)
 }
@@ -3338,7 +5009,15 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
             "actionsInScope": ["current-task frontendExperience.actions object"],
             "operationPathsInScope": ["current-task frontendExperience.operationPaths object"],
             "frontendBackendBindings": ["current-task binding between UI action/path and AAC interface when known"],
-            "stateExpectation": ["loading", "success", "error", "empty", "business_blocking"]
+            "stateExpectation": ["loading", "success", "error", "empty", "business_blocking"],
+            "regionsInScope": ["current-task uiSurfaceDecisionContract.regionModel object"],
+            "actionsInContract": ["current-task uiSurfaceDecisionContract.actionModel object"],
+            "statesInContract": ["current-task uiSurfaceDecisionContract.stateModel object"],
+            "qualityRulesInScope": ["current-task uiSurfaceDecisionContract.qualityRules object"],
+            "layoutBaseline": "current-task layout baseline from AAC UI contract",
+            "informationModel": "current-task information model from AAC UI contract",
+            "contentBoundary": "current-task content boundary from AAC UI contract",
+            "bindingContract": "current-task UI/API binding contract from AAC"
         }
     });
     if frontend.get("uiSurfaceRegistry").is_some() {
@@ -3350,147 +5029,231 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
         requirement["uiSurfaceDecisionContractRef"] = json!(
             "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
         );
-        requirement["uiSurfaceOwnership"] = ui_surface_ownership_template(surface_contract);
+        requirement["uiTaskScope"]["contractRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
+        );
+        requirement["uiTaskScope"]["patternDecision"] = surface_contract
+            .get("patternDecision")
+            .cloned()
+            .unwrap_or(Value::Null);
     }
     requirement
 }
 
-fn ui_surface_ownership_template(surface_contract: &Value) -> Value {
-    json!({
-        "source": "AAC frontendExperience.uiSurfaceDecisionContract",
-        "selectionRule": "Select only the UI contract regions, actions, states, and quality rules this task owns. Do not copy unrelated regions or rules into the task.",
-        "patternDecision": {
-            "mode": surface_contract.pointer("/patternDecision/mode").cloned().unwrap_or(Value::Null),
-            "knownPattern": surface_contract.pointer("/patternDecision/knownPattern").cloned().unwrap_or(Value::Null),
-            "primaryKnownPattern": surface_contract.pointer("/patternDecision/primaryKnownPattern").cloned().unwrap_or(Value::Null),
-            "customPattern": surface_contract.pointer("/patternDecision/customPattern").cloned().unwrap_or(Value::Null)
-        },
-        "availableRegionIds": contract_string_ids(surface_contract, "/regionModel", "regionId").into_iter().collect::<Vec<_>>(),
-        "availableActionIds": contract_string_ids(surface_contract, "/actionModel", "actionId").into_iter().collect::<Vec<_>>(),
-        "availableStateKinds": contract_string_ids(surface_contract, "/stateModel", "state").into_iter().collect::<Vec<_>>(),
-        "availableQualityRuleIds": contract_string_ids(surface_contract, "/qualityRules", "ruleId").into_iter().collect::<Vec<_>>(),
-        "regionIdsInScope": [],
-        "actionIdsInScope": [],
-        "stateKindsInScope": [],
-        "qualityRuleIdsInScope": [],
-        "contentBoundaryApplies": true,
-        "responsiveCoverageRequired": true
-    })
-}
-
-fn normalize_ui_surface_ownership(requirement: &mut Value, surface_contract: &Value) {
-    if !requirement
-        .get("uiSurfaceOwnership")
-        .is_some_and(|scope| scope.is_object())
-    {
-        requirement["uiSurfaceOwnership"] = ui_surface_ownership_template(surface_contract);
-    }
-}
-
-fn validate_ui_surface_ownership(
-    task: &TaskDefinition,
-    requirement: &Value,
-    surface_contract: &Value,
-    issues: &mut Vec<delivery_core::RepairIssue>,
-) {
-    let Some(ownership) = requirement
-        .get("uiSurfaceOwnership")
-        .filter(|value| value.is_object())
+fn normalize_ui_task_scope_contract(requirement: &mut Value, surface_contract: &Value) {
+    let Some(scope) = requirement
+        .get_mut("uiTaskScope")
+        .and_then(Value::as_object_mut)
     else {
-        issues.push(issue(
-            "FRONTEND_UI_SURFACE_OWNERSHIP_REQUIRED",
-            "tasks[].frontendExperienceRequirement.uiSurfaceOwnership",
-            "Frontend tasks must declare the task-owned uiSurfaceDecisionContract regions, actions, states, and quality rules.",
-            Some(&task.task_id),
-        ));
         return;
     };
-    validate_surface_scope_ids(
-        task,
-        ownership,
-        "regionIdsInScope",
-        surface_contract,
-        "/regionModel",
-        "regionId",
-        "FRONTEND_UI_SURFACE_REGION_SCOPE_INVALID",
-        issues,
+    scope.insert(
+        "source".to_string(),
+        json!("MCP-derived AAC uiSurfaceDecisionContract projection"),
     );
-    validate_surface_scope_ids(
-        task,
-        ownership,
-        "actionIdsInScope",
-        surface_contract,
-        "/actionModel",
-        "actionId",
-        "FRONTEND_UI_SURFACE_ACTION_SCOPE_INVALID",
-        issues,
+    scope.insert("contractRef".to_string(), json!("sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"));
+    scope.insert(
+        "patternDecision".to_string(),
+        surface_contract
+            .get("patternDecision")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
-    validate_surface_scope_ids(
-        task,
-        ownership,
-        "stateKindsInScope",
-        surface_contract,
-        "/stateModel",
-        "state",
-        "FRONTEND_UI_SURFACE_STATE_SCOPE_INVALID",
-        issues,
+    scope.insert(
+        "regionsInScope".to_string(),
+        selected_scope_objects(
+            scope.get("regionsInScope"),
+            surface_contract,
+            "regionModel",
+            "regionId",
+        ),
     );
-    validate_surface_scope_ids(
-        task,
-        ownership,
-        "qualityRuleIdsInScope",
-        surface_contract,
-        "/qualityRules",
-        "ruleId",
-        "FRONTEND_UI_SURFACE_RULE_SCOPE_INVALID",
-        issues,
+    scope.insert(
+        "actionsInContract".to_string(),
+        selected_scope_objects(
+            scope.get("actionsInContract"),
+            surface_contract,
+            "actionModel",
+            "actionId",
+        ),
+    );
+    scope.insert(
+        "statesInContract".to_string(),
+        selected_scope_objects(
+            scope.get("statesInContract"),
+            surface_contract,
+            "stateModel",
+            "state",
+        ),
+    );
+    scope.insert(
+        "qualityRulesInScope".to_string(),
+        selected_scope_objects(
+            scope.get("qualityRulesInScope"),
+            surface_contract,
+            "qualityRules",
+            "ruleId",
+        ),
+    );
+    let region_ids = scope_object_ids(scope, "regionsInScope", "regionId");
+    let action_ids = scope_object_ids(scope, "actionsInContract", "actionId");
+    let state_ids = scope_object_ids(scope, "statesInContract", "state");
+    let quality_rule_ids = scope_object_ids(scope, "qualityRulesInScope", "ruleId");
+    scope.insert(
+        "layoutBaseline".to_string(),
+        scoped_layout_baseline(surface_contract.get("layoutModel"), &region_ids),
+    );
+    scope.insert(
+        "informationModel".to_string(),
+        scoped_information_model(surface_contract.get("informationModel")),
+    );
+    scope.insert(
+        "contentBoundary".to_string(),
+        scoped_content_boundary(surface_contract.get("contentBoundary")),
+    );
+    scope.insert(
+        "bindingContract".to_string(),
+        scoped_binding_contract(
+            surface_contract.get("semanticFacts"),
+            &region_ids,
+            &action_ids,
+            &state_ids,
+            &quality_rule_ids,
+        ),
     );
 }
 
-fn validate_surface_scope_ids(
-    task: &TaskDefinition,
-    ownership: &Value,
-    ownership_key: &str,
-    surface_contract: &Value,
-    contract_pointer: &str,
-    contract_id_key: &str,
-    issue_code: &str,
-    issues: &mut Vec<delivery_core::RepairIssue>,
-) {
-    let Some(items) = ownership.get(ownership_key).and_then(Value::as_array) else {
-        issues.push(issue(
-            issue_code,
-            &format!("tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"),
-            "uiSurfaceOwnership scope fields must be arrays.",
-            Some(&task.task_id),
-        ));
-        return;
+fn scope_object_ids(
+    scope: &serde_json::Map<String, Value>,
+    key: &str,
+    id_key: &str,
+) -> BTreeSet<String> {
+    scope
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_key).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn scoped_layout_baseline(layout: Option<&Value>, region_ids: &BTreeSet<String>) -> Value {
+    let Some(layout) = layout.and_then(Value::as_object) else {
+        return Value::Null;
     };
-    let allowed = contract_string_ids(surface_contract, contract_pointer, contract_id_key);
-    for item in items {
-        let Some(value) = item.as_str() else {
-            issues.push(issue(
-                issue_code,
-                &format!(
-                    "tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"
-                ),
-                "uiSurfaceOwnership scope entries must be strings.",
-                Some(&task.task_id),
-            ));
-            return;
-        };
-        if !allowed.is_empty() && !allowed.contains(value) {
-            issues.push(issue(
-                issue_code,
-                &format!(
-                    "tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"
-                ),
-                "uiSurfaceOwnership scope entries must reference ids declared by AAC uiSurfaceDecisionContract.",
-                Some(&task.task_id),
-            ));
-            return;
+    let mut result = serde_json::Map::new();
+    for key in [
+        "density",
+        "shell",
+        "responsiveModel",
+        "navigationPlacement",
+        "contentPlacement",
+    ] {
+        if let Some(value) = layout.get(key) {
+            result.insert(key.to_string(), value.clone());
         }
     }
+    if let Some(primary) = layout.get("primaryWorkRegionId") {
+        if primary.as_str().is_none_or(|id| region_ids.contains(id)) {
+            result.insert("primaryWorkRegionId".to_string(), primary.clone());
+        }
+    }
+    Value::Object(result)
+}
+
+fn scoped_information_model(information: Option<&Value>) -> Value {
+    let Some(information) = information.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+    let mut result = serde_json::Map::new();
+    for key in ["primaryObjects", "fields", "scanOrder", "secondaryObjects"] {
+        if let Some(value) = information.get(key) {
+            result.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(result)
+}
+
+fn scoped_content_boundary(content: Option<&Value>) -> Value {
+    let Some(content) = content.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+    let mut result = serde_json::Map::new();
+    for key in [
+        "forbiddenUserVisibleContent",
+        "allowedUserVisibleContent",
+        "requiredBusinessCopy",
+        "copyTone",
+    ] {
+        if let Some(value) = content.get(key) {
+            result.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(result)
+}
+
+fn scoped_binding_contract(
+    facts: Option<&Value>,
+    region_ids: &BTreeSet<String>,
+    action_ids: &BTreeSet<String>,
+    state_ids: &BTreeSet<String>,
+    quality_rule_ids: &BTreeSet<String>,
+) -> Value {
+    let Some(facts) = facts.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+    let mut result = serde_json::Map::new();
+    for key in [
+        "userJobs",
+        "informationShapes",
+        "operationModels",
+        "riskFactors",
+        "navigationModel",
+        "devicePosture",
+        "productMode",
+    ] {
+        if let Some(value) = facts.get(key) {
+            result.insert(key.to_string(), value.clone());
+        }
+    }
+    result.insert("regionRefs".to_string(), json!(region_ids));
+    result.insert("actionRefs".to_string(), json!(action_ids));
+    result.insert("stateRefs".to_string(), json!(state_ids));
+    result.insert("qualityRuleRefs".to_string(), json!(quality_rule_ids));
+    Value::Object(result)
+}
+
+fn selected_scope_objects(
+    requested: Option<&Value>,
+    contract: &Value,
+    array_key: &str,
+    id_key: &str,
+) -> Value {
+    let allowed = contract
+        .get(array_key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let requested_ids = requested
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::to_string)
+                .or_else(|| item.get(id_key).and_then(Value::as_str).map(str::to_string))
+        })
+        .collect::<BTreeSet<_>>();
+    let selected = allowed
+        .into_iter()
+        .filter(|item| {
+            item.get(id_key)
+                .and_then(Value::as_str)
+                .is_some_and(|id| requested_ids.contains(id))
+        })
+        .collect();
+    Value::Array(selected)
 }
 
 fn contract_string_ids(
@@ -3512,17 +5275,332 @@ fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value 
     let Some(frontend) = aac.frontend_experience.as_ref() else {
         return Value::Null;
     };
+    let surfaces = frontend
+        .get("surfaces")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "surfaceId",
+                            "name",
+                            "kind",
+                            "purpose",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "operationPathRefs",
+                            "workflowRefs",
+                            "interfaceRefs",
+                            "regionRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let data_views = frontend
+        .get("dataViews")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "viewId",
+                            "name",
+                            "purpose",
+                            "objectRefs",
+                            "fieldRefs",
+                            "interfaceRefs",
+                            "stateRefs",
+                            "surfaceRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let actions = frontend
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "actionId",
+                            "name",
+                            "label",
+                            "purpose",
+                            "interfaceRefs",
+                            "operationPathRefs",
+                            "stateRefs",
+                            "surfaceRefs",
+                            "workflowRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let operation_paths = frontend
+        .get("operationPaths")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "pathId",
+                            "name",
+                            "purpose",
+                            "surfaceRef",
+                            "workflowRef",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "interfaceRefs",
+                            "steps",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let decision_contract = frontend
+        .get("uiSurfaceDecisionContract")
+        .map(compact_ui_surface_decision_contract)
+        .unwrap_or(Value::Null);
     json!({
         "required": frontend.get("required").cloned().unwrap_or(Value::Bool(false)),
         "experienceLevel": frontend.get("experienceLevel").cloned().unwrap_or(Value::Null),
-        "surfaces": frontend.get("surfaces").cloned().unwrap_or(Value::Array(vec![])),
-        "dataViews": frontend.get("dataViews").cloned().unwrap_or(Value::Array(vec![])),
-        "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
-        "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
-        "uiSurfaceRegistry": frontend.get("uiSurfaceRegistry").cloned().unwrap_or(Value::Null),
-        "uiSurfaceDecisionContract": frontend.get("uiSurfaceDecisionContract").cloned().unwrap_or(Value::Null),
-        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
+        "surfaces": surfaces,
+        "dataViews": data_views,
+        "actions": actions,
+        "operationPaths": operation_paths,
+        "uiSurfaceRegistry": compact_ui_surface_registry(frontend.get("uiSurfaceRegistry")),
+        "uiSurfaceDecisionContract": decision_contract,
+        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null),
+        "fullSource": "sourceRefs.architectureArtifactContractRef#/frontendExperience"
     })
+}
+
+fn compact_ui_surface_registry(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    if let Some(items) = value.as_array() {
+        return Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "surfaceId",
+                            "name",
+                            "regionRefs",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "operationPathRefs",
+                            "workflowRefs",
+                        ],
+                    )
+                })
+                .collect(),
+        );
+    }
+    compact_artifact_value(
+        value,
+        &[
+            "surfaceRefs",
+            "regionRefs",
+            "dataViewRefs",
+            "actionRefs",
+            "stateRefs",
+            "operationPathRefs",
+            "workflowRefs",
+        ],
+    )
+}
+
+fn compact_ui_surface_decision_contract(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut compact = serde_json::Map::new();
+    if let Some(value) = object.get("contractId").filter(|value| !value.is_null()) {
+        compact.insert("contractId".to_string(), value.clone());
+    }
+    if let Some(value) = object.get("patternDecision") {
+        compact.insert(
+            "patternDecision".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "mode",
+                    "knownPattern",
+                    "primaryKnownPattern",
+                    "customPattern",
+                ],
+            ),
+        );
+    }
+    for (key, id_key, fields) in [
+        (
+            "regionModel",
+            "regionId",
+            [
+                "regionId",
+                "role",
+                "label",
+                "purpose",
+                "layout",
+                "dataViewRefs",
+                "actionRefs",
+                "stateRefs",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "actionModel",
+            "actionId",
+            [
+                "actionId",
+                "kind",
+                "label",
+                "purpose",
+                "interfaceRefs",
+                "operationPathRefs",
+                "stateRefs",
+                "feedbackRefs",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "stateModel",
+            "state",
+            [
+                "state",
+                "description",
+                "trigger",
+                "feedback",
+                "blocking",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "qualityRules",
+            "ruleId",
+            ["ruleId", "category", "requirement", "verification", "scope"].as_slice(),
+        ),
+    ] {
+        compact.insert(
+            key.to_string(),
+            compact_surface_contract_array(object.get(key), id_key, fields),
+        );
+    }
+    if let Some(value) = object.get("layoutModel") {
+        compact.insert(
+            "layoutModel".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "density",
+                    "shell",
+                    "responsiveModel",
+                    "navigationPlacement",
+                    "contentPlacement",
+                    "primaryWorkRegionId",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("informationModel") {
+        compact.insert(
+            "informationModel".to_string(),
+            compact_artifact_value(
+                value,
+                &["primaryObjects", "fields", "scanOrder", "secondaryObjects"],
+            ),
+        );
+    }
+    if let Some(value) = object.get("contentBoundary") {
+        compact.insert(
+            "contentBoundary".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "forbiddenUserVisibleContent",
+                    "allowedUserVisibleContent",
+                    "requiredBusinessCopy",
+                    "copyTone",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("semanticFacts") {
+        compact.insert(
+            "semanticFacts".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "userJobs",
+                    "informationShapes",
+                    "operationModels",
+                    "riskFactors",
+                    "navigationModel",
+                    "devicePosture",
+                    "productMode",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("sourceRefs").filter(|value| !value.is_null()) {
+        compact.insert("sourceRefs".to_string(), value.clone());
+    }
+    Value::Object(compact)
+}
+
+fn compact_surface_contract_array(value: Option<&Value>, id_key: &str, fields: &[&str]) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let mut compact = compact_artifact_value(item, fields);
+                if compact.get(id_key).is_none() {
+                    if let Some(id) = item.get(id_key) {
+                        compact[id_key] = id.clone();
+                    }
+                }
+                compact
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
@@ -3583,7 +5661,7 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
                 continue;
             }
         }
-        let steps = array_at(flow, "steps");
+        let steps = array_at(flow, "happyPath");
         if steps.is_empty() {
             continue;
         }
@@ -3617,10 +5695,9 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
         );
 
         for step in steps {
-            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
-            if candidate_interface_refs.is_empty() {
-                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
-            }
+            let candidate_interface_refs = string_at(step, "interactionRef")
+                .into_iter()
+                .collect::<Vec<_>>();
             let executable_interfaces = candidate_interface_refs
                 .iter()
                 .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
@@ -3654,7 +5731,7 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
                 "entry": flow.get("entry").cloned().unwrap_or(Value::Null),
                 "derivation": {
                     "source": "aac_frontend_surface_userflow_interface",
-                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, user interaction flow steps, and executable interfaces with request/response shape."
+                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, structured user-flow happy-path steps, and executable interfaces with request/response shape."
                 },
                 "requiredDataBindingMode": "wired",
                 "satisfiedDataBindingModes": ["wired"],
@@ -3750,11 +5827,6 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn push_unique_strings(values: &mut Vec<String>, next: Vec<String>) {
-    values.extend(next);
-    *values = unique_strings(std::mem::take(values));
-}
-
 fn is_executable_interface(interface: &Value) -> bool {
     matches!(
         string_at(interface, "type").as_deref(),
@@ -3811,7 +5883,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "assignmentRule": "For every covered current-phase detail row, choose the task that owns the matching artifactRefHints through task.writeBoundary.artifactRefs. Use kind, impactTags, and lifecycleStage to break ties between implementation tasks.",
             "ownerTaskBoundary": "Assign business requirement details to implementation owner tasks, not broad verification, runtime closure, or handoff tasks.",
             "verificationRule": "After assigning a detail to a task, include the same detailId in that task's verificationIntents[].requirementDetailRefs.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically fills a missing detail owner only when exactly one owner task can be inferred; ambiguous ownership remains repairable."
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically assigns each covered detail to exactly one owner task (the canonical implementation owner) and removes duplicate detail, scope, acceptance, and artifact ownership from verification or closure tasks.",
+            "artifactOwnershipNormalization": "When candidate tasks repeat the same accepted artifact ref, Loom keeps the detail-derived owner; otherwise it selects one deterministic implementation owner before deriving quality and API requirements."
         },
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",
@@ -3821,9 +5894,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "required": aac.frontend_experience.as_ref().and_then(|value| value.get("required")).and_then(Value::as_bool).unwrap_or(false),
             "requirementTemplate": "outputContract.frontendExperienceRequirementTemplate",
             "uiSurfaceDecisionContractSource": "outputContract.frontendExperienceRequirementTemplate.uiSurfaceDecisionContractRef",
-            "uiSurfaceOwnershipSource": "outputContract.frontendExperienceRequirementTemplate.uiSurfaceOwnership",
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
-            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, data views, actions, layout, visual system, or content boundary must fill frontendExperienceRequirement.uiSurfaceOwnership from AAC uiSurfaceDecisionContract and uiTaskScope from related frontend arrays. Select only the current task's regions, actions, states, quality rules, surfaces, data views, operation paths, bindings, and ownershipDimensions.",
+            "taskScopeRule": "MCP derives one frontendExperienceRequirement.uiTaskScope from AAC uiSurfaceDecisionContract and task-owned refs. Select only the current task's regions, actions, states, quality rules, surfaces, data views, operation paths, bindings, layout, information model, and content boundary.",
             "ownershipDimensionRule": "ownershipDimensions describe what this business task owns; they are not a task-splitting strategy. Use surface, data_view, action, state, layout, visual_system, content_boundary, and integration_feedback only when the task changes that concern."
         },
         "workflowClosureRules": {
@@ -3842,8 +5914,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
-            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
-            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement scope and evidence expectations from that template. Loom derives runtimeDeliveryRef, contractField, and checkId values during accept.",
+            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified. Loom derives the accepted RuntimeDelivery reference, contract fields, and check ids during accept, so the candidate must not invent those machine fields.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure. Declare the closure task and its group placement; Loom materializes the complete runtimeDeliveryRequirement from the accepted RuntimeDeliveryContract even when the candidate omits that machine-owned object.",
             "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
             "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
         },
@@ -3854,12 +5926,76 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level engineeringQualityRequirements and task engineeringQualityRequirementRefs; do not duplicate full quality requirements inside every task.",
             "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
         },
+        "codeReferenceRules": {
+            "authority": "MCP derives task-scoped code reference groups from the intersection of TechnicalBaseline stack signals and task-owned implementation capabilities; agents must not author referenceLoadPlan or reference group paths.",
+            "frameworkCapabilityActions": {
+                "frontendNavigation": ["create_or_update_frontend_navigation"],
+                "reactiveClientFlow": ["implement_reactive_client_flow"],
+                "sharedClientState": ["implement_shared_client_state"],
+                "frontendPerformance": ["optimize_frontend_performance"],
+                "serverRenderedComponent": ["implement_server_rendered_component"],
+                "serverMutation": ["implement_server_mutation"],
+                "frontendFrameworkVersionFeature": ["implement_frontend_framework_version_feature"],
+                "mobilePlatformBehavior": ["implement_mobile_platform_behavior"],
+                "clientStorage": ["implement_client_storage"],
+                "languageVersionFeature": ["implement_language_version_feature"],
+                "genericTypeAbstraction": ["implement_generic_type_abstraction"],
+                "dependencyAbstraction": ["implement_dependency_abstraction"],
+                "moduleStructure": ["refactor_module_structure"],
+                "runtimePerformance": ["optimize_runtime_performance"],
+                "security": ["implement_authentication_or_authorization"],
+                "async": ["implement_async_processing"],
+                "cache": ["implement_cache_policy"],
+                "externalIntegration": ["implement_external_service_integration"],
+                "resilience": ["implement_resilience_policy"],
+                "serviceRoutingOrDiscovery": ["configure_service_routing_or_discovery"],
+                "observability": ["implement_observability"],
+                "frameworkMigration": ["migrate_framework_implementation"]
+            },
+            "frameworkCapabilityRule": "Use these implementationActions only when the task really owns the corresponding capability. They are cross-framework implementation facts; MCP maps them to the framework selected by TechnicalBaseline.",
+            "structuredCapabilitySources": {
+                "frontendNavigation": "Use create_or_update_frontend_navigation only for the task that owns route definitions, route parameters, guards, resolvers, deep links, nested navigation, or equivalent framework navigation configuration.",
+                "reactiveClientFlow": "Use implement_reactive_client_flow only for a task that owns stream cancellation, ordering, fan-out, subscription lifecycle, or other reactive client behavior beyond a simple one-shot binding.",
+                "sharedClientState": "Use implement_shared_client_state only for the task that owns a selected shared state container, reducer/store, effects, selectors, or a cross-surface client state lifecycle. Local component state does not use this action.",
+                "frontendPerformance": "Use optimize_frontend_performance only for a task that owns a measurable client rendering, rebuild, list, image, animation, memory, startup, or interaction-latency risk and its verification evidence.",
+                "serverRenderedComponent": "Use implement_server_rendered_component only for a task that owns a framework server-rendered component boundary, server/client composition, streaming, hydration, or serializable handoff.",
+                "serverMutation": "Use implement_server_mutation only for a task that owns a framework server-side form/action mutation, its authorization and validation, result state, and cache/readback reconciliation.",
+                "frontendFrameworkVersionFeature": "Use implement_frontend_framework_version_feature only for a frontend task that intentionally owns an API available from the accepted framework version and whose implementation or fallback differs from the repository's baseline patterns.",
+                "mobilePlatformBehavior": "Use implement_mobile_platform_behavior only for a task that owns iOS/Android-specific behavior, native APIs or modules, permissions, safe-area/keyboard/status-bar integration, gestures, or hardware-back semantics.",
+                "clientStorage": "Use implement_client_storage only for a task that owns client-side persistence, secure device storage, persisted drafts/preferences/session state, hydration, migration, expiry, or identity-scoped cleanup.",
+                "languageVersionFeature": "Use implement_language_version_feature only for a task that intentionally owns language-standard/version APIs whose implementation or fallback differs from the repository baseline; include build configuration ownership when the declared compiler/language target changes.",
+                "genericTypeAbstraction": "Use implement_generic_type_abstraction only for a task that owns a reusable generic/template/type-parameter contract with real consumers, constraints, and verification; do not infer it from prose examples or ordinary collection use.",
+                "dependencyAbstraction": "Use implement_dependency_abstraction only for a task that owns a consumer-facing interface/protocol/trait/adapter seam with concrete consumers, implementations, lifecycle/error semantics, and verification; do not create it only to mirror one implementation.",
+                "moduleStructure": "Use refactor_module_structure only for a task that owns module/package/project boundaries, entry-point placement, import visibility, workspace/module files, build tags, generated-code ownership, or dependency direction and verifies affected build targets.",
+                "runtimePerformance": "Use optimize_runtime_performance only for a task that owns a measured CPU, allocation, memory-layout, throughput, latency, binary-size, or runtime resource bottleneck and its benchmark/profile plus correctness evidence.",
+                "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
+                "async": "A task owning an event/job application interaction uses implement_async_processing.",
+                "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
+                "externalIntegration": "A task owning an external_adapter application interaction uses implement_external_service_integration.",
+                "resilience": "A task owning an application-interaction retry operationalPolicy or an applicable availability/reliability decision uses implement_resilience_policy. An HTTP interface retryPolicy alone describes caller-visible API behavior and does not activate internal retries.",
+                "observability": "A task owning an observability/operability architecture-quality ref uses implement_observability.",
+                "serviceRoutingOrDiscovery": "Use configure_service_routing_or_discovery only for an explicitly accepted service-routing, discovery, gateway, or centralized-config capability.",
+                "frameworkMigration": "Use migrate_framework_implementation only when the task explicitly owns behavior parity or an accepted contract transition from an existing framework implementation."
+            },
+            "structuredCapabilityOwnershipRule": "Assign a capability action only to the task whose artifactRefs own the matching interface, provider module, decision, NFR, or risk. Do not infer capability actions from framework availability or generic task prose.",
+            "unmappedStackRule": "When codeQualitySeed.unmappedSignals is non-empty, preserve the accepted stack and repository conventions; do not substitute a nearby language or framework profile.",
+            "persistenceActions": {
+                "schema": ["create_or_update_entity", "create_or_update_persistence", "create_entity_migration", "create_entity_crud"],
+                "query": ["create_entity_repository", "create_entity_crud", "create_or_update_persistence_query", "optimize_persistence_query", "implement_analytical_query"],
+                "transaction": ["create_or_update_persistence", "create_entity_repository", "create_entity_crud", "create_or_update_persistence_query", "implement_persistence_transaction"],
+                "performance": ["optimize_persistence_query"],
+                "analytics": ["implement_analytical_query"],
+                "persistenceTest": ["add_or_update_persistence_tests"]
+            },
+            "dialectRule": "When the accepted persistence provider is MySQL or PostgreSQL, MCP adds only the provider overlay matching the assigned persistence subject. MariaDB is not silently treated as MySQL.",
+            "nonSelectionRule": "Do not attach framework references solely because a language or framework is present in TechnicalBaseline. Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
+        },
         "architectureQualityRules": {
-            "requirementSource": "outputContract.architectureQualityRequirementTemplate",
-            "architectureQualitySource": "sourceRefs.architectureArtifactContractRef#/architectureQuality",
-            "referenceRule": "Use task.writeBoundary.artifactRefs.decisions, nfrs, and risks to assign current-phase architecture quality obligations. Do not inline full ADR, NFR, or risk objects inside tasks.",
-            "assignmentRule": "Every current-phase decision, NFR, and risk that affects implementation or verification should be assigned to at least one task that owns the related module, interface, data model, runtime surface, or workflow.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level architectureQualityRequirements and task architectureQualityRequirementRefs from task artifact refs.",
+            "requirementSource": "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality plus task-owned modules and interfaces",
+            "architectureQualitySource": "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality",
+            "referenceRule": "Do not write task.writeBoundary.artifactRefs.decisions, nfrs, or risks and do not inline full ADR, NFR, or risk objects inside tasks. Loom derives those refs from the accepted architecture ownerArtifactRefs and the task-owned modules/interfaces.",
+            "assignmentRule": "Tasks must identify the modules and interfaces they own. Loom uses those artifact refs to assign every applicable architecture decision, NFR, and risk deterministically.",
+            "acceptNormalization": "loom.taskPlanAcceptFile derives architecture quality artifact refs, top-level architectureQualityRequirements, and task architectureQualityRequirementRefs from accepted architecture ownership.",
             "verificationRule": "Assigned tasks must include verificationIntents whose summaries can prove the referenced architecture decision, NFR, or risk mitigation was respected."
         },
         "apiContractRules": {
@@ -3867,7 +6003,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "requirementSource": "outputContract.apiContractRequirementTemplate",
             "interfaceSource": "contextProjection.apiInterfaces (copied from the accepted AAC interfaces)",
             "exposureSource": "contextProjection.apiContract (copied from the accepted AAC API contract)",
-            "assignmentRule": "Tasks that create or change current-phase HTTP API implementations, frontend/client bindings, integration tests, or verification flows must include the accepted interface ids in task.writeBoundary.artifactRefs.interfaces. Loom derives one task-scoped API contract requirement for every such task; frontend/client tasks consume the contract without becoming API implementation owners.",
+            "assignmentRule": "Loom assigns each accepted interface id to one implementation owner in task.writeBoundary.artifactRefs.interfaces. Client, integration, and verification tasks receive the same contract in consumedInterfaces and the derived API requirement; they must not claim duplicate write ownership.",
             "implementationRule": "API tasks must preserve request schema, response schema, status codes, error schema, auth policy, and pagination policy declared by the AAC interface.",
             "verificationRule": "API tasks should include verification intents that prove at least the declared success path and important business or validation error path. Collection endpoints should also prove declared pagination/filter behavior.",
             "nonDuplicationRule": "Do not inline full API requirements inside every task; use interface refs and the generated task apiContractRequirementRefs."
@@ -3877,7 +6013,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "seedSource": "codeQualitySeed",
             "requirementSource": "outputContract.codeQualityRequirementTemplate",
             "assignmentRule": "loom.taskPlanAcceptFile derives task codeQualityRequirementRefs from TechnicalBaseline stack signals and task scope; do not inline full code quality requirements inside every task.",
-            "referenceRule": "Use codeQualitySeed.codeStackSignals to choose task scope and implementation practices. Do not write codeQualityRequirementRefs or inline reference paths; Loom derives the task-scoped requirement and referenceLoadPlan during accept. Groups are semantic evidence labels, not path maps.",
+            "referenceRule": "Use codeQualitySeed.codeStackSignals only to describe accurate task ownership. Do not write codeQualityRequirementRefs, reference groups, or reference paths; Loom derives task-scoped requirements and referenceLoadPlan during accept.",
             "nonDuplicationRule": "Do not repeat language or framework best-practice prose in task objective or verification intents; use codeQualityRequirementRefs and TaskResult codeQualityEvidence."
         }
     })
@@ -3896,9 +6032,7 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "requirementId": "code-quality-{taskId}",
         "kind": "language_implementation_quality",
         "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
-        "referenceGroupSource": "codeQualitySeed.techReferenceProfile.groups.code",
-        "referenceLoadPlanSource": "Generated by loom.taskPlanAcceptFile from selected reference groups; agents must read only files listed in each requirement referenceLoadPlan.",
-        "packageNamingPolicySource": "codeQualitySeed.packageNamingPolicy",
+        "derivationAuthority": "loom.taskPlanAcceptFile derives reference groups and referenceLoadPlan from codeStackSignals plus accepted task ownership.",
         "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
         "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
@@ -3920,33 +6054,6 @@ fn engineering_quality_requirement_template(
         "riskFieldKinds": persistence_risk_field_kinds(),
         "verificationObligations": persistence_verification_obligations(),
         "taskRefRule": "Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task."
-    })
-}
-
-fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
-    if aac.architecture_quality.decisions.is_empty()
-        && aac.architecture_quality.nfrs.is_empty()
-        && aac.architecture_quality.risks.is_empty()
-    {
-        return Value::Null;
-    }
-    json!({
-        "requirementId": "aqr-current-001",
-        "kind": "architecture_quality",
-        "decisionRefs": aac.architecture_quality.decisions.iter().map(|item| item.decision_id.clone()).collect::<Vec<_>>(),
-        "nfrRefs": aac.architecture_quality.nfrs.iter().map(|item| item.nfr_id.clone()).collect::<Vec<_>>(),
-        "riskRefs": aac.architecture_quality.risks.iter().map(|item| item.risk_id.clone()).collect::<Vec<_>>(),
-        "implementationObligations": [
-            "Respect the referenced architecture decision in changed modules, interfaces, data model, runtime, and workflow code.",
-            "Implement the referenced risk mitigation when the task owns the affected artifact.",
-            "Keep the referenced NFR verifiable through task verification evidence when it applies to changed code."
-        ],
-        "verificationObligations": [
-            "Use task.verificationIntents as the verification id source.",
-            "TaskResult architectureQualityEvidence must cite requirementId and verificationIds for the task-owned architecture quality refs.",
-            "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
-        ],
-        "taskRefRule": "Loom attaches generated requirements through architectureQualityRequirementRefs during accept; agents must not write that field or duplicate full decisions, NFRs, or risks inside every task."
     })
 }
 
@@ -4058,6 +6165,109 @@ fn normalize_architecture_quality_requirements(
     requirements
 }
 
+fn normalize_architecture_quality_artifact_refs(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) {
+    for task in tasks {
+        let task_modules = task
+            .write_boundary
+            .artifact_refs
+            .modules
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let task_interfaces = task
+            .write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        task.write_boundary.artifact_refs.decisions = aac
+            .architecture_quality
+            .decisions
+            .iter()
+            .filter(|decision| {
+                owner_refs_intersect(
+                    &decision.owner_artifact_refs.modules,
+                    &decision.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                )
+            })
+            .map(|decision| decision.decision_id.clone())
+            .collect();
+        task.write_boundary.artifact_refs.nfrs = aac
+            .architecture_quality
+            .nfrs
+            .iter()
+            .filter(|nfr| {
+                owner_refs_intersect(
+                    &nfr.owner_artifact_refs.modules,
+                    &nfr.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                )
+            })
+            .map(|nfr| nfr.nfr_id.clone())
+            .collect();
+        task.write_boundary.artifact_refs.risks = aac
+            .architecture_quality
+            .risks
+            .iter()
+            .filter(|risk| {
+                owner_refs_intersect(
+                    &risk.owner_artifact_refs.modules,
+                    &risk.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                ) || risk
+                    .owner_artifact_refs
+                    .decisions
+                    .iter()
+                    .any(|decision_id| {
+                        aac.architecture_quality.decisions.iter().any(|decision| {
+                            decision.decision_id == *decision_id
+                                && owner_refs_intersect(
+                                    &decision.owner_artifact_refs.modules,
+                                    &decision.owner_artifact_refs.interfaces,
+                                    &task_modules,
+                                    &task_interfaces,
+                                )
+                        })
+                    })
+                    || risk.owner_artifact_refs.nfrs.iter().any(|nfr_id| {
+                        aac.architecture_quality.nfrs.iter().any(|nfr| {
+                            nfr.nfr_id == *nfr_id
+                                && owner_refs_intersect(
+                                    &nfr.owner_artifact_refs.modules,
+                                    &nfr.owner_artifact_refs.interfaces,
+                                    &task_modules,
+                                    &task_interfaces,
+                                )
+                        })
+                    })
+            })
+            .map(|risk| risk.risk_id.clone())
+            .collect();
+    }
+}
+
+fn owner_refs_intersect(
+    owner_modules: &[String],
+    owner_interfaces: &[String],
+    task_modules: &BTreeSet<String>,
+    task_interfaces: &BTreeSet<String>,
+) -> bool {
+    owner_modules
+        .iter()
+        .any(|owner| task_modules.contains(owner))
+        || owner_interfaces
+            .iter()
+            .any(|owner| task_interfaces.contains(owner))
+}
+
 fn normalize_api_contract_requirements(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
@@ -4082,10 +6292,9 @@ fn normalize_api_contract_requirements(
         let mut interface_refs = task
             .write_boundary
             .artifact_refs
-            .interfaces
-            .iter()
-            .filter(|interface_ref| http_api_refs.contains(*interface_ref))
-            .cloned()
+            .all_interfaces()
+            .into_iter()
+            .filter(|interface_ref| http_api_refs.contains(interface_ref))
             .collect::<Vec<_>>();
         if interface_refs.is_empty() && task_can_consume_api_contract(task) {
             interface_refs = aac
@@ -4100,7 +6309,11 @@ fn normalize_api_contract_requirements(
                             string_at(flow, "flowId").as_deref() == Some(flow_ref.as_str())
                         })
                 })
-                .flat_map(|flow| string_array_at(flow, "interfaceRefs"))
+                .flat_map(|flow| {
+                    array_at(flow, "happyPath")
+                        .into_iter()
+                        .filter_map(|step| string_at(step, "interactionRef"))
+                })
                 .filter(|interface_ref| {
                     http_api_refs.contains(interface_ref)
                         && allowed_interface_refs.contains(interface_ref)
@@ -4108,12 +6321,23 @@ fn normalize_api_contract_requirements(
                 .collect::<Vec<_>>();
             interface_refs.sort();
             interface_refs.dedup();
-            if !interface_refs.is_empty() {
-                task.write_boundary.artifact_refs.interfaces = interface_refs.clone();
-            }
+            // This is a consumer projection. The accepted owner boundary is
+            // intentionally not widened by API requirement derivation.
         }
         if interface_refs.is_empty() || !task_uses_api_contract(task) {
             continue;
+        }
+        if !task_owns_api_contract(task) {
+            for interface_ref in &interface_refs {
+                push_unique(
+                    &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                    interface_ref.clone(),
+                );
+            }
+            task.write_boundary
+                .artifact_refs
+                .interfaces
+                .retain(|interface_ref| !interface_refs.contains(interface_ref));
         }
         let requirement_id = format!("api-contract-{}", task.task_id);
         requirement_ids_by_task
@@ -4137,14 +6361,222 @@ fn normalize_api_contract_requirements(
     requirements
 }
 
+fn normalize_structured_verification_intents(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) {
+    let persistence_task_ids = persistence_quality_task_ids(tasks)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for task in tasks.iter_mut() {
+        let interface_refs = task_interface_refs_for_verification(task);
+        let interfaces = aac
+            .interfaces
+            .iter()
+            .filter(|interface| {
+                string_at(interface, "interfaceId").is_some_and(|id| interface_refs.contains(&id))
+            })
+            .collect::<Vec<_>>();
+
+        for interface in interfaces {
+            let Some(interface_id) = string_at(interface, "interfaceId") else {
+                continue;
+            };
+            let method = string_at(interface, "method").unwrap_or_else(|| "operation".to_string());
+            let path = string_at(interface, "path").unwrap_or_else(|| interface_id.clone());
+            let mut obligations = vec![(
+                "success",
+                format!("Verify the declared success response for {method} {path}."),
+            )];
+            if matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
+                obligations.push((
+                    "error",
+                    format!("Verify the declared validation or business error response for {method} {path}."),
+                ));
+            }
+            if interface_has_pagination(interface) {
+                if task_is_frontend_task(task) {
+                    obligations.extend([
+                        (
+                            "pagination-state",
+                            format!("Verify the UI owns loading, current-page, page-size, and empty-page state for {method} {path}."),
+                        ),
+                        (
+                            "pagination-navigation",
+                            format!("Verify the UI page navigation action requests the declared page for {method} {path}."),
+                        ),
+                        (
+                            "pagination-filter-reset",
+                            format!("Verify changing the declared filter resets the UI page before requesting {method} {path}."),
+                        ),
+                    ]);
+                } else {
+                    obligations.push((
+                        "pagination",
+                        format!("Verify the declared pagination contract for {method} {path}."),
+                    ));
+                }
+            }
+            if interface_has_normalization(interface) {
+                obligations.push((
+                    "normalization",
+                    format!("Verify declared input normalization before validation for {method} {path}."),
+                ));
+            }
+            if interface_has_idempotency(interface) {
+                obligations.push((
+                    "duplicate",
+                    format!(
+                        "Verify the declared duplicate-submission behavior for {method} {path}."
+                    ),
+                ));
+            }
+            if interface_requires_auth(interface) && task_is_frontend_task(task) {
+                obligations.push((
+                    "permission",
+                    format!(
+                        "Verify permission denial feedback for the UI binding of {method} {path}."
+                    ),
+                ));
+            }
+            if persistence_task_ids.contains(&task.task_id) && is_mutating_interface(&method) {
+                obligations.push((
+                    "save-failure",
+                    format!("Verify the declared persistence or save failure response for {method} {path}."),
+                ));
+            }
+            for (kind, behavior) in obligations {
+                let verification_id = format!(
+                    "verify-api-{}-{}-{}",
+                    normalized_identifier(&task.task_id),
+                    normalized_identifier(&interface_id),
+                    kind
+                );
+                if task
+                    .verification_intents
+                    .iter()
+                    .any(|intent| intent.verification_id == verification_id)
+                {
+                    continue;
+                }
+                task.verification_intents.push(VerificationIntent {
+                    verification_id,
+                    acceptance_refs: string_array_at(interface, "acceptanceRefs"),
+                    requirement_detail_refs: Vec::new(),
+                    behavior,
+                    preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+                    acceptable_evidence: vec![
+                        VerificationEvidence::AutomatedTest,
+                        VerificationEvidence::RuntimeApiCheck,
+                    ],
+                });
+            }
+        }
+
+        if persistence_task_ids.contains(&task.task_id)
+            && !task.verification_intents.iter().any(|intent| {
+                intent.verification_id
+                    == format!(
+                        "verify-persistence-restart-{}",
+                        normalized_identifier(&task.task_id)
+                    )
+            })
+        {
+            task.verification_intents.push(VerificationIntent {
+                verification_id: format!(
+                    "verify-persistence-restart-{}",
+                    normalized_identifier(&task.task_id)
+                ),
+                acceptance_refs: Vec::new(),
+                requirement_detail_refs: Vec::new(),
+                behavior:
+                    "Verify persisted state remains available after the application restarts."
+                        .to_string(),
+                preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+                acceptable_evidence: vec![
+                    VerificationEvidence::AutomatedTest,
+                    VerificationEvidence::RuntimeApiCheck,
+                ],
+            });
+        }
+    }
+}
+
+fn task_interface_refs_for_verification(task: &TaskDefinition) -> BTreeSet<String> {
+    let mut refs = task
+        .write_boundary
+        .artifact_refs
+        .all_interfaces()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let Some(scope) = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.pointer("/uiTaskScope"))
+    else {
+        return refs;
+    };
+    scope
+        .get("frontendBackendBindings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|binding| binding.get("interfaces").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|interface| string_at(interface, "interfaceId"))
+        .for_each(|interface_id| {
+            refs.insert(interface_id);
+        });
+    refs
+}
+
+fn interface_has_pagination(interface: &Value) -> bool {
+    interface
+        .pointer("/paginationPolicy/strategy")
+        .and_then(Value::as_str)
+        .is_some_and(|strategy| !matches!(strategy, "" | "not_applicable"))
+}
+
+fn interface_has_normalization(interface: &Value) -> bool {
+    interface
+        .get("requestSchema")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|field| field.get("normalization").is_some() || field.get("normalize").is_some())
+}
+
+fn interface_has_idempotency(interface: &Value) -> bool {
+    interface
+        .pointer("/idempotencyPolicy/required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn interface_requires_auth(interface: &Value) -> bool {
+    match interface.pointer("/authPolicy/required") {
+        Some(Value::Bool(value)) => *value,
+        Some(Value::String(value)) => !matches!(value.as_str(), "" | "not_applicable" | "none"),
+        _ => false,
+    }
+}
+
+fn is_mutating_interface(method: &str) -> bool {
+    matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+}
+
 fn normalize_code_quality_requirements(
     baseline: &contracts::TechnicalBaselineContract,
+    aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) -> Vec<CodeQualityRequirement> {
     let mut requirements = Vec::new();
     let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
     for task in tasks.iter() {
-        let Some(selection) = code_reference_selection_for_task(baseline, task) else {
+        let context = code_reference_task_context(aac, task);
+        let Some(selection) =
+            code_reference_selection_for_task_with_context(baseline, task, &context)
+        else {
             continue;
         };
         if selection.reference_groups.is_empty() {
@@ -4178,6 +6610,177 @@ fn normalize_code_quality_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn code_reference_task_context(
+    aac: &ArchitectureArtifactContract,
+    task: &TaskDefinition,
+) -> CodeReferenceTaskContext {
+    let owned_decisions = task
+        .write_boundary
+        .artifact_refs
+        .decisions
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let application_architecture = aac.architecture_quality.decisions.iter().any(|decision| {
+        owned_decisions.contains(&decision.decision_id)
+            && matches!(
+                decision.category.as_str(),
+                "architecture_style" | "module_boundary"
+            )
+    });
+    let owned_interfaces = task
+        .write_boundary
+        .artifact_refs
+        .all_interfaces()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let task_interfaces = aac
+        .interfaces
+        .iter()
+        .filter(|interface| {
+            string_at(interface, "interfaceId")
+                .is_some_and(|interface_id| owned_interfaces.contains(&interface_id))
+        })
+        .collect::<Vec<_>>();
+    let task_interactions = task_owned_application_interactions(aac, task);
+    let security = task_has_implementation_action(
+        task,
+        ImplementationAction::ImplementAuthenticationOrAuthorization,
+    ) || task_interfaces
+        .iter()
+        .any(|interface| interface_requires_security(interface))
+        || task_interactions
+            .iter()
+            .any(|interaction| interaction_requires_security(interaction))
+        || task_quality_category_matches(aac, task, "security");
+    let async_processing =
+        task_has_implementation_action(task, ImplementationAction::ImplementAsyncProcessing)
+            || task_interactions.iter().any(|interaction| {
+                matches!(
+                    interaction.get("interactionType").and_then(Value::as_str),
+                    Some("event" | "job")
+                )
+            });
+    let integration = task_has_implementation_action(
+        task,
+        ImplementationAction::ImplementExternalServiceIntegration,
+    ) || task_interactions.iter().any(|interaction| {
+        interaction.get("interactionType").and_then(Value::as_str) == Some("external_adapter")
+    });
+    let resilience =
+        task_has_implementation_action(task, ImplementationAction::ImplementResiliencePolicy)
+            || task_interactions
+                .iter()
+                .any(|interaction| interaction_owns_operational_policy(interaction, "retry"))
+            || (integration
+                && (task_quality_category_matches(aac, task, "integration")
+                    || task_quality_category_matches(aac, task, "availability")
+                    || task_quality_category_matches(aac, task, "reliability")));
+    let observability =
+        task_has_implementation_action(task, ImplementationAction::ImplementObservability)
+            || task_quality_category_matches(aac, task, "observability")
+            || task_quality_category_matches(aac, task, "operability");
+    CodeReferenceTaskContext {
+        application_architecture,
+        security,
+        async_processing,
+        integration,
+        resilience,
+        observability,
+    }
+}
+
+fn task_has_implementation_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| *action == expected)
+}
+
+fn interface_requires_security(interface: &Value) -> bool {
+    match interface.pointer("/authPolicy/required") {
+        Some(Value::Bool(required)) => *required,
+        Some(Value::String(required)) => !matches!(
+            required.as_str(),
+            "" | "none" | "not_applicable" | "not_required" | "false"
+        ),
+        _ => false,
+    }
+}
+
+fn interaction_requires_security(interaction: &Value) -> bool {
+    matches!(
+        interaction
+            .pointer("/qualityTraits/authRequirement")
+            .and_then(Value::as_str),
+        Some("required" | "optional" | "deferred_with_risk")
+    )
+}
+
+fn interaction_owns_operational_policy(interaction: &Value, policy: &str) -> bool {
+    interaction
+        .pointer("/qualityTraits/operationalPolicies")
+        .and_then(Value::as_array)
+        .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
+}
+
+fn task_owned_application_interactions<'a>(
+    aac: &'a ArchitectureArtifactContract,
+    task: &TaskDefinition,
+) -> Vec<&'a Value> {
+    let module_refs = task
+        .write_boundary
+        .artifact_refs
+        .modules
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let interface_refs = task
+        .write_boundary
+        .artifact_refs
+        .all_interfaces()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    aac.engineering_boundary
+        .pointer("/applicationInteractions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|interaction| {
+            interaction
+                .get("providerModuleRef")
+                .and_then(Value::as_str)
+                .is_some_and(|module_ref| module_refs.contains(module_ref))
+                || string_array_at(interaction, "interfaceRefs")
+                    .iter()
+                    .any(|interface_ref| interface_refs.contains(interface_ref))
+        })
+        .collect()
+}
+
+fn task_quality_category_matches(
+    aac: &ArchitectureArtifactContract,
+    task: &TaskDefinition,
+    category: &str,
+) -> bool {
+    aac.architecture_quality.decisions.iter().any(|decision| {
+        decision.category == category
+            && task
+                .write_boundary
+                .artifact_refs
+                .decisions
+                .contains(&decision.decision_id)
+    }) || aac.architecture_quality.nfrs.iter().any(|nfr| {
+        nfr.category == category && task.write_boundary.artifact_refs.nfrs.contains(&nfr.nfr_id)
+    }) || aac.architecture_quality.risks.iter().any(|risk| {
+        risk.category == category
+            && task
+                .write_boundary
+                .artifact_refs
+                .risks
+                .contains(&risk.risk_id)
+    })
 }
 
 fn code_quality_implementation_obligations() -> Vec<String> {
@@ -4258,6 +6861,7 @@ fn api_contract_implementation_obligations() -> Vec<String> {
         "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs or task-owned client/test bindings.".to_string(),
         "Return actionable validation or business-blocking errors instead of silent success or generic server errors.".to_string(),
         "Apply pagination, filtering, auth, and contract file obligations only when the AAC interface declares them.".to_string(),
+        "Apply each accepted request normalization rule before validation at the declared boundary.".to_string(),
         "Keep frontend/client bindings aligned with the declared API response and error shapes when the task owns the binding.".to_string(),
     ]
 }
@@ -4268,6 +6872,8 @@ fn api_contract_verification_obligations() -> Vec<String> {
         "Verify at least one declared success path for each task-owned API interface or client/test binding.".to_string(),
         "Verify important validation or business-blocking error behavior for write/state-transition APIs.".to_string(),
         "For collection APIs, verify the declared pagination or filtering behavior when present.".to_string(),
+        "For UI-owned collection APIs, verify pagination state, page navigation, and filter-to-page reset as separate observable behaviors.".to_string(),
+        "For normalized inputs, verify trim or other declared canonicalization occurs before validation.".to_string(),
         "Record apiContractEvidence for every assigned API contract requirement.".to_string(),
     ]
 }
@@ -4447,12 +7053,17 @@ fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateEntityMigration
                     | ImplementationAction::CreateEntityRepository
                     | ImplementationAction::CreateEntityCrud
+                    | ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | ImplementationAction::ImplementPersistenceTransaction
+                    | ImplementationAction::OptimizePersistenceQuery
+                    | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
 }
 
 fn task_backend_consumes_persistence_mapping(task: &TaskDefinition) -> bool {
-    if task_is_frontend_task(task) || task.write_boundary.artifact_refs.entities.is_empty() {
+    if task_is_frontend_task(task) {
         return false;
     }
     matches!(
@@ -4479,6 +7090,13 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -4588,26 +7206,22 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
 
 fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
     let mut fields = Vec::new();
-    if has_non_empty_string(runtime_delivery, "/build/command") {
-        fields.push("build.command".to_string());
-    }
-    if has_non_empty_string(runtime_delivery, "/start/command") {
-        fields.push("start.command".to_string());
+    for phase in ["development", "verification", "deployment"] {
+        if has_non_empty_string(
+            runtime_delivery,
+            &format!("/commands/{phase}/build/command"),
+        ) || has_non_empty_string(
+            runtime_delivery,
+            &format!("/commands/{phase}/start/command"),
+        ) {
+            fields.push(format!("commands.{phase}"));
+        }
     }
     if has_non_empty_array(runtime_delivery, "/runtimeSurfaces") {
         fields.push("runtimeSurfaces".to_string());
     }
     if runtime_delivery.get("httpProbes").is_some() {
         fields.push("httpProbes".to_string());
-    }
-    if runtime_delivery
-        .pointer("/deliveryMechanics/staticAssets")
-        .is_some()
-    {
-        fields.push("deliveryMechanics.staticAssets".to_string());
-    }
-    if runtime_delivery.pointer("/deliveryMechanics/api").is_some() {
-        fields.push("deliveryMechanics.api".to_string());
     }
     if runtime_delivery.get("frontend").is_some() {
         fields.push("frontend".to_string());
@@ -4617,9 +7231,6 @@ fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
     }
     if runtime_delivery.get("environment").is_some() {
         fields.push("environment".to_string());
-    }
-    if runtime_delivery_has_codegen(runtime_delivery) {
-        fields.push("deliveryMechanics.codegen".to_string());
     }
     fields
 }
@@ -4680,17 +7291,6 @@ fn acceptable_evidence_for_runtime_closure_field(contract_field: &str) -> Vec<&'
         return vec!["static_check", "runtime_api_check", "manual_command_output"];
     }
     vec!["static_check", "manual_command_output"]
-}
-
-fn runtime_delivery_has_codegen(runtime_delivery: &Value) -> bool {
-    let Some(codegen) = runtime_delivery.pointer("/deliveryMechanics/codegen") else {
-        return false;
-    };
-    codegen
-        .get("required")
-        .and_then(Value::as_str)
-        .is_some_and(|required| required != "no")
-        || has_non_empty_array(codegen, "/commands")
 }
 
 fn has_non_empty_string(value: &Value, pointer: &str) -> bool {
@@ -4783,6 +7383,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -4793,6 +7394,7 @@ fn repairable(
         resubmit_tool: mode.resubmit_tool().to_string(),
         fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(mode.resubmit_tool()),
     })
 }
 
@@ -5000,10 +7602,10 @@ mod tests {
             "conceptResponsibilities": [],
             "conceptVerificationIntents": [],
             "frontendExperienceRequirement": {
-                "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
-                "uiSurfaceOwnership": {
-                    "regionIdsInScope": ["region-main"],
-                    "qualityRuleIdsInScope": ["verify.rendered_viewports"]
+                "uiTaskScope": {
+                    "surfacesInScope": ["surface-workbench"],
+                    "regionsInScope": [{"regionId": "region-main"}],
+                    "qualityRulesInScope": [{"ruleId": "verify.rendered_viewports"}]
                 }
             },
             "engineeringQualityRequirementRefs": [],
@@ -5015,7 +7617,351 @@ mod tests {
     }
 
     #[test]
-    fn ui_surface_ownership_template_keeps_task_scope_compact() {
+    fn taskplan_candidate_null_optional_arrays_are_normalized_before_deserialization() {
+        let mut candidate = json!({
+            "tasks": [{
+                "scopeRefs": null,
+                "verificationIntents": null,
+                "writeBoundary": {
+                    "forbiddenPaths": null,
+                    "artifactRefs": {
+                        "modules": null,
+                        "interfaces": null
+                    }
+                },
+                "runtimeDeliveryRequirement": {
+                    "affectedContractFields": null,
+                    "requiredCodeLevelChecks": null
+                }
+            }]
+        });
+
+        normalize_taskplan_candidate_null_arrays(&mut candidate);
+
+        assert_eq!(candidate["tasks"][0]["scopeRefs"], json!([]));
+        assert_eq!(candidate["tasks"][0]["verificationIntents"], json!([]));
+        assert_eq!(
+            candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"],
+            json!([])
+        );
+        assert_eq!(
+            candidate["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn architecture_quality_refs_are_derived_from_owner_artifacts() {
+        let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-1",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "status": "ready",
+            "source": {"planningGenerationContractId": "pgc-1", "technicalBaselineId": "tbr-1"},
+            "engineeringBoundary": {},
+            "modules": [{"moduleId": "module-orders"}],
+            "dataModel": {},
+            "interfaces": [],
+            "userFlows": [],
+            "stateMachines": [],
+            "acceptanceMatrix": [],
+            "detailCoverage": [],
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "adr-orders",
+                    "category": "module_boundary",
+                    "title": "Own order behavior in one module",
+                    "status": "accepted",
+                    "context": "The current phase changes order behavior.",
+                    "decision": "The order module owns its behavior.",
+                    "alternativesConsidered": [{"name": "shared service", "tradeoff": "less ownership", "rejectedBecause": "it weakens invariants"}],
+                    "consequences": {"positive": ["clear ownership"], "negative": ["explicit mapping"], "neutral": []},
+                    "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                    "ownerArtifactRefs": {"modules": ["module-orders"], "interfaces": []},
+                    "verificationHints": ["review module ownership"]
+                }],
+                "nfrs": [{
+                    "nfrId": "nfr-orders",
+                    "category": "maintainability",
+                    "source": "derived_minimum",
+                    "target": "Order rules remain in the order module.",
+                    "rationale": "Ownership prevents drift.",
+                    "measurement": {"indicator": "rule location", "workloadOrCondition": "order writes", "evaluationBoundary": "review"},
+                    "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                    "architectureRefs": {"decisions": ["adr-orders"], "risks": ["risk-orders"]},
+                    "ownerArtifactRefs": {"modules": ["module-orders"], "interfaces": []},
+                    "verificationStrategy": "Review changed order files."
+                }],
+                "risks": [{
+                    "riskId": "risk-orders",
+                    "category": "maintainability",
+                    "severity": "medium",
+                    "likelihood": "medium",
+                    "impact": "Rules can drift.",
+                    "mitigation": "Keep one owner.",
+                    "ownerArtifactRefs": {"modules": [], "interfaces": [], "decisions": ["adr-orders"], "nfrs": ["nfr-orders"]},
+                    "verificationHints": ["review ownership"]
+                }]
+            },
+            "handoff": {"readyForTaskPlan": true, "blockingReasons": [], "nextNode": "task_plan"},
+            "createdAt": "2026-07-15T00:00:00Z",
+            "updatedAt": "2026-07-15T00:00:00Z"
+        }))
+        .expect("architecture artifact");
+        let compact_quality = compact_architecture_quality(&aac);
+        assert_eq!(
+            compact_quality["decisions"][0]["decision"],
+            json!("The order module owns its behavior.")
+        );
+        assert_eq!(
+            compact_quality["nfrs"][0]["measurement"]["evaluationBoundary"],
+            json!("review")
+        );
+        assert_eq!(
+            compact_quality["risks"][0]["mitigation"],
+            json!("Keep one owner.")
+        );
+        assert!(compact_quality["decisions"][0]
+            .get("alternativesConsidered")
+            .is_none());
+        let mut owned = browser_task(1);
+        owned.write_boundary.artifact_refs.modules = vec!["module-orders".to_string()];
+        let mut unrelated = browser_task(1);
+        unrelated.task_id = "task-unrelated".to_string();
+        unrelated.write_boundary.artifact_refs.modules = vec!["module-other".to_string()];
+        let mut tasks = vec![owned, unrelated];
+
+        normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
+
+        assert_eq!(
+            tasks[0].write_boundary.artifact_refs.decisions,
+            ["adr-orders"]
+        );
+        assert_eq!(tasks[0].write_boundary.artifact_refs.nfrs, ["nfr-orders"]);
+        assert_eq!(tasks[0].write_boundary.artifact_refs.risks, ["risk-orders"]);
+        assert!(tasks[1].write_boundary.artifact_refs.decisions.is_empty());
+        assert!(tasks[1].write_boundary.artifact_refs.nfrs.is_empty());
+        assert!(tasks[1].write_boundary.artifact_refs.risks.is_empty());
+    }
+
+    #[test]
+    fn code_reference_context_uses_task_owned_architecture_facts() {
+        let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-code-context",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "status": "ready",
+            "source": {
+                "planningGenerationContractId": "pgc-1",
+                "technicalBaselineId": "tbr-1"
+            },
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-payment-provider",
+                    "interactionType": "external_adapter",
+                    "providerModuleRef": "module-orders",
+                    "interfaceRefs": ["api-orders-create"],
+                    "qualityTraits": {"operationalPolicies": ["retry"]}
+                }, {
+                    "interactionId": "interaction-order-events",
+                    "interactionType": "event",
+                    "providerModuleRef": "module-orders",
+                    "interfaceRefs": []
+                }]
+            },
+            "modules": [{"moduleId": "module-orders"}],
+            "dataModel": {},
+            "interfaces": [{
+                "interfaceId": "api-orders-create",
+                "authPolicy": {"required": true}
+            }, {
+                "interfaceId": "api-cache-hints-only",
+                "cachePolicy": {"strategy": "private", "validators": ["etag"]},
+                "retryPolicy": {
+                    "retryableStatuses": [502, 503],
+                    "retryAfterHeader": true
+                }
+            }],
+            "userFlows": [],
+            "stateMachines": [],
+            "acceptanceMatrix": [],
+            "detailCoverage": [],
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "adr-orders-module-boundary",
+                    "category": "module_boundary",
+                    "title": "Keep order application boundaries explicit",
+                    "status": "accepted",
+                    "context": "Order behavior spans HTTP, persistence, and a provider adapter.",
+                    "decision": "The order module owns application orchestration behind inward-facing ports.",
+                    "alternativesConsidered": [{
+                        "name": "endpoint-owned orchestration",
+                        "tradeoff": "fewer types but mixed transport and business concerns",
+                        "rejectedBecause": "the accepted module boundary requires reusable application behavior"
+                    }],
+                    "consequences": {
+                        "positive": ["explicit ownership"],
+                        "negative": ["additional adapter mapping"],
+                        "neutral": []
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": [],
+                        "acceptanceRefs": [],
+                        "requirementDetailRefs": []
+                    },
+                    "ownerArtifactRefs": {
+                        "modules": ["module-orders"],
+                        "interfaces": ["api-orders-create"]
+                    },
+                    "verificationHints": ["verify application dependency direction"]
+                }],
+                "nfrs": [{
+                    "nfrId": "nfr-orders-observability",
+                    "category": "observability",
+                    "source": "confirmed_requirement",
+                    "target": "Order provider calls expose correlated metrics and traces.",
+                    "rationale": "External failures must be diagnosable.",
+                    "measurement": {
+                        "indicator": "correlated telemetry",
+                        "workloadOrCondition": "provider request",
+                        "evaluationBoundary": "integration verification"
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": [],
+                        "acceptanceRefs": [],
+                        "requirementDetailRefs": []
+                    },
+                    "architectureRefs": {"decisions": [], "risks": []},
+                    "ownerArtifactRefs": {
+                        "modules": ["module-orders"],
+                        "interfaces": ["api-orders-create"]
+                    },
+                    "verificationStrategy": "Verify correlated telemetry at the provider boundary."
+                }],
+                "risks": []
+            },
+            "handoff": {
+                "readyForTaskPlan": true,
+                "blockingReasons": [],
+                "nextNode": "task_plan"
+            },
+            "createdAt": "2026-07-15T00:00:00Z",
+            "updatedAt": "2026-07-15T00:00:00Z"
+        }))
+        .expect("architecture artifact");
+        let mut task = browser_task(1);
+        task.task_kind = TaskKind::InterfaceIncrement;
+        task.implementation_actions = vec![ImplementationAction::CreateOrUpdateInterface];
+        task.frontend_experience_requirement = None;
+        task.write_boundary.artifact_refs.modules = vec!["module-orders".to_string()];
+        task.write_boundary.artifact_refs.interfaces = vec!["api-orders-create".to_string()];
+        task.write_boundary.artifact_refs.decisions =
+            vec!["adr-orders-module-boundary".to_string()];
+        task.write_boundary.artifact_refs.nfrs = vec!["nfr-orders-observability".to_string()];
+
+        let context = code_reference_task_context(&aac, &task);
+        let projected_interactions = compact_application_interactions(&aac);
+        let rules = generation_rules(&aac, &Value::Null);
+        let mut api_policy_only_task = task.clone();
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .modules
+            .clear();
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .decisions
+            .clear();
+        api_policy_only_task.write_boundary.artifact_refs.interfaces =
+            vec!["api-cache-hints-only".to_string()];
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .nfrs
+            .clear();
+        let api_policy_only_context = code_reference_task_context(&aac, &api_policy_only_task);
+
+        assert!(context.application_architecture);
+        assert!(context.security);
+        assert!(context.async_processing);
+        assert!(context.integration);
+        assert!(context.resilience);
+        assert!(context.observability);
+        assert!(!api_policy_only_context.resilience);
+        assert!(!api_policy_only_context.application_architecture);
+        assert_eq!(projected_interactions.len(), 2);
+        assert_eq!(
+            projected_interactions[0]["interactionType"],
+            json!("external_adapter")
+        );
+        assert_eq!(
+            projected_interactions[1]["providerModuleRef"],
+            json!("module-orders")
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["frontendNavigation"],
+            json!(["create_or_update_frontend_navigation"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["reactiveClientFlow"],
+            json!(["implement_reactive_client_flow"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["sharedClientState"],
+            json!(["implement_shared_client_state"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["frontendPerformance"],
+            json!(["optimize_frontend_performance"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["serverRenderedComponent"],
+            json!(["implement_server_rendered_component"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["serverMutation"],
+            json!(["implement_server_mutation"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]
+                ["frontendFrameworkVersionFeature"],
+            json!(["implement_frontend_framework_version_feature"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["mobilePlatformBehavior"],
+            json!(["implement_mobile_platform_behavior"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["clientStorage"],
+            json!(["implement_client_storage"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["languageVersionFeature"],
+            json!(["implement_language_version_feature"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["genericTypeAbstraction"],
+            json!(["implement_generic_type_abstraction"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["dependencyAbstraction"],
+            json!(["implement_dependency_abstraction"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["moduleStructure"],
+            json!(["refactor_module_structure"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["runtimePerformance"],
+            json!(["optimize_runtime_performance"])
+        );
+    }
+
+    #[test]
+    fn ui_surface_decision_projection_keeps_task_contract_compact() {
         let surface_contract = json!({
             "patternDecision": {
                 "mode": "known",
@@ -5040,37 +7986,31 @@ mod tests {
             }]
         });
 
-        let ownership = ui_surface_ownership_template(&surface_contract);
+        let projection = compact_ui_surface_decision_contract(&surface_contract);
 
         assert_eq!(
-            ownership
+            projection
                 .pointer("/patternDecision/mode")
                 .and_then(Value::as_str),
             Some("known")
         );
         assert!(
-            ownership.get("referencePlan").is_none(),
-            "TaskPlan ownership must not copy the full UI reference plan"
+            projection.get("referencePlan").is_none(),
+            "TaskPlan projection must not copy the full UI reference plan"
         );
         assert!(
-            ownership.get("qualityRules").is_none(),
-            "TaskPlan ownership must not copy the full UI rule list"
+            projection["qualityRules"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "TaskPlan projection must keep the scoped quality rule ids"
         );
         assert!(
-            ownership
-                .get("availableRegionIds")
-                .and_then(Value::as_array)
+            projection["regionModel"]
+                .as_array()
                 .is_some_and(|items| items
                     .iter()
-                    .any(|item| item.as_str() == Some("region_primary"))),
-            "TaskPlan ownership must expose available region ids"
-        );
-        assert!(
-            ownership
-                .get("regionIdsInScope")
-                .and_then(Value::as_array)
-                .is_some_and(|items| items.is_empty()),
-            "TaskPlan ownership scope starts empty so the agent selects task-owned ids"
+                    .any(|item| item["regionId"] == json!("region_primary"))),
+            "TaskPlan projection must expose compact region ids"
         );
     }
 
@@ -5089,8 +8029,8 @@ mod tests {
     #[test]
     fn generic_frontend_tests_do_not_create_browser_verification() {
         let mut task = browser_task(1);
-        task.frontend_experience_requirement.as_mut().unwrap()["uiSurfaceOwnership"]
-            ["qualityRuleIdsInScope"] = json!([]);
+        task.frontend_experience_requirement.as_mut().unwrap()["uiTaskScope"]
+            ["qualityRulesInScope"] = json!([]);
         let mut tasks = vec![task];
 
         normalize_browser_verification_assignments(&mut tasks);
@@ -5102,7 +8042,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_verification_intents_require_explicit_browser_owner() {
+    fn multiple_verification_intents_are_left_for_browser_closure() {
         let mut tasks = vec![browser_task(2)];
 
         normalize_browser_verification_assignments(&mut tasks);
@@ -5111,9 +8051,10 @@ mod tests {
         assert!(!tasks[0].verification_intents.iter().any(|intent| intent
             .acceptable_evidence
             .contains(&VerificationEvidence::BrowserAutomation)));
-        assert!(issues
-            .iter()
-            .any(|issue| issue.code == "TASKPLAN_BROWSER_VERIFICATION_REQUIRED"));
+        assert!(
+            issues.is_empty(),
+            "business UI tasks are closed by the MCP browser task"
+        );
     }
 
     #[test]

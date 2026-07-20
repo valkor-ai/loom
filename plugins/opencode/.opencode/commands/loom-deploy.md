@@ -18,7 +18,7 @@ Call the matching Loom MCP deploy tool for the current project directory.
 - `down` -> `loom.deployDown`
 - `repair` -> `loom.deployRepair`
 
-Follow the returned action result. Do not invent deployment assets, topology, repair scope, preview URLs, or ports outside that MCP result.
+Follow the returned action result. For `user_gate` with `preResponseContract`, execute the contract before any visible response: call `loom.inspectRequest`, then call `loom.readFieldGroup` for only required `requestReadPlan.groups`, and present the returned deployment decision. Do not invent deployment assets, topology, repair scope, preview URLs, or ports outside that MCP result.
 
 During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it.
 

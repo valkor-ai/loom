@@ -255,7 +255,6 @@ fn generate_java_dockerfile(service: &DeploymentSourceService, spec: &Deployment
     lines.extend([
         format!("RUN {build_command}"),
         "RUN JAR=\"$(find target -type f -name '*.jar' ! -name '*-plain.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar".to_string(),
-        "RUN mkdir -p /tmp/data && if [ -d data ]; then cp -R data/. /tmp/data/; elif [ -d service/data ]; then cp -R service/data/. /tmp/data/; fi".to_string(),
         "".to_string(),
         "FROM eclipse-temurin:21-jre AS runner".to_string(),
         "WORKDIR /app".to_string(),
@@ -265,7 +264,6 @@ fn generate_java_dockerfile(service: &DeploymentSourceService, spec: &Deployment
         format!("ENV PORT={}", service.port),
         format!("ENV SERVER_PORT={}", service.port),
         "COPY --from=builder /workspace/app.jar /app/app.jar".to_string(),
-        "COPY --from=builder /tmp/data /app/data".to_string(),
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),
@@ -354,36 +352,38 @@ fn generate_java_dockerfile_with_static_asset_overlay(
     let frontend_build_env = frontend_api_binding_env_for_spec(spec);
     let build_command = java_build_command(service);
     let builder_image = java_builder_image(service);
-    [
+    let mut lines = vec![
         "FROM node:22-bookworm-slim AS web-builder".to_string(),
         format!("WORKDIR {frontend_workdir}"),
         frontend_copy,
-        format!("RUN {}", install_command(PackageManager::Npm, service.has_lockfile)),
+        format!(
+            "RUN {}",
+            install_command(PackageManager::Npm, service.has_lockfile)
+        ),
         frontend_build_env.join("\n"),
         format!("RUN {}", package_manager_run(PackageManager::Npm, "build")),
         "".to_string(),
         format!("FROM {builder_image} AS service-builder"),
-        "WORKDIR /workspace".to_string(),
-        "COPY . .".to_string(),
+    ];
+    lines.extend(java_builder_context(service));
+    lines.extend([
         format!("RUN {build_command}"),
         "RUN mkdir -p /tmp/static-overlay/BOOT-INF/classes/static".to_string(),
         format!(
             "COPY --from=web-builder /workspace/{frontend_output}/ /tmp/static-overlay/BOOT-INF/classes/static/"
         ),
         "RUN JAR_PATH=\"$(find . -type f -name '*.jar' ! -name '*-plain.jar' | sort | head -n 1)\" && test -n \"$JAR_PATH\" && cp \"$JAR_PATH\" /tmp/app.jar && jar --update --file /tmp/app.jar -C /tmp/static-overlay BOOT-INF/classes/static".to_string(),
-        "RUN mkdir -p /tmp/data && if [ -d service/data ]; then cp -R service/data/. /tmp/data/; elif [ -d data ]; then cp -R data/. /tmp/data/; fi".to_string(),
         "".to_string(),
         "FROM eclipse-temurin:21-jre AS runner".to_string(),
         "WORKDIR /app".to_string(),
         format!("ENV PORT={}", service.port),
         format!("ENV SERVER_PORT={}", service.port),
         "COPY --from=service-builder /tmp/app.jar /app/app.jar".to_string(),
-        "COPY --from=service-builder /tmp/data /app/data".to_string(),
         format!("EXPOSE {}", service.port),
         "ENTRYPOINT [\"java\",\"-jar\",\"/app/app.jar\"]".to_string(),
         "".to_string(),
-    ]
-    .join("\n")
+    ]);
+    lines.join("\n")
 }
 
 fn java_service_needs_static_asset_overlay(service: &DeploymentSourceService) -> bool {
@@ -583,12 +583,12 @@ fn generate_compose(spec: &DeploymentSpec) -> String {
         .filter_map(|dependency| dependency.volume_name.as_ref())
         .cloned()
         .collect::<Vec<_>>();
-    volumes.extend(
-        spec.source_model
-            .services
+    volumes.extend(spec.source_model.services.iter().flat_map(|service| {
+        spec.storage_facts
             .iter()
-            .filter_map(|service| app_data_volume_name(spec, service)),
-    );
+            .filter(move |fact| fact.service_id == service.service_id && fact.persistent)
+            .filter_map(|fact| fact.volume_name.clone())
+    }));
     volumes.sort();
     volumes.dedup();
     if !volumes.is_empty() {
@@ -661,27 +661,21 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
             }
         }
     }
-    if let Some(volume) = app_data_volume_name(spec, service) {
+    let storage_mounts = spec
+        .storage_facts
+        .iter()
+        .filter(|fact| fact.service_id == service.service_id && fact.persistent)
+        .filter_map(|fact| Some((fact.volume_name.as_ref()?, fact.container_path.as_str())))
+        .collect::<Vec<_>>();
+    if !storage_mounts.is_empty() {
         lines.push("    volumes:".to_string());
-        lines.push(format!("      - {volume}:/app/data"));
+        for (volume, target) in storage_mounts {
+            lines.push(format!("      - {volume}:{target}"));
+        }
     }
     lines.push("    restart: unless-stopped".to_string());
     lines.push(String::new());
     lines
-}
-
-fn app_data_volume_name(
-    spec: &DeploymentSpec,
-    service: &DeploymentSourceService,
-) -> Option<String> {
-    if service.role == SourceServiceRole::Frontend {
-        return None;
-    }
-    spec.environment
-        .generated
-        .values()
-        .any(|value| value.contains("/app/data/"))
-        .then(|| format!("{}-data", service.service_id))
 }
 
 fn service_has_healthcheck_for_id(spec: &DeploymentSpec, service_id: &str) -> bool {
@@ -698,7 +692,10 @@ fn service_has_healthcheck(service: &DeploymentSourceService) -> bool {
 }
 
 fn healthcheck_test(service: &DeploymentSourceService) -> String {
-    let path = service.healthcheck_path.as_deref().unwrap_or("/");
+    let path = service
+        .healthcheck_path
+        .as_deref()
+        .expect("healthcheck_test requires an explicit healthcheck path");
     let command = format!(
         "curl -fsS http://127.0.0.1:{}{} || exit 1",
         service.port, path

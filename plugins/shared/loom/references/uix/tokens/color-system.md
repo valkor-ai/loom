@@ -62,6 +62,23 @@ The exact values may change, but components should consume roles rather than har
 | Marketing/corporate | More expressive brand color and media overlay roles. | Gradient text, unreadable hero overlays. |
 | 3D/immersive | Scene-aware foreground/control overlays. | UI controls disappearing into the scene. |
 
+## Palette Decision Record
+
+Before choosing values, record the selected direction in the task implementation
+notes or existing style evidence:
+
+| Decision | Required result |
+| --- | --- |
+| Existing theme | Reuse its roles and add only missing semantic aliases. |
+| Existing theme with a gap | Extend the existing file and preserve its naming, contrast, and dark-mode policy. |
+| No usable theme | Start from the selected scenario direction and create one project-level token asset. |
+| Brand direction supplied | Preserve the brand's primary/secondary meaning and validate status colors independently. |
+| No brand direction | Use a restrained semantic palette; do not invent a visual identity from a generic category stereotype. |
+
+Do not treat a palette name as a complete design system. A selected palette must
+also define surface hierarchy, text contrast, status roles, focus treatment, and
+the dark-mode decision when dark mode is in scope.
+
 ## Contrast And Status
 
 - Normal text must meet AA contrast on its surface.
@@ -69,6 +86,11 @@ The exact values may change, but components should consume roles rather than har
 - Error and business-blocking states must be visually distinct from warning and neutral empty states.
 - Disabled state should preserve readable labels; reduce emphasis without making controls illegible.
 - Hover and active colors must remain inside the semantic role family.
+- Validate text, icon, border, focus, disabled, and status combinations on every
+  surface that consumes the role. A valid primary button does not prove that a
+  muted status badge or disabled field is readable.
+- Charts and data encodings need a non-color distinction such as a label, pattern,
+  position, or table summary when the color carries business meaning.
 
 ## Implementation
 
@@ -86,3 +108,5 @@ The exact values may change, but components should consume roles rather than har
 - Every visible state uses a semantic role.
 - Text, borders, icons, charts, and focus rings remain legible on the selected surfaces.
 - Evidence names the token asset and at least one consumer file that uses these roles.
+- Evidence names the palette decision, existing-style reuse decision, and dark-mode
+  decision when those choices affect the changed surface.

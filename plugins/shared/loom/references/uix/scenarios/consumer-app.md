@@ -82,3 +82,33 @@ Use for customer-facing web apps, portals, booking, commerce, content, learning,
 - Marketing-only first screen for an app task.
 - Generic card grids that do not help the user act.
 - Critical controls that appear only on hover.
+
+## Browse, Detail, And Commit
+
+Consumer workflows should have a visible progression from discovery to a
+decision and then to a confirmed result. Keep the current item and the pending
+decision legible at every step.
+
+```text
+browse/filter -> item identity and summary -> detail facts -> primary action
+-> confirmation or review -> success state with updated item/order/progress
+```
+
+- A browse surface exposes enough identity, status, price, date, or progress to choose an item without opening every card.
+- A detail surface repeats the item's identity and puts the primary action near the facts it commits.
+- A form or checkout preserves entered values when validation or a recoverable request error occurs.
+- Confirmation is proportional to risk. Use a review step for irreversible, paid, or privacy-sensitive actions; do not add confirmation to harmless navigation.
+- Success updates the affected object or progress in place and provides a route back to the user's next useful action.
+
+```html
+<section data-region="browse-results" aria-busy="false"></section>
+<section data-region="selected-detail" aria-labelledby="item-title">
+  <h1 id="item-title"></h1>
+  <div data-region="item-facts"></div>
+  <div data-region="commit-feedback" aria-live="polite"></div>
+  <button data-action="commit"></button>
+</section>
+```
+
+Do not let recommendations, promotional cards, or a global toast replace the
+detail, decision, and result surfaces required to complete the task.

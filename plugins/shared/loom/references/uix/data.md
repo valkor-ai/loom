@@ -15,14 +15,15 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 
 ## Brief Mapping
 
-When `uiProductionBrief.informationContract` is present, use it as the minimum data surface contract:
+When the task brief includes an information contract, use it as the minimum data
+surface contract:
 
-- `mustShow` becomes visible fields, summaries, table columns, detail facts, or chart labels.
-- `scanPriority` determines visual order before decorative grouping or local component preference.
-- `identityFields` stay visible during selection, mutation, loading, and error states.
-- `statusFields` stay close to available actions so users can understand eligibility.
-- `longContentPolicy` controls wrapping, truncation, drill-down, overflow, or responsive card fallback.
-- `dataViews` names the exact views this task should implement or preserve; do not add unrelated dashboards or summaries.
+- Required fields become visible fields, summaries, table columns, detail facts, or chart labels.
+- Scan priority determines visual order before decorative grouping or local component preference.
+- Identity fields stay visible during selection, mutation, loading, and error states.
+- Status fields stay close to available actions so users can understand eligibility.
+- Long-content policy controls wrapping, truncation, drill-down, overflow, or responsive card fallback.
+- The selected data views name the exact views this task should implement or preserve; do not add unrelated dashboards or summaries.
 
 ## Record Workbench Pattern
 
@@ -106,6 +107,34 @@ Use cards for narrow screens when the table's purpose is selection or action. Ke
 - Charts need labels, legends, axes or equivalent context, empty/loading/error states, and accessible summaries when practical.
 - Metrics must include context: period, unit, comparison, or source.
 - Avoid decorative charts that do not support a user decision.
+
+## Volume And View Selection
+
+Select the data view from the user's job and expected volume:
+
+| Need | Preferred view |
+| --- | --- |
+| Find or compare many records | Table with declared fields, sorting, filtering, and bounded paging. |
+| Select and act on a small set | List or cards with identity, status, key facts, and row action. |
+| Inspect one record | Detail route, drawer, or split view that preserves source context. |
+| Observe trends | Chart paired with labels, units, range, comparison, and a readable data summary. |
+| Inspect technical output | Bounded log/result surface with copy, search, filtering, and failure state. |
+
+Do not add a chart, KPI grid, export control, or summary panel unless it supports
+the accepted user decision. Do not use a card grid to avoid defining table fields
+or pagination for a growing collection.
+
+## Query And Readback States
+
+- Show the active filter, sort, range, or query context near the result count.
+- Preserve query context when opening detail, changing a record, retrying, or
+  returning from a detail route.
+- Distinguish no matching results from no records, unavailable data, stale data,
+  and permission-limited data.
+- After a mutation, update the owning row/detail/metric or explicitly mark the
+  readback as pending. A success toast without updated data is incomplete.
+- For large or remote data, define paging, continuation, virtualization, or
+  bounded loading before implementing the result view.
 
 ## Business Feedback
 

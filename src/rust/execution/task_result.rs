@@ -25,17 +25,18 @@ use state::{
 use crate::{
     paths::task_result_file,
     task_execution::{
-        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+        load_current_plan_and_run, save_run,
+        task_projection_runtime_delivery_requirement_read_fields,
         task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
         api_contract_evidence_applies, architecture_quality_evidence_applies,
         code_quality_evidence_applies, code_quality_execution_context,
-        frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_schema_shape, task_result_template_with_code_quality,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_requirements_for_task, frontend_quality_self_check_applies,
+        frontend_self_check_applies, runtime_delivery_evidence_applies, task_result_contract,
+        task_result_required_top_level_fields, task_result_schema_shape,
+        task_result_template_with_code_quality,
     },
 };
 
@@ -141,56 +142,14 @@ where
         "source.taskPlanId".to_string(),
         "source.taskId".to_string(),
         "source.taskPlanRunId".to_string(),
-        "task.taskId".to_string(),
-        "task.taskKind".to_string(),
-        "task.acceptanceRefs".to_string(),
-        "task.requirementDetailRefs".to_string(),
-        "task.verificationIntents".to_string(),
-        "outputContract.resultFile".to_string(),
-        "outputContract.requiredTopLevelFields".to_string(),
     ];
-    for optional_field in [
-        "task.conceptRefs",
-        "task.architectureQualityRequirementRefs",
-        "task.apiContractRequirementRefs",
-        "task.codeQualityRequirementRefs",
-        "sourceContext.codeQualityExecutionContext",
-        "task.writeBoundary.artifactRefs",
+    for output_field in [
+        "outputContract.resultFile",
         "outputContract.blockedReasonOptions",
-        "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
-        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
-        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-        "task.frontendExperienceRequirement.uiSurfaceOwnership",
     ] {
-        if allowed_read_fields.contains(optional_field) {
-            fields_to_read.push(optional_field.to_string());
-        }
-    }
-    for optional_field in FRONTEND_QUALITY_CONTRACT_READ_FIELDS {
-        if allowed_read_fields.contains(optional_field) {
-            fields_to_read.push(optional_field.to_string());
-        }
-    }
-    if allowed_read_fields.contains("task.runtimeDeliveryRequirement") {
-        fields_to_read.push("task.runtimeDeliveryRequirement".to_string());
-    } else {
-        for runtime_field in [
-            "task.runtimeDeliveryRequirement.appliesToThisTask",
-            "task.runtimeDeliveryRequirement.reason",
-            "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
-            "task.runtimeDeliveryRequirement.affectedContractFields",
-            "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
-            "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
-            "task.runtimeDeliveryRequirement.forbiddenActions",
-            "task.runtimeDeliveryRequirement.source",
-            "task.runtimeDeliveryRequirement.deploymentFailureRef",
-        ] {
-            if allowed_read_fields.contains(runtime_field) {
-                fields_to_read.push(runtime_field.to_string());
-            }
+        if output_field == "outputContract.resultFile" || allowed_read_fields.contains(output_field)
+        {
+            fields_to_read.push(output_field.to_string());
         }
     }
     let fields =
@@ -199,79 +158,41 @@ where
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
-    let frontend_experience_requirement = frontend_experience_requirement_from_fields(&fields);
-    let artifact_refs = value_field(&fields, "task.writeBoundary.artifactRefs");
-    let artifact_refs = if artifact_refs.is_object() {
-        artifact_refs
-    } else {
-        json!({})
-    };
-    let mut task: TaskDefinition = serde_json::from_value(json!({
-        "taskId": value_field(&fields, "task.taskId"),
-        "groupId": "",
-        "title": "",
-        "taskKind": value_field(&fields, "task.taskKind"),
-        "implementationActions": [],
-        "objective": "",
-        "dependsOn": [],
-        "scopeRefs": [],
-        "acceptanceRefs": array_field(&fields, "task.acceptanceRefs"),
-        "requirementDetailRefs": array_field(&fields, "task.requirementDetailRefs"),
-        "writeBoundary": {
-            "forbiddenPaths": [],
-            "artifactRefs": artifact_refs
-        },
-        "verificationIntents": array_field(&fields, "task.verificationIntents"),
-        "conceptRefs": array_field(&fields, "task.conceptRefs"),
-        "conceptResponsibilities": [],
-        "conceptVerificationIntents": [],
-        "frontendExperienceRequirement": frontend_experience_requirement,
-        "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields),
-        "architectureQualityRequirementRefs": array_field(&fields, "task.architectureQualityRequirementRefs"),
-        "apiContractRequirementRefs": array_field(&fields, "task.apiContractRequirementRefs"),
-        "codeQualityRequirementRefs": array_field(&fields, "task.codeQualityRequirementRefs")
-    }))
-    .map_err(state::store::StateError::Json)?;
-    if let Some(stored_task) =
-        private_request_value(&input.project_root, &authorized.request_id, "task")?
-    {
-        task = serde_json::from_value(normalize_task_definition_value(stored_task))
-            .map_err(state::store::StateError::Json)?;
-    }
-    restore_authoritative_task_refs_from_source(root, &authorized.request_id, &mut task)?;
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
-    task = task_with_phase_execution_guidance(root, &locator, task)?;
     let (current_task_plan, current_run) = load_current_plan_and_run(root, &locator)?;
+    let task = current_task_plan
+        .tasks
+        .iter()
+        .find(|candidate| candidate.task_id == task_id)
+        .cloned()
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "TaskResult request references task {task_id}, but the current TaskPlan has no canonical definition for it"
+            ))
+        })?;
+    // TaskPlan is the canonical typed task contract. The request read groups are an
+    // agent-facing projection and may legitimately contain nullable optional values;
+    // rebuilding TaskDefinition from that projection makes repair sensitive to those
+    // presentation details and can turn a valid request into a terminal state error.
+    let task = task_with_phase_execution_guidance(root, &locator, task)?;
     let browser_profile = current_task_plan
         .browser_verification_profiles
         .iter()
         .find(|profile| profile.task_id == task.task_id)
         .cloned();
-    let required_top_level_fields =
-        string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
-    let mut code_quality_requirements =
-        code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
-    if code_quality_requirements.is_empty() {
-        if let Some(source_context) =
-            private_request_value(&input.project_root, &authorized.request_id, "sourceContext")?
-        {
-            if let Some(value) = source_context
-                .get("codeQualityExecutionContext")
-                .filter(|value| !value.is_null())
-            {
-                code_quality_requirements = serde_json::from_value(value.clone())
-                    .map_err(state::store::StateError::Json)?;
-            }
-        }
-    }
-    hydrate_task_refs_from_required_result_evidence(
-        &mut task,
-        &raw_result,
-        &required_top_level_fields,
-    );
+    let code_quality_requirements = code_quality_requirements_for_task(&current_task_plan, &task);
+    let authoritative_result_contract =
+        task_result_contract(&task, &code_quality_requirements, browser_profile.as_ref());
+    let required_top_level_fields = authoritative_result_contract["requiredTopLevelFields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
@@ -326,7 +247,6 @@ where
                 run_id,
                 task,
                 result_file,
-                required_top_level_fields,
                 blocked_output,
                 submitted_result: normalized_result.clone(),
                 previous_changed_files,
@@ -351,7 +271,26 @@ where
         &result.task_id,
         &result.task_result_id,
     );
-    state::store::write_json_atomic(&persisted, &result)?;
+    let canonical_value =
+        canonical_task_result_value(&normalized_result, &result, &required_top_level_fields)?;
+    state::store::write_json_atomic(&persisted, &canonical_value)?;
+    let persisted_value = state::store::read_json_value(&persisted)?;
+    let _: TaskResult = serde_json::from_value(persisted_value.clone()).map_err(|error| {
+        state::store::StateError::StateCorrupted(format!(
+            "canonical TaskResult JSON is invalid: {error}"
+        ))
+    })?;
+    for field in &required_top_level_fields {
+        if !task_result_required_field_applies_to_status(field, &result.status) {
+            continue;
+        }
+        if persisted_value.get(field).is_none() {
+            return Err(state::store::StateError::StateCorrupted(format!(
+                "canonical TaskResult lost required field {field}"
+            )));
+        }
+    }
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let persisted_ref = to_project_relative(root, &persisted)?;
     let now = state::store::now_string();
     if let Some(state) = run
@@ -485,45 +424,6 @@ where
         .map_err(to_state_error)
 }
 
-fn restore_authoritative_task_refs_from_source(
-    root: &Path,
-    repair_request_id: &str,
-    task: &mut TaskDefinition,
-) -> Result<(), state::store::StateError> {
-    let project_root = root.to_string_lossy();
-    let Some(source) = private_request_value(&project_root, repair_request_id, "source")? else {
-        return Ok(());
-    };
-    let Some(source_request_ref) = source
-        .get("taskExecutionRequestRef")
-        .and_then(Value::as_str)
-    else {
-        return Ok(());
-    };
-    let source_request_id = request_id_from_ref(source_request_ref)?;
-    let Some(source_task) = private_request_value(&project_root, &source_request_id, "task")?
-    else {
-        return Ok(());
-    };
-    let source_task: TaskDefinition =
-        serde_json::from_value(normalize_task_definition_value(source_task))
-            .map_err(state::store::StateError::Json)?;
-    if task.concept_refs.is_empty() {
-        task.concept_refs = source_task.concept_refs;
-    }
-    if task.architecture_quality_requirement_refs.is_empty() {
-        task.architecture_quality_requirement_refs =
-            source_task.architecture_quality_requirement_refs;
-    }
-    if task.api_contract_requirement_refs.is_empty() {
-        task.api_contract_requirement_refs = source_task.api_contract_requirement_refs;
-    }
-    if task.code_quality_requirement_refs.is_empty() {
-        task.code_quality_requirement_refs = source_task.code_quality_requirement_refs;
-    }
-    Ok(())
-}
-
 fn validate_result(
     project_root: &Path,
     raw_result: &Value,
@@ -592,6 +492,7 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
+    validate_verification_provenance(result, &mut issues);
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -829,6 +730,7 @@ fn normalize_task_result_machine_fields(
 
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
+    normalize_verification_provenance(object);
 
     remove_non_applicable_evidence_fields(object, task);
     normalize_applicable_evidence_array_fields(object, task);
@@ -852,6 +754,107 @@ fn normalize_task_result_machine_fields(
     );
 
     raw_result
+}
+
+fn canonical_task_result_value(
+    normalized: &Value,
+    result: &TaskResult,
+    required_top_level_fields: &[String],
+) -> Result<Value, state::store::StateError> {
+    let mut canonical = serde_json::to_value(result).map_err(state::store::StateError::Json)?;
+    let Some(object) = canonical.as_object_mut() else {
+        return Err(state::store::StateError::StateCorrupted(
+            "canonical TaskResult must be a JSON object".to_string(),
+        ));
+    };
+    for field in required_top_level_fields {
+        if !task_result_required_field_applies_to_status(field, &result.status) {
+            continue;
+        }
+        if object.contains_key(field) {
+            continue;
+        }
+        let value = normalized
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| canonical_empty_task_result_field(field));
+        object.insert(field.clone(), value);
+    }
+    let _: TaskResult =
+        serde_json::from_value(canonical.clone()).map_err(state::store::StateError::Json)?;
+    Ok(canonical)
+}
+
+fn canonical_empty_task_result_field(field: &str) -> Value {
+    match field {
+        "noChangeReason" | "failure" => Value::Null,
+        _ => Value::Array(vec![]),
+    }
+}
+
+fn normalize_verification_provenance(object: &mut serde_json::Map<String, Value>) {
+    let detail_evidence = object
+        .get("requirementDetailEvidence")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(verifications) = object
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for verification in verifications {
+        let Some(item) = verification.as_object_mut() else {
+            continue;
+        };
+        let verification_id = item
+            .get("verificationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut provenance = item
+            .get("provenance")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut evidence_refs = provenance
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if evidence_refs.is_empty() {
+            evidence_refs = detail_evidence
+                .iter()
+                .filter(|detail| {
+                    detail
+                        .get("verificationIds")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            ids.iter().any(|id| id.as_str() == Some(&verification_id))
+                        })
+                })
+                .flat_map(|detail| {
+                    detail
+                        .get("evidenceRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect();
+        }
+        provenance.insert("evidenceRefs".to_string(), Value::Array(evidence_refs));
+        provenance
+            .entry("testCaseRefs".to_string())
+            .or_insert_with(|| Value::Array(vec![]));
+        provenance
+            .entry("command".to_string())
+            .or_insert(Value::Null);
+        provenance
+            .entry("exitCode".to_string())
+            .or_insert(Value::Null);
+        item.insert("provenance".to_string(), Value::Object(provenance));
+    }
 }
 
 fn remove_incomplete_status_evidence_fields(object: &mut serde_json::Map<String, Value>) {
@@ -977,108 +980,6 @@ fn remove_non_applicable_evidence_fields(
     }
     if !code_quality_evidence_applies(task) {
         object.remove("codeQualityEvidence");
-    }
-}
-
-fn hydrate_task_refs_from_required_result_evidence(
-    task: &mut TaskDefinition,
-    raw_result: &Value,
-    required_top_level_fields: &[String],
-) {
-    if required_top_level_fields
-        .iter()
-        .any(|field| field == "architectureQualityEvidence")
-        && task.architecture_quality_requirement_refs.is_empty()
-    {
-        task.architecture_quality_requirement_refs =
-            evidence_requirement_ids(raw_result, "architectureQualityEvidence");
-    }
-    if required_top_level_fields
-        .iter()
-        .any(|field| field == "apiContractEvidence")
-        && task.api_contract_requirement_refs.is_empty()
-    {
-        task.api_contract_requirement_refs =
-            evidence_requirement_ids(raw_result, "apiContractEvidence");
-    }
-    if required_top_level_fields
-        .iter()
-        .any(|field| field == "codeQualityEvidence")
-        && task.code_quality_requirement_refs.is_empty()
-    {
-        task.code_quality_requirement_refs =
-            evidence_requirement_ids(raw_result, "codeQualityEvidence");
-    }
-}
-
-fn evidence_requirement_ids(raw_result: &Value, field: &str) -> Vec<String> {
-    raw_result
-        .get(field)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("requirementId").and_then(Value::as_str))
-        .filter(|id| !id.trim().is_empty())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn normalize_task_definition_value(mut value: Value) -> Value {
-    let Some(object) = value.as_object_mut() else {
-        return value;
-    };
-    normalize_nullable_array_fields(
-        object,
-        &[
-            "implementationActions",
-            "dependsOn",
-            "scopeRefs",
-            "acceptanceRefs",
-            "requirementDetailRefs",
-            "verificationIntents",
-            "conceptRefs",
-            "conceptResponsibilities",
-            "conceptVerificationIntents",
-            "engineeringQualityRequirementRefs",
-            "architectureQualityRequirementRefs",
-            "apiContractRequirementRefs",
-            "codeQualityRequirementRefs",
-        ],
-    );
-    if let Some(write_boundary) = object
-        .get_mut("writeBoundary")
-        .and_then(Value::as_object_mut)
-    {
-        normalize_nullable_array_fields(write_boundary, &["forbiddenPaths"]);
-        if let Some(artifact_refs) = write_boundary
-            .get_mut("artifactRefs")
-            .and_then(Value::as_object_mut)
-        {
-            normalize_nullable_array_fields(
-                artifact_refs,
-                &[
-                    "modules",
-                    "entities",
-                    "interfaces",
-                    "userFlows",
-                    "stateMachines",
-                    "decisions",
-                    "nfrs",
-                    "risks",
-                ],
-            );
-        }
-    }
-    value
-}
-
-fn normalize_nullable_array_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]) {
-    for field in fields {
-        if object.get(*field).is_none_or(Value::is_null) {
-            object.insert((*field).to_string(), json!([]));
-        }
     }
 }
 
@@ -1245,11 +1146,25 @@ fn normalize_quality_evidence_machine_fields(
     ) {
         return;
     }
-    let verification_ids = task
-        .verification_intents
-        .iter()
-        .map(|intent| intent.verification_id.clone())
+    // Quality evidence is linked to the verification evidence that actually
+    // passed for this result. Linking every task intent makes a valid
+    // completed_with_notes result fail when one unrelated or environment-bound
+    // intent is not passed, and it falsely broadens the provenance of each
+    // quality requirement.
+    let verification_ids = object
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|verification| verification.get("status").and_then(Value::as_str) == Some("passed"))
+        .filter_map(|verification| {
+            verification
+                .get("verificationId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .collect::<Vec<_>>();
+    let interface_refs = task.write_boundary.artifact_refs.all_interfaces();
     normalize_quality_evidence_array(
         object,
         "architectureQualityEvidence",
@@ -1262,7 +1177,7 @@ fn normalize_quality_evidence_machine_fields(
         "apiContractEvidence",
         &task.api_contract_requirement_refs,
         &verification_ids,
-        &task.write_boundary.artifact_refs.interfaces,
+        &interface_refs,
     );
     normalize_quality_evidence_array(
         object,
@@ -1730,7 +1645,15 @@ fn validate_verification_results(
         .iter()
         .map(|intent| (intent.verification_id.as_str(), intent))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut seen_verification_ids = BTreeSet::new();
     for verification in &result.verification_results {
+        if !seen_verification_ids.insert(verification.verification_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_REF_INVALID",
+                "verificationResults[].verificationId",
+                "TaskResult verificationResults must contain each verification id at most once.",
+            ));
+        }
         let Some(intent) = intents.get(verification.verification_id.as_str()) else {
             issues.push(issue(
                 "TASK_RESULT_REF_INVALID",
@@ -1792,6 +1715,37 @@ fn validate_verification_results(
             "notes",
             "completed_with_notes TaskResult must explain not_run or inconclusive verification results.",
         ));
+    }
+}
+
+fn validate_verification_provenance(
+    result: &TaskResult,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    for verification in &result.verification_results {
+        if verification.status != "passed" {
+            continue;
+        }
+        let traceable = verification.provenance.as_ref().is_some_and(|provenance| {
+            !provenance.evidence_refs.is_empty()
+                || !provenance.test_case_refs.is_empty()
+                || (provenance
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| !command.trim().is_empty())
+                    && provenance.exit_code.is_some())
+                || verification
+                    .browser_checks
+                    .iter()
+                    .any(|check| !check.artifact_refs.is_empty())
+        });
+        if !traceable {
+            issues.push(issue(
+                "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                "verificationResults[].provenance",
+                "Passed verification must cite a concrete evidence ref, test case, browser artifact, or command with exit code.",
+            ));
+        }
     }
 }
 
@@ -1974,7 +1928,21 @@ fn validate_requirement_detail_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_detail_ids = BTreeSet::new();
     for evidence in &result.requirement_detail_evidence {
+        if !seen_detail_ids.insert(evidence.detail_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].detailId",
+                "Requirement detail evidence must contain each assigned detail id at most once.",
+            ));
+        }
         if !required_detail_ids.contains(&evidence.detail_id) {
             issues.push(issue(
                 "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
@@ -1997,6 +1965,25 @@ fn validate_requirement_detail_evidence(
                     "Requirement detail evidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].verificationIds",
+                "Satisfied requirement detail evidence must link only to passed verification results.",
+            ));
+        }
+        if evidence.status == "satisfied" && evidence.evidence_refs.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].evidenceRefs",
+                "Satisfied requirement detail evidence must cite at least one concrete evidence reference.",
+            ));
         }
     }
     if !matches!(
@@ -2130,7 +2117,21 @@ fn validate_architecture_quality_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.architecture_quality_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].requirementId",
+                "Architecture quality evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
@@ -2153,6 +2154,18 @@ fn validate_architecture_quality_evidence(
                     "architectureQualityEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].verificationIds",
+                "Satisfied architecture quality evidence must link only to passed verification results.",
+            ));
         }
         if evidence.summary.trim().is_empty() {
             issues.push(issue(
@@ -2229,7 +2242,21 @@ fn validate_api_contract_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.api_contract_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].requirementId",
+                "API contract evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
@@ -2252,6 +2279,18 @@ fn validate_api_contract_evidence(
                     "apiContractEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].verificationIds",
+                "Satisfied API contract evidence must link only to passed verification results.",
+            ));
         }
         for interface_ref in &evidence.interface_refs {
             if !task_interface_refs.is_empty()
@@ -2354,7 +2393,21 @@ fn validate_code_quality_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.code_quality_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].requirementId",
+                "Code quality evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
@@ -2388,6 +2441,18 @@ fn validate_code_quality_evidence(
                     "codeQualityEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].verificationIds",
+                "Satisfied code quality evidence must link only to passed verification results.",
+            ));
         }
         if evidence.summary.trim().is_empty() {
             issues.push(issue(
@@ -3268,6 +3333,15 @@ fn route_action_for_task_result(
     request_ref: &str,
     result_ref: &str,
 ) -> Result<Option<RouteAction>, state::store::StateError> {
+    if let Some(next_repair) = queued_execution_repair_action(
+        project_root,
+        delivery_id,
+        phase_id,
+        &result.task_id,
+        request_ref,
+    )? {
+        return Ok(Some(next_repair));
+    }
     match run.status {
         TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted => Ok(Some(RouteAction {
             kind: RouteActionKind::ContinueExecution,
@@ -3284,15 +3358,6 @@ fn route_action_for_task_result(
             target_phase_id: None,
         })),
         TaskPlanRunStatus::Completed | TaskPlanRunStatus::CompletedWithNotes => {
-            if let Some(next_repair) = queued_execution_repair_action(
-                project_root,
-                delivery_id,
-                phase_id,
-                &result.task_id,
-                request_ref,
-            )? {
-                return Ok(Some(next_repair));
-            }
             Ok(Some(RouteAction {
                 kind: RouteActionKind::Review,
                 source: "task_result".to_string(),
@@ -3498,7 +3563,6 @@ struct RepairContextInput {
     run_id: String,
     task: TaskDefinition,
     result_file: String,
-    required_top_level_fields: Vec<String>,
     blocked_output: Value,
     submitted_result: Value,
     previous_changed_files: Vec<String>,
@@ -3555,11 +3619,44 @@ pub(crate) fn refresh_stale_task_result_repair_action(
     request_ref: &str,
 ) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
     let request_id = request_id_from_ref(request_ref)?;
-    let Some(stored_task) = private_request_value(project_root, &request_id, "task")? else {
-        return Ok(None);
+    let repair_fields = read_request_fields_chunked(
+        project_root,
+        request_ref,
+        vec![
+            "source.taskExecutionRequestRef".to_string(),
+            "source.taskPlanId".to_string(),
+            "source.taskId".to_string(),
+            "source.taskPlanRunId".to_string(),
+            "source.originalResultFile".to_string(),
+            "outputContract.resultFile".to_string(),
+            "outputContract.blockedReasonOptions".to_string(),
+        ],
+    )?;
+    // Do not inspect repairContract.issueConflicts here. Large issue arrays are
+    // deliberately reprojected into indexed read-group fields, so requesting
+    // the unsplit parent field can make an otherwise valid repair request fail
+    // with FIELD_NOT_ALLOWED. The current canonical TaskDefinition and result
+    // are authoritative; validation below rebuilds the issue set directly.
+    let source_task_id = string_field(&repair_fields, "source.taskId")?;
+    let source_task_execution_request_ref =
+        string_field(&repair_fields, "source.taskExecutionRequestRef")?;
+    let root = Path::new(project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.to_string(),
+        phase_id: phase_id.to_string(),
     };
-    let task: TaskDefinition = serde_json::from_value(normalize_task_definition_value(stored_task))
-        .map_err(state::store::StateError::Json)?;
+    let (current_task_plan, _) = load_current_plan_and_run(root, &locator)?;
+    let task = current_task_plan
+        .tasks
+        .iter()
+        .find(|task| task.task_id == source_task_id)
+        .cloned()
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "TaskResult repair source task {} is not in the current TaskPlan",
+                source_task_id
+            ))
+        })?;
     if !frontend_quality_self_check_applies(&task)
         || task
             .frontend_experience_requirement
@@ -3572,11 +3669,6 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         return Ok(None);
     }
 
-    let root = Path::new(project_root);
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.to_string(),
-        phase_id: phase_id.to_string(),
-    };
     let hydrated_task = task_with_phase_execution_guidance(root, &locator, task)?;
     if hydrated_task
         .frontend_experience_requirement
@@ -3589,88 +3681,32 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         return Ok(None);
     }
 
-    let source = private_request_value(project_root, &request_id, "source")?.ok_or_else(|| {
-        state::store::StateError::StateCorrupted(
-            "TaskResult repair request is missing source.".to_string(),
-        )
-    })?;
-    let source_task_execution_request_ref = source
-        .get("taskExecutionRequestRef")
-        .and_then(Value::as_str)
+    let task_plan_id = string_field(&repair_fields, "source.taskPlanId")?;
+    let task_id = string_field(&repair_fields, "source.taskId")?;
+    let run_id = string_field(&repair_fields, "source.taskPlanRunId")?;
+    let target_file = repair_fields
+        .get("source.originalResultFile")
+        .and_then(|field| field.value.as_str())
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing source.originalResultFile.".to_string(),
+            )
+        })?
+        .to_string();
+    let result_file = string_field(&repair_fields, "outputContract.resultFile")?;
+    // Rebuild this machine-owned list from the current task contract. Repair
+    // requests can be created from an older execution request whose declared
+    // fields predate a contract fix; carrying that stale list would recreate
+    // the same impossible repair contract.
+    let required_top_level_fields = task_result_required_top_level_fields(&hydrated_task)
+        .into_iter()
         .map(str::to_string)
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskResult repair request is missing source.taskExecutionRequestRef.".to_string(),
-            )
-        })?;
-    let task_plan_id = source
-        .get("taskPlanId")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let task_id = source
-        .get("taskId")
-        .and_then(Value::as_str)
-        .unwrap_or(hydrated_task.task_id.as_str())
-        .to_string();
-    let run_id = source
-        .get("taskPlanRunId")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let output_contract = private_request_value(project_root, &request_id, "outputContract")?
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskResult repair request is missing outputContract.".to_string(),
-            )
-        })?;
-    let target_file = source
-        .get("originalResultFile")
-        .and_then(Value::as_str)
-        .or_else(|| output_contract.get("resultFile").and_then(Value::as_str))
-        .map(str::to_string)
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskResult repair request is missing original result file.".to_string(),
-            )
-        })?;
-    let result_file = output_contract
-        .get("resultFile")
-        .and_then(Value::as_str)
-        .unwrap_or(target_file.as_str())
-        .to_string();
-    let required_top_level_fields = output_contract
-        .get("requiredTopLevelFields")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| {
-            task_result_required_top_level_fields(&hydrated_task)
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-        });
+        .collect::<Vec<_>>();
     let blocked_output = json!({
-        "blockedReasons": output_contract
-            .get("blockedReasonOptions")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "blockedReasons": value_field(&repair_fields, "outputContract.blockedReasonOptions")
     });
     let code_quality_requirements =
-        private_request_value(project_root, &request_id, "sourceContext")?
-            .and_then(|source_context| source_context.get("codeQualityExecutionContext").cloned())
-            .filter(|value| !value.is_null())
-            .map(serde_json::from_value::<Vec<CodeQualityRequirement>>)
-            .transpose()
-            .map_err(state::store::StateError::Json)?
-            .unwrap_or_default();
-    let (current_task_plan, _) = load_current_plan_and_run(root, &locator)?;
+        code_quality_requirements_for_task(&current_task_plan, &hydrated_task);
     let browser_profile = current_task_plan
         .browser_verification_profiles
         .iter()
@@ -3719,13 +3755,21 @@ pub(crate) fn refresh_stale_task_result_repair_action(
     if issues.is_empty() {
         return Ok(None);
     }
+    if !issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+    {
+        // This refresh path exists for stale frontend-quality projections. A
+        // repair request with unrelated issues must remain the active request;
+        // recreating it here would change the requestRef on every continue.
+        return Ok(None);
+    }
     let context = RepairContextInput {
         task_plan_id,
         task_id,
         run_id,
         task: hydrated_task,
         result_file,
-        required_top_level_fields,
         blocked_output,
         submitted_result: normalized_result,
         previous_changed_files,
@@ -3772,8 +3816,51 @@ fn materialize_task_result_repair(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let schema_shape = task_result_schema_shape(&context.task, context.browser_profile.as_ref());
-    let result_template = task_result_repair_template(&context, &issues);
+    let code_quality_contract = context.code_quality_requirements.clone();
+    let result_contract = task_result_contract(
+        &context.task,
+        &code_quality_contract,
+        context.browser_profile.as_ref(),
+    );
+    let mut schema_shape = result_contract["schemaShape"].clone();
+    let mut result_template = task_result_repair_template(&context, &issues);
+    let required_top_level_fields = task_result_required_top_level_fields(&context.task)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut contract_recovery = None;
+    if let Some(missing_fields) = task_result_repair_contract_missing_fields(
+        &context.task,
+        &required_top_level_fields,
+        &schema_shape,
+        &result_template,
+    ) {
+        // This request is generated from the same TaskDefinition that validates
+        // the result. A stale or partially materialized contract is therefore
+        // recoverable inside Loom and must never become a terminal workflow
+        // failure. Rebuild both projections from the canonical task contract.
+        schema_shape = task_result_schema_shape(&context.task, context.browser_profile.as_ref());
+        result_template = task_result_template_with_code_quality(
+            &context.task,
+            &code_quality_contract,
+            context.browser_profile.as_ref(),
+        );
+        merge_submitted_task_result_fields(
+            &mut result_template,
+            &context.submitted_result,
+            &issues,
+        );
+        ensure_repair_contract_fields(
+            &required_top_level_fields,
+            &mut schema_shape,
+            &mut result_template,
+        );
+        contract_recovery = Some(json!({
+            "mode": "canonical_rebuild",
+            "fields": missing_fields,
+            "authority": "task_definition_and_task_result_contract"
+        }));
+    }
     let browser_repair_reference_load_plan = if issues
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID")
@@ -3792,14 +3879,14 @@ fn materialize_task_result_repair(
         "source.taskPlanRunId",
         "source.taskExecutionRequestRef",
         "source.originalResultFile",
-        "task.taskId",
-        "task.groupId",
-        "task.title",
-        "task.taskKind",
-        "task.objective",
-        "task.acceptanceRefs",
-        "task.requirementDetailRefs",
-        "task.verificationIntents",
+        "taskProjection.taskId",
+        "taskProjection.groupId",
+        "taskProjection.title",
+        "taskProjection.taskKind",
+        "taskProjection.objective",
+        "taskProjection.acceptanceRefs",
+        "taskProjection.requirementDetailRefs",
+        "taskProjection.verificationIntents",
         "outputContract.blockedReasonOptions",
         "repairContract.profile",
         "repairContract.issueConflicts",
@@ -3812,32 +3899,34 @@ fn materialize_task_result_repair(
         context_fields.push("repairContract.referenceLoadPlan");
     }
     if !context.task.concept_refs.is_empty() {
-        context_fields.push("task.conceptRefs");
+        context_fields.push("taskProjection.conceptRefs");
     }
     if architecture_quality_evidence_applies(&context.task) {
-        context_fields.push("task.architectureQualityRequirementRefs");
+        context_fields.push("taskProjection.architectureQualityRequirementRefs");
     }
     if api_contract_evidence_applies(&context.task) {
-        context_fields.push("task.apiContractRequirementRefs");
+        context_fields.push("taskProjection.apiContractRequirementRefs");
     }
     if code_quality_evidence_applies(&context.task) {
-        context_fields.push("task.codeQualityRequirementRefs");
+        context_fields.push("taskProjection.codeQualityRequirementRefs");
         context_fields.push("sourceContext.codeQualityExecutionContext");
     }
     if frontend_self_check_applies(&context.task) {
-        context_fields
-            .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
+        context_fields.push(
+            "taskProjection.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        );
     }
     if frontend_quality_self_check_applies(&context.task) {
         context_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
-            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
-            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "task.frontendExperienceRequirement.uiSurfaceOwnership",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "taskProjection.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
         ]);
     }
     if runtime_delivery_evidence_applies(&context.task) {
-        context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
+        context_fields.extend(task_projection_runtime_delivery_requirement_read_fields(
+            &context.task,
+        ));
     }
     let mut write_contract_fields = vec![
         "outputContract.resultFile",
@@ -3894,7 +3983,7 @@ fn materialize_task_result_repair(
             "taskPlanRunId": context.run_id,
             "originalResultFile": target_file
         },
-        "task": context.task.clone(),
+        "taskProjection": task_projection(&context.task),
         "repairContract": {
             "profile": "minimal_task_result_repair",
             "issueConflicts": task_result_issue_conflicts(&context, &issues),
@@ -3912,7 +4001,7 @@ fn materialize_task_result_repair(
                 "required": true,
                 "description": "Rewrite the TaskResult JSON for the original task execution request."
             }],
-            "requiredTopLevelFields": context.required_top_level_fields,
+            "requiredTopLevelFields": required_top_level_fields,
             "blockedReasonOptions": context.blocked_output
                 .get("blockedReasons")
                 .cloned()
@@ -3943,6 +4032,9 @@ fn materialize_task_result_repair(
             ]
         }
     });
+    if let Some(recovery) = contract_recovery {
+        root_value["repairContract"]["canonicalRebuild"] = recovery;
+    }
     if !context.code_quality_requirements.is_empty() {
         root_value["sourceContext"] = json!({
             "codeQualityExecutionContext": code_quality_execution_context(&context.code_quality_requirements)
@@ -3986,6 +4078,464 @@ fn materialize_task_result_repair(
             }),
         ),
     ))
+}
+
+fn task_projection(task: &TaskDefinition) -> Value {
+    let full = serde_json::to_value(task).unwrap_or_else(|_| json!({}));
+    let mut projection = serde_json::Map::new();
+    projection.insert(
+        "projectionKind".to_string(),
+        json!("task_scoped_repair_contract"),
+    );
+    for key in [
+        "taskId",
+        "groupId",
+        "title",
+        "taskKind",
+        "implementationActions",
+        "objective",
+        "dependsOn",
+        "scopeRefs",
+        "acceptanceRefs",
+        "requirementDetailRefs",
+        "conceptRefs",
+        "engineeringQualityRequirementRefs",
+        "architectureQualityRequirementRefs",
+        "apiContractRequirementRefs",
+        "codeQualityRequirementRefs",
+    ] {
+        if let Some(value) = full.get(key) {
+            projection.insert(key.to_string(), value.clone());
+        }
+    }
+    projection.insert(
+        "writeBoundary".to_string(),
+        compact_write_boundary(full.get("writeBoundary")),
+    );
+    projection.insert(
+        "verificationIntents".to_string(),
+        compact_verification_intents(full.get("verificationIntents")),
+    );
+    if let Some(requirement) = full.get("frontendExperienceRequirement") {
+        projection.insert(
+            "frontendExperienceRequirement".to_string(),
+            compact_frontend_experience_requirement(requirement),
+        );
+    }
+    if let Some(requirement) = full.get("runtimeDeliveryRequirement") {
+        projection.insert(
+            "runtimeDeliveryRequirement".to_string(),
+            compact_runtime_delivery_requirement(requirement),
+        );
+    }
+    Value::Object(projection)
+}
+
+fn compact_write_boundary(value: Option<&Value>) -> Value {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return json!({"forbiddenPaths": [".loom"], "artifactRefs": {}});
+    };
+    json!({
+        "forbiddenPaths": object.get("forbiddenPaths").cloned().unwrap_or_else(|| json!([".loom"])),
+        "artifactRefs": object.get("artifactRefs").cloned().unwrap_or_else(|| json!({}))
+    })
+}
+
+fn compact_verification_intents(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|intent| {
+                compact_object_fields(
+                    intent,
+                    &[
+                        "verificationId",
+                        "acceptanceRefs",
+                        "requirementDetailRefs",
+                        "behavior",
+                        "preferredEvidence",
+                        "acceptableEvidence",
+                    ],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn compact_frontend_experience_requirement(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "frontendExperienceRef",
+            "experienceLevel",
+            "mustSatisfy",
+            "uiSurfaceRegistryRef",
+            "uiSurfaceDecisionContractRef",
+        ],
+    );
+    let Some(projection_object) = projection.as_object_mut() else {
+        return projection;
+    };
+    let guidance = object
+        .get("executionGuidance")
+        .and_then(Value::as_object)
+        .or_else(|| Some(object));
+    let Some(guidance) = guidance else {
+        return projection;
+    };
+    let mut compact_guidance = serde_json::Map::new();
+    if let Some(value) = guidance.get("closureRequirementRefs") {
+        compact_guidance.insert("closureRequirementRefs".to_string(), value.clone());
+    }
+    if let Some(value) = guidance.get("uiTaskScope") {
+        compact_guidance.insert("uiTaskScope".to_string(), compact_ui_task_scope(value));
+    }
+    if let Some(value) = guidance.get("uiProductionBrief") {
+        compact_guidance.insert(
+            "uiProductionBrief".to_string(),
+            compact_ui_production_brief(value),
+        );
+    }
+    if let Some(value) = guidance.get("styleAssetPlan") {
+        compact_guidance.insert(
+            "styleAssetPlan".to_string(),
+            compact_style_asset_plan(value),
+        );
+    }
+    projection_object.insert(
+        "executionGuidance".to_string(),
+        Value::Object(compact_guidance),
+    );
+    projection
+}
+
+fn compact_ui_task_scope(value: &Value) -> Value {
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "ownershipDimensions",
+            "surfacesInScope",
+            "dataViewsInScope",
+            "actionsInScope",
+            "operationPathsInScope",
+            "frontendBackendBindings",
+            "stateExpectation",
+            "regionsInScope",
+            "actionsInContract",
+            "statesInContract",
+            "qualityRulesInScope",
+            "layoutBaseline",
+            "informationModel",
+            "contentBoundary",
+            "bindingContract",
+            "contractRef",
+            "patternDecision",
+        ],
+    );
+    if let Some(object) = value.as_object() {
+        for (source_key, item_keys) in [
+            (
+                "surfacesInScope",
+                ["surfaceId", "name", "kind", "purpose", "role"].as_slice(),
+            ),
+            (
+                "dataViewsInScope",
+                ["viewId", "name", "purpose", "fieldRefs", "interfaceRefs"].as_slice(),
+            ),
+            (
+                "actionsInScope",
+                [
+                    "actionId",
+                    "name",
+                    "label",
+                    "purpose",
+                    "interfaceRefs",
+                    "operationPathRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "operationPathsInScope",
+                [
+                    "pathId",
+                    "name",
+                    "purpose",
+                    "interfaceRefs",
+                    "actionRefs",
+                    "stateRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "regionsInScope",
+                [
+                    "regionId",
+                    "name",
+                    "role",
+                    "layout",
+                    "informationModel",
+                    "density",
+                ]
+                .as_slice(),
+            ),
+            (
+                "actionsInContract",
+                [
+                    "actionId",
+                    "name",
+                    "label",
+                    "purpose",
+                    "interfaceRefs",
+                    "operationPathRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "statesInContract",
+                ["state", "stateId", "trigger", "userMeaning"].as_slice(),
+            ),
+            (
+                "qualityRulesInScope",
+                ["ruleId", "category", "requirement", "verification"].as_slice(),
+            ),
+        ] {
+            if let Some(items) = object.get(source_key) {
+                projection[source_key] = compact_array_items(items, item_keys);
+            }
+        }
+        if let Some(bindings) = object.get("frontendBackendBindings") {
+            projection["frontendBackendBindings"] = Value::Array(
+                bindings
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|binding| {
+                        let mut compact = compact_object_fields(
+                            binding,
+                            &[
+                                "bindingId",
+                                "workflowRefs",
+                                "operationPathRefs",
+                                "completionRule",
+                            ],
+                        );
+                        if let Some(interfaces) = binding.get("interfaces") {
+                            compact["interfaces"] = compact_array_items(
+                                interfaces,
+                                &["interfaceId", "name", "type", "method", "path", "role"],
+                            );
+                        }
+                        compact
+                    })
+                    .collect(),
+            );
+        }
+    }
+    projection
+}
+
+fn compact_ui_production_brief(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "schemaVersion",
+            "briefKind",
+            "appliesTo",
+            "productIntent",
+            "layoutContract",
+            "informationContract",
+            "actionContract",
+            "stateContract",
+            "visualContract",
+            "contentBoundary",
+        ],
+    );
+    if let Some(contract) = object.get("surfaceDecisionContract") {
+        projection["surfaceDecisionContract"] = compact_ui_surface_contract(contract);
+    }
+    projection
+}
+
+fn compact_ui_surface_contract(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "contractRef",
+            "selectionMode",
+            "patternDecision",
+            "semanticFacts",
+            "layoutModel",
+            "contentBoundary",
+            "compositionConstraints",
+            "layoutBaseline",
+            "informationModel",
+        ],
+    );
+    for (source_key, target_key, item_keys) in [
+        (
+            "regionsInScope",
+            "regionsInScope",
+            [
+                "regionId",
+                "name",
+                "role",
+                "layout",
+                "informationModel",
+                "density",
+            ]
+            .as_slice(),
+        ),
+        (
+            "actionsInScope",
+            "actionsInScope",
+            [
+                "actionId",
+                "name",
+                "label",
+                "purpose",
+                "interfaceRefs",
+                "operationPathRefs",
+            ]
+            .as_slice(),
+        ),
+        (
+            "statesInScope",
+            "statesInScope",
+            ["state", "stateId", "trigger", "userMeaning"].as_slice(),
+        ),
+        (
+            "qualityRulesInScope",
+            "qualityRulesInScope",
+            ["ruleId", "category", "requirement", "verification"].as_slice(),
+        ),
+    ] {
+        if let Some(value) = object.get(source_key) {
+            projection[target_key] = compact_array_items(value, item_keys);
+        }
+    }
+    projection
+}
+
+fn compact_style_asset_plan(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection =
+        compact_object_fields(value, &["source", "strategy", "designTokenAssetPlan"]);
+    if let Some(reference_plan) = object.get("referencePlan") {
+        projection["referencePlan"] =
+            compact_array_items(reference_plan, &["refId", "path", "reason", "required"]);
+    }
+    projection
+}
+
+fn compact_runtime_delivery_requirement(value: &Value) -> Value {
+    compact_object_fields(
+        value,
+        &[
+            "appliesToThisTask",
+            "reason",
+            "runtimeDeliveryRef",
+            "source",
+            "deploymentFailureRef",
+            "affectedContractFields",
+            "requiredCodeLevelChecks",
+            "evidenceExpectedInTaskResult",
+            "forbiddenActions",
+        ],
+    )
+}
+
+fn compact_array_items(value: &Value, keys: &[&str]) -> Value {
+    Value::Array(
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|item| compact_object_fields(item, keys))
+            .collect(),
+    )
+}
+
+fn compact_object_fields(value: &Value, keys: &[&str]) -> Value {
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut compact = serde_json::Map::new();
+    for key in keys {
+        if let Some(value) = object.get(*key).filter(|value| !value.is_null()) {
+            compact.insert((*key).to_string(), value.clone());
+        }
+    }
+    Value::Object(compact)
+}
+
+fn task_result_repair_contract_missing_fields(
+    task: &TaskDefinition,
+    required_top_level_fields: &[String],
+    schema_shape: &Value,
+    result_template: &Value,
+) -> Option<Vec<String>> {
+    let required = required_top_level_fields
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let schema_properties = schema_shape.get("properties").and_then(Value::as_object);
+    let template_object = result_template.as_object();
+    let missing = task_result_required_top_level_fields(task)
+        .into_iter()
+        .filter(|field| {
+            !required.contains(field)
+                || !schema_properties.is_some_and(|properties| properties.contains_key(*field))
+                || !template_object.is_some_and(|template| template.contains_key(*field))
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    (!missing.is_empty()).then_some(missing)
+}
+
+fn ensure_repair_contract_fields(
+    required_top_level_fields: &[String],
+    schema_shape: &mut Value,
+    result_template: &mut Value,
+) {
+    let Some(properties) = schema_shape
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(template) = result_template.as_object() else {
+        return;
+    };
+    for field in required_top_level_fields {
+        if properties.contains_key(field) {
+            continue;
+        }
+        let Some(value) = template.get(field) else {
+            continue;
+        };
+        let shape = match value {
+            Value::Array(_) => json!([{}]),
+            Value::Object(_) => json!({"shape": "object"}),
+            Value::Null => json!({"shape": "value or null"}),
+            Value::Bool(_) => json!("boolean"),
+            Value::Number(_) => json!("number"),
+            Value::String(_) => json!("string"),
+        };
+        properties.insert(field.clone(), shape);
+    }
 }
 
 fn previous_persisted_changed_files(
@@ -4391,11 +4941,10 @@ fn task_result_architecture_quality_conflict(
     base["expectedArchitectureQualityRequirementRefs"] =
         json!(context.task.architecture_quality_requirement_refs);
     base["current"] = json!({
-        "architectureQualityEvidence": context
-            .submitted_result
-            .get("architectureQualityEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "architectureQualityEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("architectureQualityEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced architecture quality requirements, add architectureQualityEvidence entries for every task.architectureQualityRequirementRefs item and cite task verificationIds.",
@@ -4407,11 +4956,10 @@ fn task_result_architecture_quality_conflict(
 fn task_result_api_contract_conflict(context: &RepairContextInput, mut base: Value) -> Value {
     base["expectedApiContractRequirementRefs"] = json!(context.task.api_contract_requirement_refs);
     base["current"] = json!({
-        "apiContractEvidence": context
-            .submitted_result
-            .get("apiContractEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "apiContractEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("apiContractEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced API contract requirements, add apiContractEvidence entries for every task.apiContractRequirementRefs item and cite task verificationIds.",
@@ -4436,17 +4984,67 @@ fn task_result_code_quality_conflict(context: &RepairContextInput, mut base: Val
         })
         .collect::<Vec<_>>());
     base["current"] = json!({
-        "codeQualityEvidence": context
-            .submitted_result
-            .get("codeQualityEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "codeQualityEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("codeQualityEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced code quality requirements, add codeQualityEvidence entries for every task.codeQualityRequirementRefs item and cite task verificationIds.",
         "If selected language or framework reference evidence or verification is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
     ]);
     base
+}
+
+fn compact_task_result_evidence_entries(value: Option<&Value>, id_key: &str) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                let object = entry.as_object();
+                let mut compact = serde_json::Map::new();
+                compact.insert(
+                    id_key.to_string(),
+                    object
+                        .and_then(|item| item.get(id_key))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                compact.insert(
+                    "status".to_string(),
+                    object
+                        .and_then(|item| item.get("status"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                compact.insert(
+                    "verificationIdCount".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("verificationIds"))
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0)),
+                );
+                compact.insert(
+                    "evidencePresent".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("evidence"))
+                        .is_some_and(|value| !value.is_null())),
+                );
+                compact.insert(
+                    "knownGapCount".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("knownGaps"))
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0)),
+                );
+                Value::Object(compact)
+            })
+            .collect(),
+    )
 }
 
 fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
@@ -4802,6 +5400,7 @@ fn repairable_with_tool(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -4812,6 +5411,7 @@ fn repairable_with_tool(
         resubmit_tool: resubmit_tool.to_string(),
         fix_scope: Some(fix_scope.to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(resubmit_tool),
     })
 }
 
@@ -4901,37 +5501,6 @@ fn string_field(
         })
 }
 
-fn string_vec_field(
-    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
-    name: &str,
-) -> Result<Vec<String>, state::store::StateError> {
-    fields
-        .get(name)
-        .and_then(|field| field.value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect()
-        })
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(format!("missing request field {name}"))
-        })
-}
-
-fn code_quality_requirements_field(
-    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
-    name: &str,
-) -> Result<Vec<CodeQualityRequirement>, state::store::StateError> {
-    let Some(value) = fields.get(name).map(|field| field.value.clone()) else {
-        return Ok(vec![]);
-    };
-    if value.is_null() {
-        return Ok(vec![]);
-    }
-    serde_json::from_value(value).map_err(state::store::StateError::Json)
-}
-
 fn value_field(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     name: &str,
@@ -4951,200 +5520,6 @@ fn array_field(
         .map(|field| field.value.clone())
         .filter(Value::is_array)
         .unwrap_or_else(|| json!([]))
-}
-
-fn runtime_delivery_requirement_from_fields(
-    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
-) -> Value {
-    let whole = value_field(fields, "task.runtimeDeliveryRequirement");
-    if !whole.is_null() {
-        return whole;
-    }
-    if !fields.contains_key("task.runtimeDeliveryRequirement.appliesToThisTask") {
-        return Value::Null;
-    }
-    let mut requirement = json!({
-        "appliesToThisTask": value_field(fields, "task.runtimeDeliveryRequirement.appliesToThisTask"),
-        "reason": value_field(fields, "task.runtimeDeliveryRequirement.reason"),
-        "affectedContractFields": array_field(fields, "task.runtimeDeliveryRequirement.affectedContractFields"),
-        "requiredCodeLevelChecks": array_field(fields, "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"),
-        "evidenceExpectedInTaskResult": array_field(fields, "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult"),
-        "forbiddenActions": array_field(fields, "task.runtimeDeliveryRequirement.forbiddenActions")
-    });
-    for (field, key) in [
-        (
-            "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
-            "runtimeDeliveryRef",
-        ),
-        ("task.runtimeDeliveryRequirement.source", "source"),
-        (
-            "task.runtimeDeliveryRequirement.deploymentFailureRef",
-            "deploymentFailureRef",
-        ),
-    ] {
-        let value = value_field(fields, field);
-        if !value.is_null() {
-            requirement[key] = value;
-        }
-    }
-    requirement
-}
-
-fn frontend_experience_requirement_from_fields(
-    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
-) -> Value {
-    let has_closure = fields.contains_key(
-        "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-    );
-    let has_surface_contract = fields
-        .contains_key("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef")
-        || fields.contains_key("task.frontendExperienceRequirement.uiSurfaceOwnership")
-        || fields.contains_key("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
-        || fields.contains_key(
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
-        );
-    if !has_closure && !has_surface_contract {
-        return Value::Null;
-    }
-    let mut requirement = json!({
-        "executionGuidance": {}
-    });
-    if has_closure {
-        requirement["executionGuidance"]["closureRequirementRefs"] = array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-        );
-    }
-    let surfaces_in_scope = array_field(
-        fields,
-        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-    );
-    if surfaces_in_scope
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        requirement["executionGuidance"]["surfacesInScope"] = surfaces_in_scope;
-    }
-    let actions_in_scope = array_field(
-        fields,
-        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-    );
-    if actions_in_scope
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        requirement["executionGuidance"]["actionsInScope"] = actions_in_scope;
-    }
-    let surface_contract_ref = value_field(
-        fields,
-        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-    );
-    if !surface_contract_ref.is_null() {
-        requirement["uiSurfaceDecisionContractRef"] = surface_contract_ref;
-    }
-    let surface_ownership = value_field(
-        fields,
-        "task.frontendExperienceRequirement.uiSurfaceOwnership",
-    );
-    if !surface_ownership.is_null() {
-        requirement["uiSurfaceOwnership"] = surface_ownership;
-    }
-    let ui_production_brief = value_field(
-        fields,
-        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
-    );
-    if ui_production_brief.is_object() {
-        requirement["executionGuidance"]["uiProductionBrief"] = ui_production_brief;
-    } else {
-        let surface_decision_contract = surface_decision_contract_from_fields(fields);
-        if !surface_decision_contract.is_null() {
-            requirement["executionGuidance"]["uiProductionBrief"]["surfaceDecisionContract"] =
-                surface_decision_contract;
-        }
-    }
-    let style_asset_plan = value_field(
-        fields,
-        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
-    );
-    if style_asset_plan.is_object() {
-        requirement["executionGuidance"]["styleAssetPlan"] = style_asset_plan;
-    } else {
-        let reference_plan = array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
-        );
-        if reference_plan
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-        {
-            requirement["executionGuidance"]["styleAssetPlan"]["referencePlan"] = reference_plan;
-        }
-    }
-    requirement
-}
-
-fn surface_decision_contract_from_fields(
-    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
-) -> Value {
-    if !fields.contains_key(
-        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
-    ) {
-        return Value::Null;
-    }
-    json!({
-        "contractRef": value_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
-        ),
-        "selectionMode": value_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode"
-        ),
-        "patternDecision": value_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision"
-        ),
-        "regionsInScope": array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope"
-        ),
-        "actionsInScope": array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope"
-        ),
-        "statesInScope": array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope"
-        ),
-        "contentBoundary": value_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contentBoundary"
-        ),
-        "qualityRulesInScope": array_field(
-            fields,
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope"
-        )
-    })
-}
-
-fn private_request_value(
-    project_root: &str,
-    request_id: &str,
-    key: &str,
-) -> Result<Option<Value>, state::store::StateError> {
-    let root = Path::new(project_root);
-    let manifest_file = state::paths::request_storage_manifest_file(root, request_id);
-    if state::store::path_exists(&manifest_file) {
-        if let Some(relative) = state::request_manifest::request_storage_ref(root, request_id, key)?
-        {
-            return read_project_json_value(root, &relative).map(Some);
-        }
-    }
-
-    let entry = state::request_index::get_request_index_entry(project_root, request_id)?;
-    let request_path = from_project_relative(root, &entry.request_file)?;
-    let request_root: Value = state::store::read_json(&request_path)?;
-    Ok(request_root.get(key).cloned())
 }
 
 fn read_project_json_value(
@@ -5290,6 +5665,145 @@ mod tests {
             },
             "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
         })
+    }
+
+    fn compact_projection_task() -> TaskDefinition {
+        TaskDefinition {
+            task_id: "task-ui".to_string(),
+            group_id: "group-ui".to_string(),
+            title: "Implement the workbench".to_string(),
+            task_kind: TaskKind::FrontendExperience,
+            implementation_actions: vec![],
+            objective: "Implement the task-owned workbench flow.".to_string(),
+            depends_on: vec![],
+            scope_refs: vec!["scope-ui".to_string()],
+            acceptance_refs: vec!["accept-ui".to_string()],
+            requirement_detail_refs: vec!["detail-ui".to_string()],
+            write_boundary: contracts::TaskWriteBoundary {
+                forbidden_paths: vec![".loom".to_string()],
+                artifact_refs: contracts::TaskArtifactRefs::default(),
+            },
+            verification_intents: vec![],
+            concept_refs: vec![],
+            concept_responsibilities: vec![],
+            concept_verification_intents: vec![],
+            frontend_experience_requirement: Some(json!({
+                "uiSurfaceDecisionContractRef": "surface-contract",
+                "executionGuidance": {
+                    "closureRequirementRefs": ["closure:workbench:submit"],
+                    "uiProductionBrief": {
+                        "appliesTo": {"surfaceIds": ["surface-workbench"]},
+                        "surfaceDecisionContract": {
+                            "contractRef": "surface-contract",
+                            "semanticFacts": {"businessObject": "ticket"},
+                            "regionsInScope": [{"regionId": "region-main", "name": "Main"}],
+                            "actionsInScope": [{"actionId": "action-submit", "label": "Submit"}],
+                            "statesInScope": [{"state": "loading"}],
+                            "qualityRulesInScope": [{"ruleId": "rule-density"}],
+                            "unrelatedLargeSource": "do not copy this source"
+                        }
+                    },
+                    "styleAssetPlan": {
+                        "referencePlan": [{"path": "uix/core.md", "reason": "UI quality"}],
+                        "designTokenAssetPlan": {"strategy": "reuse_existing"}
+                    }
+                }
+            })),
+            runtime_delivery_requirement: None,
+            engineering_quality_requirement_refs: vec![],
+            architecture_quality_requirement_refs: vec![],
+            api_contract_requirement_refs: vec![],
+            code_quality_requirement_refs: vec![],
+        }
+    }
+
+    #[test]
+    fn task_result_repair_projection_keeps_task_contract_without_full_task_copy() {
+        let projection = task_projection(&compact_projection_task());
+
+        assert_eq!(projection["projectionKind"], "task_scoped_repair_contract");
+        assert!(projection.get("conceptResponsibilities").is_none());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/regionsInScope/0/regionId")
+            .is_some());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/styleAssetPlan/referencePlan/0/path")
+            .is_some());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/unrelatedLargeSource")
+            .is_none());
+    }
+
+    #[test]
+    fn task_result_repair_contract_rebuild_has_no_terminal_failure_path() {
+        let task = compact_projection_task();
+        let required = task_result_required_top_level_fields(&task)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut schema = json!({"type": "object", "properties": {}});
+        let mut template = json!({
+            "status": "completed",
+            "frontendQualitySelfCheck": {}
+        });
+
+        assert!(
+            task_result_repair_contract_missing_fields(&task, &required, &schema, &template)
+                .is_some()
+        );
+        let canonical_schema = task_result_schema_shape(&task, None);
+        let canonical_template = task_result_template_with_code_quality(&task, &[], None);
+        schema = canonical_schema;
+        template = canonical_template;
+        ensure_repair_contract_fields(&required, &mut schema, &mut template);
+
+        assert!(
+            task_result_repair_contract_missing_fields(&task, &required, &schema, &template)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn quality_evidence_links_only_to_passed_verifications() {
+        let mut task = compact_projection_task();
+        task.api_contract_requirement_refs = vec!["api-1".to_string()];
+        task.code_quality_requirement_refs = vec!["code-1".to_string()];
+        task.verification_intents = serde_json::from_value(json!([
+            {
+                "verificationId": "verify-passed",
+                "behavior": "A passed contract check",
+                "acceptableEvidence": ["automated_test"]
+            },
+            {
+                "verificationId": "verify-not-run",
+                "behavior": "An unrelated check not run",
+                "acceptableEvidence": ["manual_command_output"]
+            }
+        ]))
+        .expect("verification intents");
+        let mut result = json!({
+            "status": "completed_with_notes",
+            "verificationResults": [
+                {"verificationId": "verify-passed", "status": "passed"},
+                {"verificationId": "verify-not-run", "status": "not_run"}
+            ],
+            "apiContractEvidence": [{"status": "satisfied", "summary": "API evidence"}],
+            "codeQualityEvidence": [{"status": "satisfied", "summary": "Code evidence"}]
+        });
+
+        normalize_quality_evidence_machine_fields(
+            result.as_object_mut().expect("result object"),
+            &task,
+        );
+
+        assert_eq!(
+            result["apiContractEvidence"][0]["verificationIds"],
+            json!(["verify-passed"])
+        );
+        assert_eq!(
+            result["codeQualityEvidence"][0]["verificationIds"],
+            json!(["verify-passed"])
+        );
     }
 
     #[test]

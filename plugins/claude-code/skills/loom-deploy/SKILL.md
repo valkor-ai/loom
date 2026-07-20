@@ -5,7 +5,7 @@ description: Use when the user invokes /loom deploy or /loom-deploy to prepare, 
 
 # loom-deploy
 
-Deployment is controlled by Loom MCP deploy tools. Use the matching `loom.deploy*` tool and follow its structured action result.
+Deployment is controlled by Loom MCP deploy tools. Use the matching `loom.deploy*` tool and follow its structured action result. For `user_gate` with `preResponseContract`, execute the contract before any visible response: call `loom.inspectRequest`, then call `loom.readFieldGroup` for only required `requestReadPlan.groups`, and present the returned deployment decision.
 
 During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it. During asset repair, edit only the returned generated deployment assets or the returned `modelRepairRef`, then call the returned `retryTool`; never edit generated source-model/topology/facts snapshots directly. Do not retry asset repair through `loom.deployRun`. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
 

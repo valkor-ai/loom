@@ -18,12 +18,25 @@
 - In framework apps, do not bypass the framework's state/rendering model with direct DOM mutation unless integrating a library that requires it; isolate such integration behind a component or adapter.
 - Keep browser feature use compatible with the configured targets or include the existing polyfill/transpile path.
 
+### Worker And Observer Ownership
+
+Workers, service workers, observers, media streams, and event listeners need an explicit owner. Validate message shape at the boundary, report worker errors, terminate workers when the feature is no longer used, and disconnect observers during teardown. A callback that captures a component or DOM subtree must not outlive that owner.
+
+### Storage And Cache Evolution
+
+Treat browser storage as an unreliable boundary: parsing, quota, private-mode/security errors, stale schema, and unavailable APIs are expected states. Version IndexedDB upgrades transactionally and define how old records are migrated or discarded. Service-worker cache names need versioning, invalidation, install/activate failure handling, and an explicit network/cache policy; a cached success must not hide a newer error or authorization change.
+
+### Permission And Main-Thread Boundaries
+
+Request permission from a user action, preserve denied and dismissed states, and avoid repeated prompts. Move CPU-heavy parsing or transformation to a worker or bounded chunks when it can block interaction. Verify that the chosen browser API and fallback path match the repository's target browsers rather than assuming a modern API exists everywhere.
+
 ## Verification Focus
 
 - Run browser-oriented tests or a framework build for changed browser code.
 - Test success, network failure, non-2xx response, abort/unmount, and malformed response paths when fetch logic changed.
 - Verify cleanup for observers, workers, timers, and event listeners when lifecycle code changed.
 - For UI-facing browser behavior, smoke the relevant viewport or interaction path rather than relying only on unit tests.
+- For workers, storage, service workers, permissions, and observers, verify unavailable/denied, malformed, upgrade, teardown, and stale-result paths as applicable.
 
 ## Evidence Focus
 

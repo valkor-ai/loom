@@ -79,3 +79,20 @@ Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, game
 - Static placeholder canvas.
 - Dark blurred background with no inspectable object.
 - Controls that occlude the subject or cannot be used by touch.
+
+## Loading, Fallback, And Performance
+
+An immersive surface is incomplete until it behaves predictably before assets
+load, when WebGL is unavailable, and after the viewport changes.
+
+```text
+initial loading -> asset progress or skeleton -> interactive scene
+                                      \\-> fallback explanation + usable action
+```
+
+- Reserve the canvas dimensions before initialization so loading does not shift the surrounding UI.
+- Show which asset or stage is loading when progress is meaningful; a permanent spinner without recovery is not a loading state.
+- Provide an actionable fallback for WebGL, shader, asset, or capability failure. The fallback can be a static image, inspectable object view, or equivalent product task surface.
+- Keep camera framing, controls, and overlay state stable across resize and route changes.
+- Cap pixel ratio, dispose unused assets, and pause or reduce animation when the surface is hidden or reduced motion is requested.
+- Test the scene at desktop and mobile aspect ratios; a nonblank canvas alone does not prove correct framing or usable controls.

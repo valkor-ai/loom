@@ -13,8 +13,10 @@ pub mod write_targets;
 pub use project::{initialize_project, project_root_for_project_id, read_project_config};
 pub use request_manifest::{write_native_request, NativeRequestInput, StoredRequest};
 pub use request_resolver::{
-    inspect_request, read_field_group, read_field_group_flat, read_request_fields,
+    inspect_request, inspect_request_unrecorded, read_field_group, read_field_group_flat,
+    read_request_fields,
 };
 pub use write_targets::{
-    authorize_write_targets, AuthorizedWriteSet, WriteTargetAuthorizationError,
+    authorize_write_targets, record_pending_repair, record_pending_repair_for_request,
+    AuthorizedWriteSet, WriteTargetAuthorizationError,
 };

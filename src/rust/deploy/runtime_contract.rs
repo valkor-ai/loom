@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, path::Path};
 
 use contracts::{
     DependencyService, DependencyServiceKind, DeploymentApiContract, DeploymentApiInterface,
-    DeploymentContractAuthority, DeploymentHttpProbe, DeploymentRuntimeContract, DeploymentShape,
-    RuntimeContractApi, RuntimeContractEndpoint, RuntimeEnvironmentContract,
+    DeploymentCommandContract, DeploymentCommandPhase, DeploymentContractAuthority,
+    DeploymentHttpProbe, DeploymentRuntimeContract, DeploymentShape, RuntimeContractApi,
+    RuntimeContractEndpoint, RuntimeEnvironmentContract,
 };
 use delivery_core::{DeliveryIndex, DeliveryPhaseState, TransitionStore};
-use serde_json::{json, Value};
+use serde_json::Value;
 use state::{
     lifecycle_store::FileTransitionStore,
     paths::{from_project_relative, to_project_relative},
@@ -66,11 +67,10 @@ fn runtime_contract_from_value_with_api_contract(
     let http_probes = runtime.get("httpProbes").unwrap_or(&Value::Null);
     let preview_path = string_at(http_probes, &["previewPath"]).unwrap_or_else(|| "/".to_string());
     let runtime_kind = string_at(runtime, &["runtimeKind"]);
-    let build_command =
-        string_at(runtime, &["build", "command"]).or_else(|| string_at(runtime, &["buildCommand"]));
-    let start_command =
-        string_at(runtime, &["start", "command"]).or_else(|| string_at(runtime, &["startCommand"]));
-    let port = u16_at(runtime, &["start", "port"]).or_else(|| u16_at(runtime, &["port"]));
+    let commands = command_contract_from_runtime(runtime);
+    let port = ["development", "verification", "deployment"]
+        .into_iter()
+        .find_map(|phase| u16_at(runtime, &["commands", phase, "start", "port"]));
     let health_path = string_at(http_probes, &["healthPath"]);
     let safe_http_probes =
         safe_http_probes(&preview_path, health_path.as_deref(), api_contract.as_ref());
@@ -86,7 +86,7 @@ fn runtime_contract_from_value_with_api_contract(
             api = Some(RuntimeContractApi {
                 required: true,
                 kind: None,
-                build_command: None,
+                commands: DeploymentCommandPhase::default(),
                 entry: None,
                 base_path: contract.public_base_path.clone(),
             });
@@ -104,8 +104,7 @@ fn runtime_contract_from_value_with_api_contract(
         dependency_service_policy: "contract_only".to_string(),
         deployment_shape: Some(shape),
         runtime_kind,
-        build_command,
-        start_command,
+        commands,
         port,
         preview_path,
         health_path,
@@ -130,12 +129,35 @@ fn endpoint_from_value(value: &Value) -> Option<RuntimeContractEndpoint> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         kind: string_at(value, &["kind"]),
-        build_command: string_at(value, &["buildCommand"]),
+        commands: endpoint_commands_from_value(value),
         source_root: string_at(value, &["sourceRoot"]),
         output_dir: string_at(value, &["outputDir"]),
         served_by: string_at(value, &["servedBy"]),
         served_by_ref: string_at(value, &["servedByRef"]),
     })
+}
+
+fn command_contract_from_runtime(runtime: &Value) -> DeploymentCommandContract {
+    let commands = runtime.get("commands");
+    DeploymentCommandContract {
+        development: command_phase_from_value(commands.and_then(|value| value.get("development"))),
+        verification: command_phase_from_value(
+            commands.and_then(|value| value.get("verification")),
+        ),
+        deployment: command_phase_from_value(commands.and_then(|value| value.get("deployment"))),
+    }
+}
+
+fn command_phase_from_value(value: Option<&Value>) -> DeploymentCommandPhase {
+    let Some(value) = value else {
+        return DeploymentCommandPhase::default();
+    };
+    DeploymentCommandPhase {
+        build: string_at(value, &["build", "command"]),
+        start: string_at(value, &["start", "command"]),
+        working_directory: string_at(value, &["start", "workingDirectory"])
+            .or_else(|| string_at(value, &["build", "workingDirectory"])),
+    }
 }
 
 fn api_from_value(value: &Value) -> Option<RuntimeContractApi> {
@@ -145,10 +167,14 @@ fn api_from_value(value: &Value) -> Option<RuntimeContractApi> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         kind: string_at(value, &["kind"]),
-        build_command: string_at(value, &["buildCommand"]),
+        commands: endpoint_commands_from_value(value),
         entry: string_at(value, &["entry"]),
         base_path: string_at(value, &["basePath"]),
     })
+}
+
+fn endpoint_commands_from_value(value: &Value) -> DeploymentCommandPhase {
+    command_phase_from_value(value.get("commands"))
 }
 
 fn safe_http_probes(
@@ -322,25 +348,11 @@ fn deployment_shape(
     api: Option<&RuntimeContractApi>,
     api_contract: Option<&DeploymentApiContract>,
 ) -> DeploymentShape {
-    if let Some(value) = string_at(runtime, &["deploymentShape"]) {
-        let normalized = value.replace(['_', ' '], "-");
-        if matches!(
-            normalized.as_str(),
-            "frontend-and-backend" | "frontend-backend" | "dual-service" | "multi-service"
-        ) {
-            return DeploymentShape::FrontendAndBackend;
-        }
-        if matches!(normalized.as_str(), "single-service" | "single") {
-            if runtime_requires_public_frontend_api_topology(runtime, frontend, api, api_contract) {
-                return DeploymentShape::FrontendAndBackend;
-            }
-            return DeploymentShape::SingleService;
-        }
-    }
     if runtime_requires_public_frontend_api_topology(runtime, frontend, api, api_contract) {
         return DeploymentShape::FrontendAndBackend;
     }
-    if frontend.map(|item| item.required).unwrap_or(false)
+    if !frontend_served_by_integrated_app(frontend)
+        && frontend.map(|item| item.required).unwrap_or(false)
         && api.map(|item| item.required).unwrap_or(false)
     {
         return DeploymentShape::FrontendAndBackend;
@@ -427,16 +439,35 @@ fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
 
 fn labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
     let mut labels = Vec::new();
-    for command in [
-        string_at(runtime, &["build", "command"]),
-        string_at(runtime, &["buildCommand"]),
-        string_at(runtime, &["start", "command"]),
-        string_at(runtime, &["startCommand"]),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        labels.extend(labeled_command_segments(&command));
+    for phase_name in ["development", "verification", "deployment"] {
+        let phase = runtime
+            .get("commands")
+            .and_then(|commands| commands.get(phase_name))
+            .unwrap_or(&Value::Null);
+        for command in [
+            string_at(phase, &["build", "command"]),
+            string_at(phase, &["start", "command"]),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            labels.extend(labeled_command_segments(&command));
+        }
+    }
+    for endpoint in ["frontend", "api"] {
+        let commands = runtime
+            .get(endpoint)
+            .and_then(|endpoint| endpoint.get("commands"))
+            .unwrap_or(&Value::Null);
+        labels.extend(
+            [
+                string_at(commands, &["build", "command"]),
+                string_at(commands, &["start", "command"]),
+            ]
+            .into_iter()
+            .flatten()
+            .flat_map(|command| labeled_command_segments(&command)),
+        );
     }
     let has_frontend = labels
         .iter()
@@ -555,8 +586,7 @@ fn heuristic_runtime_contract() -> DeploymentRuntimeContract {
         dependency_service_policy: "code_probe".to_string(),
         deployment_shape: None,
         runtime_kind: None,
-        build_command: None,
-        start_command: None,
+        commands: DeploymentCommandContract::default(),
         port: None,
         preview_path: "/".to_string(),
         health_path: None,
@@ -575,29 +605,40 @@ fn heuristic_runtime_contract() -> DeploymentRuntimeContract {
 }
 
 fn dependency_services_from_runtime(runtime: &Value) -> Vec<DependencyService> {
-    let signals = serde_json::to_string(&json!({
-        "runtimeKind": runtime.get("runtimeKind"),
-        "environment": runtime.get("environment"),
-        "deliveryMechanics": runtime.get("deliveryMechanics"),
-        "api": runtime.get("api"),
-        "httpProbes": runtime.get("httpProbes"),
-    }))
-    .unwrap_or_default()
-    .to_ascii_lowercase();
-    let mut services = Vec::new();
-    if signals.contains("postgres")
-        || signals.contains("postgresql")
-        || signals.contains("jdbc:postgresql")
-    {
-        services.push(service_definition(DependencyServiceKind::Postgres));
+    let mut kinds = runtime
+        .get("runtimeDependencies")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|dependency| {
+            dependency.get("startupRequirement").and_then(Value::as_str) != Some("not_applicable")
+        })
+        .filter_map(dependency_service_kind)
+        .collect::<Vec<_>>();
+    kinds.sort_by_key(|kind| format!("{kind:?}"));
+    kinds.dedup();
+    kinds.into_iter().map(service_definition).collect()
+}
+
+fn dependency_service_kind(dependency: &Value) -> Option<DependencyServiceKind> {
+    let provider = dependency
+        .get("provider")
+        .or_else(|| dependency.get("serviceKind"))
+        .or_else(|| dependency.get("technologyId"))
+        .and_then(Value::as_str)?
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '-'], "");
+    match provider.as_str() {
+        "postgres" | "postgresql" => Some(DependencyServiceKind::Postgres),
+        "mysql" | "mariadb" => Some(DependencyServiceKind::Mysql),
+        "redis" => Some(DependencyServiceKind::Redis),
+        "mongodb" | "mongo" => Some(DependencyServiceKind::Mongodb),
+        "rabbitmq" => Some(DependencyServiceKind::Rabbitmq),
+        "elasticsearch" | "opensearch" => Some(DependencyServiceKind::Elasticsearch),
+        "minio" | "s3" => Some(DependencyServiceKind::Minio),
+        _ => None,
     }
-    if signals.contains("redis") {
-        services.push(service_definition(DependencyServiceKind::Redis));
-    }
-    if signals.contains("mysql") || signals.contains("mariadb") {
-        services.push(service_definition(DependencyServiceKind::Mysql));
-    }
-    services
 }
 
 pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyService {
@@ -622,7 +663,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             ]),
             volume_name: Some("loom_postgres_data".to_string()),
             volume_target: Some("/var/lib/postgresql/data".to_string()),
-            reason: "Declared by RuntimeDeliveryContract runtime/environment signals.".to_string(),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
         },
         DependencyServiceKind::Redis => DependencyService {
             kind,
@@ -636,7 +677,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             )]),
             volume_name: None,
             volume_target: None,
-            reason: "Declared by RuntimeDeliveryContract runtime/environment signals.".to_string(),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
         },
         DependencyServiceKind::Mysql => DependencyService {
             kind,
@@ -659,18 +700,76 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             ]),
             volume_name: Some("loom_mysql_data".to_string()),
             volume_target: Some("/var/lib/mysql".to_string()),
-            reason: "Declared by RuntimeDeliveryContract runtime/environment signals.".to_string(),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
         },
-        _ => DependencyService {
+        DependencyServiceKind::Mongodb => DependencyService {
             kind,
-            service_name: "dependency".to_string(),
-            image: "alpine:3.20".to_string(),
-            port: 1,
-            env: BTreeMap::new(),
-            connection_env: BTreeMap::new(),
-            volume_name: None,
-            volume_target: None,
-            reason: "Declared by RuntimeDeliveryContract runtime/environment signals.".to_string(),
+            service_name: "mongodb".to_string(),
+            image: "mongo:8".to_string(),
+            port: 27017,
+            env: BTreeMap::from([("MONGO_INITDB_DATABASE".to_string(), "loom_app".to_string())]),
+            connection_env: BTreeMap::from([(
+                "MONGODB_URL".to_string(),
+                "mongodb://mongodb:27017/loom_app".to_string(),
+            )]),
+            volume_name: Some("loom_mongodb_data".to_string()),
+            volume_target: Some("/data/db".to_string()),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
+        },
+        DependencyServiceKind::Rabbitmq => DependencyService {
+            kind,
+            service_name: "rabbitmq".to_string(),
+            image: "rabbitmq:3-management-alpine".to_string(),
+            port: 5672,
+            env: BTreeMap::from([
+                ("RABBITMQ_DEFAULT_USER".to_string(), "loom".to_string()),
+                ("RABBITMQ_DEFAULT_PASS".to_string(), "loom".to_string()),
+            ]),
+            connection_env: BTreeMap::from([(
+                "AMQP_URL".to_string(),
+                "amqp://loom:loom@rabbitmq:5672/%2f".to_string(),
+            )]),
+            volume_name: Some("loom_rabbitmq_data".to_string()),
+            volume_target: Some("/var/lib/rabbitmq".to_string()),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
+        },
+        DependencyServiceKind::Elasticsearch => DependencyService {
+            kind,
+            service_name: "elasticsearch".to_string(),
+            image: "docker.elastic.co/elasticsearch/elasticsearch:8.15.0".to_string(),
+            port: 9200,
+            env: BTreeMap::from([
+                ("discovery.type".to_string(), "single-node".to_string()),
+                ("xpack.security.enabled".to_string(), "false".to_string()),
+            ]),
+            connection_env: BTreeMap::from([(
+                "ELASTICSEARCH_URL".to_string(),
+                "http://elasticsearch:9200".to_string(),
+            )]),
+            volume_name: Some("loom_elasticsearch_data".to_string()),
+            volume_target: Some("/usr/share/elasticsearch/data".to_string()),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
+        },
+        DependencyServiceKind::Minio => DependencyService {
+            kind,
+            service_name: "minio".to_string(),
+            image: "minio/minio:latest".to_string(),
+            port: 9000,
+            env: BTreeMap::from([
+                ("MINIO_ROOT_USER".to_string(), "loom".to_string()),
+                (
+                    "MINIO_ROOT_PASSWORD".to_string(),
+                    "loom-password".to_string(),
+                ),
+            ]),
+            connection_env: BTreeMap::from([
+                ("S3_ENDPOINT".to_string(), "http://minio:9000".to_string()),
+                ("S3_ACCESS_KEY".to_string(), "loom".to_string()),
+                ("S3_SECRET_KEY".to_string(), "loom-password".to_string()),
+            ]),
+            volume_name: Some("loom_minio_data".to_string()),
+            volume_target: Some("/data".to_string()),
+            reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
         },
     }
 }
@@ -694,6 +793,7 @@ fn u16_at(value: &Value, path: &[&str]) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn accepted_api_contract_source_ref_points_to_project_contract() {
@@ -747,6 +847,72 @@ mod tests {
         let probes = safe_http_probes("/", None, Some(&contract));
         assert!(probes.iter().any(|probe| probe.path == "/api/tickets"));
         assert!(!probes.iter().any(|probe| probe.path.contains("{ticketId}")));
+    }
+
+    #[test]
+    fn runtime_dependencies_use_structured_provider_only() {
+        let runtime = json!({
+            "status": "modified",
+            "runtimeKind": "java",
+            "runtimeDependencies": [
+                {
+                    "dependencyId": "runtime_persistence",
+                    "kind": "storage",
+                    "provider": "postgresql",
+                    "startupRequirement": "required",
+                    "failureBehavior": "postgres is unavailable",
+                    "recoveryStrategy": "restore storage",
+                    "requiredFor": ["writes"],
+                    "observability": ["readiness"]
+                },
+                {
+                    "dependencyId": "runtime_external",
+                    "kind": "external_runtime",
+                    "startupRequirement": "optional",
+                    "failureBehavior": "a redis mention in prose must not create a service",
+                    "recoveryStrategy": "retry",
+                    "requiredFor": ["notifications"],
+                    "observability": ["connection errors"]
+                }
+            ],
+            "commands": {
+                "development": {"start": {"port": 8080}},
+                "verification": {},
+                "deployment": {}
+            },
+            "httpProbes": {"previewPath": "/", "expectedStatus": "2xx_or_3xx"},
+            "environment": {"required": [], "optional": []}
+        });
+        let contract = runtime_contract_from_value_with_api_contract(&runtime, None, None)
+            .expect("runtime contract");
+
+        assert_eq!(
+            contract
+                .dependency_services
+                .iter()
+                .map(|service| service.service_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["postgres"]
+        );
+    }
+
+    #[test]
+    fn labeled_runtime_commands_are_read_from_each_command_phase() {
+        let runtime = json!({
+            "runtimeSurfaces": [
+                {"surfaceId": "web", "kind": "frontend"},
+                {"surfaceId": "api", "kind": "api"}
+            ],
+            "commands": {
+                "development": {
+                    "build": {"command": "frontend: npm run build; backend: mvn package"},
+                    "start": {"command": "backend: java -jar app.jar"}
+                }
+            }
+        });
+        assert!(runtime_requires_public_frontend_api_topology(
+            &runtime, None, None, None
+        ));
     }
 }
 

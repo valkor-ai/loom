@@ -125,3 +125,36 @@ When the data console is actually a CRUD/approval/request workbench, combine dat
 - Single giant KPI cards without underlying data access.
 - Unlabeled color legends or status colors without text.
 - Replacing the entire console shell with a spinner after initial load.
+
+## Query Lifecycle
+
+Model the query surface as a repeatable lifecycle rather than a static chart
+wall:
+
+```text
+criteria -> submitted query -> loading -> results or empty -> stale/refresh
+-> selected result -> inspector or drill-down
+```
+
+- Show the active criteria and a clear reset path after submission.
+- Keep the prior results visible, with an explicit loading indication, when a refresh can complete without invalidating them.
+- Distinguish no data, no matches, partial results, permission failure, and query failure in both copy and recovery actions.
+- Keep the selected result and query context when opening an inspector or route detail.
+- When results change after refresh, show the last-updated time or query revision so users can tell which data they are inspecting.
+
+```ts
+type QueryState<T> =
+  | { status: 'idle'; criteria: Criteria }
+  | { status: 'loading'; criteria: Criteria; previous?: T }
+  | { status: 'ready'; criteria: Criteria; data: T; updatedAt: string }
+  | { status: 'empty'; criteria: Criteria; updatedAt: string }
+  | { status: 'error'; criteria: Criteria; message: string; previous?: T };
+```
+
+## Result Accessibility
+
+- Tables expose column meaning, row identity, sortable state, and keyboard navigation where interaction exists.
+- Charts pair visual encoding with a readable legend, units, time range, and an accessible tabular or textual alternative.
+- Logs and query output use a deliberate wrapping or horizontal-scroll boundary; never make the whole application horizontally scroll.
+- Long values remain inspectable through wrapping, copy, detail reveal, or a stable title. Truncation must not remove the value needed for a decision.
+- Every color-coded status also has text, iconography, or an equivalent non-color signal.

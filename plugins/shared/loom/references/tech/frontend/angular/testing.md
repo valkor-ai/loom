@@ -1,35 +1,81 @@
-# Angular Testing Quality
+# Angular Testing
 
-This file applies Angular testing discipline to task-owned components, services, guards, resolvers, RxJS streams, NgRx stores/effects, and feature workflows.
+Use Angular framework testing only for tasks that own tests. Choose the smallest proof that executes the changed boundary. Playwright/browser references remain authoritative for rendered multi-viewport, real navigation, and end-to-end business-flow evidence when MCP assigns a browser profile.
 
-Keep this file at the Angular unit/component/service boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+## Proof Boundary
 
-## When To Use
+| Claim | Preferred proof |
+|---|---|
+| Pure mapper/validator/selector/reducer | Plain TypeScript unit test |
+| Service/DI/interceptor | TestBed/injection test |
+| HTTP adapter contract | Angular HTTP testing backend |
+| Component rendering/interaction | TestBed component test or selected harness/library |
+| Guard/resolver/navigation | RouterTestingHarness/injection test |
+| RxJS timing/order | TestScheduler/marble test |
+| Full rendered workflow/viewport | Assigned Playwright browser task |
 
-- The task creates or changes Angular behavior that should be proven with TestBed, service tests, component tests, guard/resolver tests, observable tests, NgRx tests, or integration-style UI tests.
-- Use this for test scope, test data, async handling, dependency mocks, HTTP testing, route testing, and evidence quality.
-- Pair with component, routing, RxJS, or NgRx references when the task changes those implementation areas.
+Do not use component TestBed for every pure function or claim a unit DOM test proves browser layout, CSS, focus across overlays, deep-link refresh, or frontend/backend deployment binding.
 
-## Implementation Focus
+## TestBed And Standalone Components
 
-- Test behavior through public inputs, rendered text, controls, outputs, HTTP calls, router decisions, store actions, or observable emissions. Avoid tests that assert private implementation details.
-- Configure standalone component tests by importing the component under test. Provide only the services, stores, routes, pipes, and tokens needed for the behavior being proven.
-- Use `HttpTestingController` for Angular HTTP services. Assert URL, method, body, params, headers, success mapping, and error mapping for task-owned API calls.
-- Use `TestBed.runInInjectionContext()` for functional guards, resolvers, interceptors, or functions that rely on `inject()`.
-- Test signals by reading signal values and then triggering the real event or service response that updates them. Do not bypass the workflow by setting all component state directly unless it is purely presentational.
-- Use marble tests or scheduler-based tests where stream ordering, timing, cancellation, or retry behavior is the risk. Keep simpler observable tests direct.
-- Use mock store or facade mocks for component tests. Use reducer/selector/effect tests for NgRx behavior itself.
-- Keep test fixtures domain-specific and small. Do not build giant generic mock objects when the workflow needs only a few fields.
-- Avoid brittle DOM selectors when accessible queries, labels, roles, text, or stable test IDs already exist in the repository.
+Import standalone components directly and provide only required collaborators. Preserve the real providers/pipes/directives when their behavior is part of the claim; do not shallow-mock away the failing integration.
 
-## Verification Focus
+Set signal inputs through supported fixture/component APIs and trigger the real DOM event/service response that updates state. Avoid mutating private component fields to manufacture the expected view.
 
-- Run the focused Angular test command for the changed project or library, then build/typecheck/lint when templates, imports, routes, or public contracts changed.
-- Cover loading, empty, ready, validation error, business-blocking error, submitting, success, and disabled states touched by the task.
-- Cover failure paths for guards, resolvers, HTTP services, effects, and destructive actions.
-- Verify cleanup for subscriptions, router events, timers, and async callbacks when lifecycle behavior changed.
-- Verify no test relies on delivery text, framework explanations, or temporary runtime instructions being present in the UI.
+Use accessible roles, labels, names, text, or established stable test IDs. Assertions should cover visible output, enabled/disabled state, emitted intent, focus, and recovery rather than CSS implementation classes alone.
 
-## Evidence Focus
+## HTTP Services And Interceptors
 
-- In the evidence summary, name the Angular test proof: component behavior, service HTTP contract, guard/resolver decision, RxJS timing/order, NgRx reducer/selector/effect, lifecycle cleanup, or route integration.
+Use the repository's Angular-version-compatible HTTP test providers (for example `provideHttpClient()` with `provideHttpClientTesting()`) or existing module setup. Verify outstanding requests after each test.
+
+Assert exact method, URL/base path, params, headers, body, credentials behavior, response mapping, and error mapping. Cover cancellation/deduplication only when the service owns it.
+
+Do not duplicate backend behavior in mocks. Return contract-shaped success and error responses, including validation/conflict/permission/unavailable cases used by the UI.
+
+## Routing, Guards, And Resolvers
+
+Use `RouterTestingHarness` for route activation, redirects, params, query values, guards, resolvers, and component input binding. Use `TestBed.runInInjectionContext` for a focused functional guard/resolver only when route integration is not the claim.
+
+Test allowed and blocked navigation, not just the boolean branch. Deep-link refresh and server fallback remain browser/runtime evidence.
+
+## RxJS And Async Behavior
+
+Use `TestScheduler.run`/marbles when virtual time, cancellation, ordering, debounce, retry, or concurrency is the risk. For straightforward finite streams, direct subscription/firstValueFrom tests are clearer.
+
+Use `fakeAsync`/`tick` only for code using compatible Zone-managed timers and flush pending work. Do not mix fake timers, real sleeps, unresolved promises, and marble schedulers in one test.
+
+Assert loading/disabled cleanup on success, error, and cancellation. Verify subscriptions/resource cleanup on fixture destruction when lifecycle is task-owned.
+
+## NgRx Tests
+
+Test reducers/selectors as pure functions. Test effects with controlled action and service streams, asserting emitted actions and operator semantics. Use `provideMockStore` for components/facades, not as the only proof of store implementation.
+
+Override selectors before initial change detection and reset them between tests. Avoid giant initial-state fixtures that couple unrelated features.
+
+Feature registration/key, lazy effects, persisted state, and router-store integration need an integration boundary beyond isolated reducer/effect tests.
+
+## Component Workflow States
+
+Cover only task-owned states but include meaningful transitions: loading to ready/empty/error, edit draft to validation/submitting/success, conflict/permission failure to recovery, and destructive confirmation/cancel.
+
+For repeated list actions, prove the displayed target ID survives sorting, filtering, pagination, refresh, and modal open/close. Verify backend field errors are associated with controls and stale errors clear appropriately.
+
+## Verification And Cleanup
+
+Run the changed test file/project first using the repository's runner (Karma/Jasmine, Jest, Vitest, or another configured target). Then run focused build/typecheck/lint when templates, public types, routes, providers, or shared state changed. Do not impose a universal coverage percentage absent a repository requirement.
+
+Destroy fixtures, verify HTTP requests, restore timers/selectors/global state, and close any custom resources. Flaky ordering or leaked subscriptions are defects, not reasons to add sleeps.
+
+## Delivery Evidence
+
+Record the test boundary, scenario, command, and meaningful visible/contract assertion. A passing suite count, private-field assertion, or coverage number alone cannot prove route integration, HTTP contract, reactive cancellation, accessibility, responsive rendering, or browser flow closure.
+
+## Unsafe Defaults
+
+- Angular testing guidance loaded for implementation-only tasks.
+- Private state mutated instead of exercising public behavior.
+- HTTP tests checking only that one request occurred.
+- Direct guard tests claimed as route behavior evidence.
+- `fakeAsync`, marbles, and real sleeps mixed indiscriminately.
+- Mock store replacing reducer/effect correctness tests.
+- Universal coverage thresholds copied from an external skill.

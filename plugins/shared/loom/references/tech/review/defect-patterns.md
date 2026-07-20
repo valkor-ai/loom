@@ -1,52 +1,95 @@
-# Loom Review Defect Patterns
+# Cross-Stack Defect Patterns
 
-Use this reference when judging implementation quality after current-phase spec compliance is understood. These patterns are language and framework neutral; apply only the items that match the changed files and selected technology references.
+Use this reference after spec compliance to inspect implementation risks that recur across languages and frameworks. Apply only patterns relevant to changed files and selected technology guidance.
 
 ## Functional Correctness
 
-- Boundary values: empty lists, null or missing inputs, max/min numbers, duplicate records, unknown ids, stale versions, and invalid enum values.
-- State transitions: illegal transitions are blocked, terminal states stay terminal, and retry/reissue/reopen flows do not corrupt old state.
-- Ordering and filtering: pagination, sorting, search, and date boundaries are deterministic and match API/UI expectations.
-- Idempotency: repeated submit, refresh, retry, or callback handling does not create duplicate durable effects unless duplicates are valid business behavior.
-- Concurrency: shared state, optimistic locking, queue consumers, async callbacks, and background jobs do not race into inconsistent results.
+- Boundary values: empty/missing/null, zero/negative, max/min, overflow, duplicate, unknown ID, invalid enum, stale version, malformed encoding, timezone/day boundary.
+- Branch completeness: success plus validation, forbidden, conflict, not-found, unavailable, cancellation, timeout, partial result, and retry where behavior differs.
+- Identity: commands, rows, cache keys, route params, updates, and deletes act on the displayed/requested stable target rather than index or mutable selection.
+- Ordering: sorting, pagination, cursor continuation, deduplication, tie breakers, locale/collation, and date ordering remain deterministic.
+- State transitions: illegal moves blocked, terminal states preserved, repeated/reopen/retry behavior defined, and history/audit corresponds to committed state.
+
+Trace invariants across every write path, not only the primary endpoint or screen.
+
+## Concurrency And Repetition
+
+- Read-check-write races allow duplicate or invalid transitions without transaction/constraint/version checks.
+- Retries, double clicks, callbacks, message redelivery, or process restart repeat durable/external effects.
+- Old async responses overwrite newer route/filter/account state.
+- Locks cover too much, deadlock in inconsistent order, or fail to protect process/distributed boundaries.
+- Optimistic updates lack operation identity, rollback, conflict handling, or server reconciliation.
+
+Check idempotency scope/key storage/expiry and whether failures before/after side effects produce a safe retry.
 
 ## Data And Persistence
 
-- Transactions cover all writes that must succeed or fail together.
-- Database constraints enforce invariants that cannot rely only on UI validation.
-- Migrations match the runtime schema and do not break existing data unexpectedly.
-- Query shape is bounded for list views and batch operations; loops do not hide one query per row.
-- File, object-store, and external resource writes have cleanup or reconciliation strategy when the database write fails.
+- Constraints/defaults/nullability/indexes/foreign keys do not match domain and migration behavior.
+- Multi-write invariants cross a transaction boundary or external effect without reconciliation/outbox/compensation.
+- Migration fails on existing data, is not reversible/cutover-safe as required, or runtime starts before schema compatibility.
+- N+1 queries, unbounded reads, offset/cursor bugs, missing deterministic order, or filtering after loading all data.
+- ORM lifecycle/cascade/lazy behavior causes unexpected deletion, serialization, connection use, or startup validation failure.
 
-## Security And Access Control
+Check provider/dialect semantics through the selected persistence references rather than generic SQL assumptions.
 
-- Authentication and authorization are checked at the boundary that owns the operation, not only in the UI.
-- User-controlled input is validated before use in queries, file paths, shell commands, templates, redirects, or HTML.
-- Sensitive data is not logged, returned in broad DTOs, embedded in frontend bundles, or committed as config.
-- Cross-tenant, role, ownership, and workflow-state restrictions are enforced in read and write paths.
-- Destructive or privileged actions require the confirmation, audit, or business block expected by the accepted contract.
+## Interfaces And Integration
 
-## Reliability And Error Handling
+- Method/path/body/query/status/error/auth/exposure differs between producer, consumer, tests, and runtime routing.
+- Validation occurs after side effects or accepts fields/statuses the contract rejects.
+- Raw provider exceptions/messages leak while actionable errors collapse into one generic failure.
+- External calls lack timeout/cancellation, retry unsafe operations, or retry without jitter/budget/classification.
+- Webhook/event consumers do not authenticate, deduplicate, validate version, or handle out-of-order delivery.
 
-- Errors are converted into the repository's existing error model instead of leaking raw exceptions.
-- External calls have timeout, retry, fallback, or explicit failure behavior appropriate to the current task.
-- Cleanup happens for partially completed operations when the task owns resources.
-- Async operations propagate cancellation and do not leave unresolved promises, goroutines, tasks, threads, subscriptions, or timers.
-- Runtime configuration has safe defaults and clear environment overrides without hardcoded local machine assumptions.
+Inspect serialization of dates, decimals, large integers, nullable/optional fields, enums, and unknown fields.
 
-## Performance And Resource Use
+## Security And Privacy
 
-- Lists and reporting paths use pagination or bounded reads.
-- Large payloads are streamed, chunked, or rejected according to domain needs.
-- Expensive computations are cached only when invalidation and correctness are clear.
-- UI state updates avoid unnecessary re-render storms or unbounded subscriptions.
-- Server startup, test setup, and build scripts do not perform unrelated heavy work for every request.
+- Authentication/authorization/ownership/tenant checks exist only in UI or one endpoint path.
+- User input reaches SQL, shell, path, template/HTML, redirect, URL fetch, deserialization, regex, or logging without appropriate validation/encoding/parameterization.
+- Secrets or sensitive records enter client bundles, logs, errors, test fixtures, version control, telemetry, caches, or broad DTOs.
+- CSRF/CORS/cookie/token/session configuration trusts unsafe origins, forwarding headers, algorithms, issuers, audiences, or redirect targets.
+- Mass assignment/object binding lets callers control identity, owner, role, status, price, audit, or version fields.
 
-## Maintainability
+Review deny paths and cross-user/tenant reads as carefully as privileged writes.
 
-- New abstractions have at least two real consumers or isolate a clear complexity boundary.
-- Domain rules live in the domain/service layer instead of being duplicated across UI, API, and persistence.
-- Names reflect business concepts from the accepted contract and existing codebase.
-- Production source should not retain tutorial or placeholder namespaces such as `com.example`, `org.example`, `com.company`, `com.demo`, or `com.sample`; these indicate generated demo code rather than a professional project namespace.
-- Functions and components have one clear responsibility and can be tested at the right level.
-- Comments explain non-obvious decisions, not what the code already says.
+## Reliability And Resource Lifecycle
+
+- Errors are swallowed, logged and ignored, transformed twice, or retried indefinitely.
+- Files, sockets, streams, DB connections, transactions, workers, goroutines/tasks/threads, listeners, timers, observers, or temp resources leak on cancellation/error.
+- Startup/config failure appears late at request time or silently uses a local/insecure production fallback.
+- Health/readiness reports healthy before migrations/dependencies/routes are usable or couples liveness to transient downstream failure.
+- Partial external/database operations have no cleanup, reconciliation, or observable recovery state.
+
+## Performance And Capacity
+
+- Work or payload is unbounded by pagination, size, rate, timeout, memory, queue depth, concurrency, or cache policy.
+- Hot paths allocate/copy/serialize repeatedly, block event loops/executors, or perform synchronous I/O unexpectedly.
+- Cache key omits identity/input/version, invalidation is incomplete, TTL contradicts correctness, or stampede behavior is uncontrolled.
+- Frontend changes cause broad subscriptions/rerenders, large eager bundles/assets, leaked resources, or inaccessible virtualization.
+- Batch processing loads all records, commits per item, or cannot resume safely.
+
+Require measurement or plausible workload impact before blocking on optimization.
+
+## Maintainability And Architecture
+
+- Domain/application rules duplicated across API, UI, persistence, jobs, or integrations.
+- Dependency direction crosses accepted ownership or generic helpers hide auth/tenant/transaction/runtime behavior.
+- New abstractions have no clear complexity boundary, while one function/module combines unrelated policy and infrastructure.
+- Names differ from established business concepts or misleadingly imply guarantees the code does not provide.
+- Production source retains tutorial or placeholder namespaces such as `com.example`, `org.example`, `com.company`, `com.demo`, or `com.sample`; use the repository/project identity or its documented safe fallback.
+- Comments repeat syntax while non-obvious invariants, ordering, compatibility, or recovery decisions remain unexplained.
+
+## Tests And Configuration
+
+- Tests pass only because significant collaborators/authorization/transactions are mocked away.
+- Shared state/time/random/network/order leaks between tests or creates flaky timing sleeps.
+- Configuration keys are defined but not consumed, consumed under different names, or use unsafe environment defaults.
+- Generated artifacts/lockfiles/migrations are stale relative to source declarations.
+
+## Unsafe Review Defaults
+
+- Flagging every possible edge case without requirement or plausible impact.
+- Recommending caching, abstractions, or retries without correctness policy.
+- Applying one ORM/framework/runtime rule to another stack.
+- Reporting symptoms separately when one ownership defect explains them.
+- Calling maintainability preference a major defect without concrete risk.

@@ -1,10 +1,13 @@
 use delivery_core::{
-    apply_machine_owned_fields, strip_machine_owned_fields, validate_typed, ContractProjection,
-    RepairIssue, SubmitValidationContext,
+    apply_machine_owned_fields, compact_agent_field_contract, derive_agent_field_policies,
+    finalize_output_contract, strip_machine_owned_fields, validate_agent_write_contract,
+    validate_typed, AgentFieldApplicability, ContractProjection, RepairIssue,
+    SubmitValidationContext,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 
 #[test]
 fn contract_projection_uses_agent_writable_type_schema() {
@@ -45,6 +48,280 @@ fn typed_validation_returns_repair_issue() {
     let issues = validate_typed::<ExampleAgentWritable>(json!({ "confirmed": true }))
         .expect_err("summary is required");
     assert_eq!(issues[0].code, "INVALID_SCHEMA");
+}
+
+#[test]
+fn shared_field_contract_exposes_nested_shape_without_flat_paths() {
+    let schema =
+        serde_json::to_value(schemars::schema_for!(NestedAgentWritable)).expect("nested schema");
+    let contract = compact_agent_field_contract(&schema, &BTreeMap::new());
+    assert_eq!(contract["properties"]["approval"]["type"], "object");
+    assert_eq!(
+        contract["properties"]["approval"]["properties"]["type"]["type"],
+        "string"
+    );
+    assert_eq!(contract["defaults"]["preserveOnRepair"], true);
+    assert!(contract.to_string().contains("properties"));
+    assert!(!contract.to_string().contains("approval.type"));
+}
+
+#[test]
+fn shared_field_contract_handles_architecture_pseudo_schema_shape() {
+    let schema = json!({
+        "status": "ready | blocked",
+        "content": {
+            "dataModel": {
+                "entities": [{"entityId": "string", "fields": ["string"]}]
+            }
+        }
+    });
+    let contract = compact_agent_field_contract(&schema, &BTreeMap::new());
+    assert_eq!(contract["properties"]["status"]["type"], "string");
+    assert_eq!(
+        contract["properties"]["status"]["enum"],
+        json!(["ready", "blocked"])
+    );
+    assert_eq!(
+        contract["properties"]["content"]["properties"]["dataModel"]["properties"]["entities"]
+            ["type"],
+        "array"
+    );
+    assert_eq!(
+        contract["properties"]["content"]["properties"]["dataModel"]["properties"]["entities"]
+            ["items"]["type"],
+        "object"
+    );
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct NestedAgentWritable {
+    summary: String,
+    approval: NestedApproval,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct NestedApproval {
+    r#type: String,
+}
+
+#[test]
+fn contract_fingerprint_ignores_target_paths_but_changes_contract_shape() {
+    let mut first = json!({
+        "schemaShape": {"type": "object", "properties": {"summary": {"type": "string"}}},
+        "schemaProjection": {"requiredTopLevelFields": ["summary"]},
+        "writeTargets": [{"path": ".loom/agent-writable/one.json"}]
+    });
+    let mut second = first.clone();
+    second["writeTargets"][0]["path"] = json!(".loom/agent-writable/two.json");
+    finalize_output_contract(&mut first, &BTreeMap::new());
+    finalize_output_contract(&mut second, &BTreeMap::new());
+    assert_eq!(first["contractFingerprint"], second["contractFingerprint"]);
+    first["schemaProjection"]["requiredTopLevelFields"] = json!(["summary", "confirmed"]);
+    finalize_output_contract(&mut first, &BTreeMap::new());
+    assert_ne!(first["contractFingerprint"], second["contractFingerprint"]);
+}
+
+#[test]
+fn finalize_output_contract_adds_version_fingerprint_and_compact_projection() {
+    let mut output = json!({
+        "schemaShape": {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"]
+        },
+        "schemaProjection": {"requiredTopLevelFields": ["summary"]},
+        "writeTargets": [{"path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+    assert_eq!(output["contractVersion"], "1.0");
+    assert!(output["contractFingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_eq!(
+        output["schemaProjection"]["fieldContract"]["properties"]["summary"]["type"],
+        "string"
+    );
+}
+
+#[test]
+fn write_contract_validation_uses_result_template_for_sparse_nested_fields() {
+    let mut output = json!({
+        "schemaShape": {
+            "type": "object",
+            "properties": {
+                "requestSummary": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"}
+                    },
+                    "required": ["title"]
+                }
+            },
+            "required": ["requestSummary"]
+        },
+        "resultTemplate": {
+            "requestSummary": {"title": ""}
+        },
+        "schemaProjection": {
+            "requiredTopLevelFields": ["requestSummary"]
+        },
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    let issues = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"requestSummary": {"title": "Account opening"}}),
+    );
+    assert!(issues.is_empty(), "{issues:#?}");
+}
+
+#[test]
+fn write_contract_allows_only_declared_mcp_normalized_fields() {
+    let mut output = json!({
+        "artifactKind": "brainstorm_candidate",
+        "schemaShape": {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"]
+        },
+        "resultTemplate": {"summary": ""},
+        "schemaProjection": {"requiredTopLevelFields": ["summary"]},
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    assert!(output["mcpNormalizedFields"]
+        .as_array()
+        .expect("normalized fields")
+        .contains(&json!("clarificationProgress")));
+    let accepted = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"summary": "ok", "clarificationProgress": {"finalSummaryConfirmed": true}}),
+    );
+    assert!(accepted.is_empty(), "{accepted:#?}");
+
+    let rejected = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"summary": "ok", "undeclaredBusinessData": "must not be discarded"}),
+    );
+    assert_eq!(rejected[0].code, "WRITE_CONTRACT_FIELD_UNKNOWN");
+}
+
+#[test]
+fn architecture_content_is_validated_by_the_architecture_domain() {
+    let mut output = json!({
+        "artifactKind": "architecture_section_candidate",
+        "schemaShape": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "content": {
+                    "type": "object",
+                    "properties": {"modules": {"type": "array", "items": {"type": "object"}}}
+                }
+            },
+            "required": ["status", "content"]
+        },
+        "resultTemplate": {"status": "ready", "content": {"modules": []}},
+        "schemaProjection": {"requiredTopLevelFields": ["status", "content"]},
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    let accepted = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"status": "ready", "content": {"sectionSpecificModel": {"owner": "architecture"}}}),
+    );
+    assert!(accepted.is_empty(), "{accepted:#?}");
+
+    let rejected = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"status": "ready", "content": {}, "unexpectedEnvelopeField": true}),
+    );
+    assert_eq!(rejected[0].code, "WRITE_CONTRACT_FIELD_UNKNOWN");
+}
+
+#[test]
+fn normalized_task_results_defer_schema_validation_to_the_execution_domain() {
+    let mut output = json!({
+        "artifactKind": "task_result",
+        "schemaShape": {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"]
+        },
+        "resultTemplate": {"status": "completed"},
+        "schemaProjection": {"requiredTopLevelFields": ["status"]},
+        "writeTargets": [{"targetId": "result", "path": ".loom/agent-writable/task-result.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    assert_eq!(output["domainValidationPaths"], json!(["$"]));
+    assert!(validate_agent_write_contract(
+        &output,
+        "result",
+        &json!({"executionDomainCandidate": true}),
+    )
+    .is_empty());
+}
+
+#[test]
+fn applicability_uses_structured_contract_facts_without_api_keyword_matching() {
+    let policies = derive_agent_field_policies(&json!({
+        "apiQualitySeed": null,
+        "contextProjection": {
+            "technicalBaseline": {
+                "stack": {
+                    "tracks": {
+                        "persistence": {"status": "not_needed", "selection": "none"}
+                    }
+                }
+            }
+        },
+        "task": {
+            "frontendExperienceRequirement": {
+                "executionGuidance": {
+                    "uiProductionBrief": {
+                        "surfaceDecisionContract": {"contractRef": "surface-contract"}
+                    }
+                }
+            },
+            "runtimeDeliveryRequirement": {"appliesToThisTask": false},
+            "apiContractRequirements": [],
+            "architectureQualityRequirements": [],
+            "codeQualityRequirements": []
+        }
+    }));
+    assert_eq!(
+        policies["content.apiContract"].applicability,
+        AgentFieldApplicability::NotApplicable
+    );
+    assert_eq!(
+        policies["content.interfaces"].applicability,
+        AgentFieldApplicability::CurrentRequest
+    );
+    assert_eq!(
+        policies["content.dataModel.dataArchitecture.ownership"].applicability,
+        AgentFieldApplicability::NotApplicable
+    );
+    assert_eq!(
+        policies["frontendQualitySelfCheck"].applicability,
+        AgentFieldApplicability::CurrentRequest
+    );
+    assert_eq!(
+        policies["runtimeDeliveryEvidence"].applicability,
+        AgentFieldApplicability::NotApplicable
+    );
 }
 
 #[derive(Debug, Serialize)]

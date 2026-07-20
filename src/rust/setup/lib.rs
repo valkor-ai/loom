@@ -177,9 +177,9 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/code/cpp/performance.md",
     "plugins/shared/loom/references/tech/code/cpp/templates.md",
     "plugins/shared/loom/references/tech/code/cpp/testing.md",
-    "plugins/shared/loom/references/tech/code/csharp/aspnet.md",
     "plugins/shared/loom/references/tech/code/csharp/blazor.md",
     "plugins/shared/loom/references/tech/code/csharp/core.md",
+    "plugins/shared/loom/references/tech/code/csharp/modern.md",
     "plugins/shared/loom/references/tech/code/csharp/performance.md",
     "plugins/shared/loom/references/tech/code/csharp/persistence.md",
     "plugins/shared/loom/references/tech/code/csharp/testing.md",
@@ -204,11 +204,13 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/code/kotlin/compose.md",
     "plugins/shared/loom/references/tech/code/kotlin/core.md",
     "plugins/shared/loom/references/tech/code/kotlin/coroutines.md",
+    "plugins/shared/loom/references/tech/code/kotlin/dsl.md",
     "plugins/shared/loom/references/tech/code/kotlin/ktor.md",
     "plugins/shared/loom/references/tech/code/kotlin/multiplatform.md",
     "plugins/shared/loom/references/tech/code/kotlin/testing.md",
     "plugins/shared/loom/references/tech/code/php/async.md",
     "plugins/shared/loom/references/tech/code/php/core.md",
+    "plugins/shared/loom/references/tech/code/php/modern.md",
     "plugins/shared/loom/references/tech/code/php/laravel.md",
     "plugins/shared/loom/references/tech/code/php/symfony.md",
     "plugins/shared/loom/references/tech/code/php/testing.md",
@@ -228,6 +230,12 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/code/sql/queries.md",
     "plugins/shared/loom/references/tech/code/sql/schema.md",
     "plugins/shared/loom/references/tech/code/sql/windows.md",
+    "plugins/shared/loom/references/tech/code/sql/mysql/schema.md",
+    "plugins/shared/loom/references/tech/code/sql/mysql/queries.md",
+    "plugins/shared/loom/references/tech/code/sql/mysql/transactions.md",
+    "plugins/shared/loom/references/tech/code/sql/postgresql/schema.md",
+    "plugins/shared/loom/references/tech/code/sql/postgresql/queries.md",
+    "plugins/shared/loom/references/tech/code/sql/postgresql/transactions.md",
     "plugins/shared/loom/references/tech/code/swift/concurrency.md",
     "plugins/shared/loom/references/tech/code/swift/core.md",
     "plugins/shared/loom/references/tech/code/swift/memory.md",
@@ -1982,6 +1990,7 @@ pub fn doctor(
             &env.agent_plugin_root(*agent),
             "agent plugin files",
         ));
+        report.checks.push(check_agent_plugin_version(env, *agent));
         report
             .checks
             .push(check_agent_mcp_registration(env, *agent, &server_binary));
@@ -2150,7 +2159,38 @@ fn validate_package(package_root: &Path, manifest: &ReleaseManifest) -> Result<(
             return Err(SetupError::MissingPackageEntry(path));
         }
     }
+    validate_plugin_manifests(package_root, manifest)?;
     audit_package_contents(package_root)?;
+    Ok(())
+}
+
+fn validate_plugin_manifests(
+    package_root: &Path,
+    manifest: &ReleaseManifest,
+) -> Result<(), SetupError> {
+    for (plugin_root, manifest_file) in [
+        (&manifest.plugins.codex, ".codex-plugin/plugin.json"),
+        (&manifest.plugins.claude_code, ".claude-plugin/plugin.json"),
+    ] {
+        let path = package_root.join(plugin_root).join(manifest_file);
+        let value = read_json_value(&path)?;
+        let name = value.get("name").and_then(Value::as_str);
+        let version = value.get("version").and_then(Value::as_str);
+        if name != Some("loom") {
+            return Err(SetupError::InvalidArgument(format!(
+                "agent plugin manifest {} must identify the loom plugin",
+                path.display()
+            )));
+        }
+        if version != Some(manifest.version.as_str()) {
+            return Err(SetupError::InvalidArgument(format!(
+                "agent plugin manifest {} has version {:?}, expected {}",
+                path.display(),
+                version,
+                manifest.version
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -2295,19 +2335,23 @@ fn install_agent_plugin(
 ) -> Result<(), SetupError> {
     let runtime_template = env.runtime_current().join(manifest.plugin_path(agent));
     match agent {
-        AgentKind::Codex => install_codex_plugin(env, &runtime_template),
-        AgentKind::ClaudeCode => install_claude_plugin(env, &runtime_template),
-        AgentKind::Opencode => install_opencode_plugin(env, &runtime_template),
+        AgentKind::Codex => install_codex_plugin(env, &runtime_template, &manifest.version),
+        AgentKind::ClaudeCode => install_claude_plugin(env, &runtime_template, &manifest.version),
+        AgentKind::Opencode => install_opencode_plugin(env, &runtime_template, &manifest.version),
     }
 }
 
-fn install_codex_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), SetupError> {
+fn install_codex_plugin(
+    env: &SetupEnvironment,
+    template: &Path,
+    version: &str,
+) -> Result<(), SetupError> {
     let target = env.agent_plugin_root(AgentKind::Codex);
     cleanup_codex_plugin_cache(env)?;
     prepare_generated_target(&target)?;
     copy_dir(template, &target)?;
     install_skill_references(env, &target)?;
-    write_install_stamp(&target, AgentKind::Codex)?;
+    write_install_stamp(&target, AgentKind::Codex, version)?;
     write_codex_plugin_cache(env, &target)?;
     update_codex_marketplace(env)?;
     Ok(())
@@ -2373,12 +2417,16 @@ fn update_codex_marketplace(env: &SetupEnvironment) -> Result<(), SetupError> {
     write_json(&marketplace_path, &value)
 }
 
-fn install_claude_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), SetupError> {
+fn install_claude_plugin(
+    env: &SetupEnvironment,
+    template: &Path,
+    version: &str,
+) -> Result<(), SetupError> {
     let target = env.agent_plugin_root(AgentKind::ClaudeCode);
     prepare_generated_target(&target)?;
     copy_dir(template, &target)?;
     install_skill_references(env, &target)?;
-    write_install_stamp(&target, AgentKind::ClaudeCode)?;
+    write_install_stamp(&target, AgentKind::ClaudeCode, version)?;
     let commands_root = env.claude_home.join("commands");
     fs::create_dir_all(&commands_root).map_err(|source| SetupError::Io {
         path: commands_root.clone(),
@@ -2395,7 +2443,11 @@ fn install_claude_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), 
     Ok(())
 }
 
-fn install_opencode_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), SetupError> {
+fn install_opencode_plugin(
+    env: &SetupEnvironment,
+    template: &Path,
+    version: &str,
+) -> Result<(), SetupError> {
     let command_root = env.opencode_home.join("commands");
     let plugin_root = env.opencode_home.join("plugins");
     fs::create_dir_all(&command_root).map_err(|source| SetupError::Io {
@@ -2422,18 +2474,21 @@ fn install_opencode_plugin(env: &SetupEnvironment, template: &Path) -> Result<()
         SHARED_LOOM_REFERENCES,
         &env.opencode_home.join("references/loom"),
         AgentKind::Opencode,
+        version,
     )?;
     install_standalone_references(
         env,
         SHARED_DEPLOY_REFERENCES,
         &env.opencode_home.join("references/loom-deploy"),
         AgentKind::Opencode,
+        version,
     )?;
     write_json(
         &env.opencode_home.join(".loom-opencode-mcp-install.json"),
         &json!({
             "schemaVersion": 1,
             "agent": AgentKind::Opencode.as_str(),
+            "version": version,
             "installedBy": "loom-setup",
             "protocol": "mcp-only",
             "installedAt": now_string()
@@ -2460,10 +2515,11 @@ fn install_standalone_references(
     shared_relative: &str,
     target: &Path,
     agent: AgentKind,
+    version: &str,
 ) -> Result<(), SetupError> {
     prepare_generated_target(target)?;
     copy_shared_references(env, shared_relative, target)?;
-    write_install_stamp(target, agent)
+    write_install_stamp(target, agent, version)
 }
 
 fn copy_shared_references(
@@ -3118,6 +3174,72 @@ fn check_agent_mcp_registration(
     }
 }
 
+fn check_agent_plugin_version(env: &SetupEnvironment, agent: AgentKind) -> DoctorCheck {
+    let (name, path) = match agent {
+        AgentKind::Codex => (
+            "codex.pluginVersion",
+            env.agent_plugin_root(agent)
+                .join(".codex-plugin/plugin.json"),
+        ),
+        AgentKind::ClaudeCode => (
+            "claude-code.pluginVersion",
+            env.agent_plugin_root(agent)
+                .join(".claude-plugin/plugin.json"),
+        ),
+        AgentKind::Opencode => (
+            "opencode.pluginVersion",
+            env.opencode_home.join(".loom-opencode-mcp-install.json"),
+        ),
+    };
+    let runtime_manifest = env.runtime_current().join("manifest.json");
+    let expected = match read_json_value(&runtime_manifest).ok().and_then(|value| {
+        value
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }) {
+        Some(version) => version,
+        None => {
+            return DoctorCheck {
+                name: name.to_string(),
+                status: "failed".to_string(),
+                detail: format!(
+                    "runtime manifest version is missing or invalid: {}",
+                    runtime_manifest.display()
+                ),
+            }
+        }
+    };
+    let value = match read_json_value(&path) {
+        Ok(value) => value,
+        Err(error) => {
+            return DoctorCheck {
+                name: name.to_string(),
+                status: "failed".to_string(),
+                detail: error.to_string(),
+            }
+        }
+    };
+    let actual = value.get("version").and_then(Value::as_str);
+    if actual == Some(expected.as_str()) {
+        DoctorCheck {
+            name: name.to_string(),
+            status: "passed".to_string(),
+            detail: format!("agent plugin version {expected}"),
+        }
+    } else {
+        DoctorCheck {
+            name: name.to_string(),
+            status: "failed".to_string(),
+            detail: format!(
+                "agent plugin version {:?} does not match runtime {expected}: {}",
+                actual,
+                path.display()
+            ),
+        }
+    }
+}
+
 fn check_codex_mcp_config(env: &SetupEnvironment, server_binary: &Path) -> DoctorCheck {
     let path = env.codex_config_path();
     let name = "codex.mcpRegistration".to_string();
@@ -3531,12 +3653,13 @@ fn set_executable(path: &Path) -> Result<(), SetupError> {
     Ok(())
 }
 
-fn write_install_stamp(path: &Path, agent: AgentKind) -> Result<(), SetupError> {
+fn write_install_stamp(path: &Path, agent: AgentKind, version: &str) -> Result<(), SetupError> {
     write_json(
         &path.join(INSTALL_STAMP),
         &json!({
             "schemaVersion": 1,
             "agent": agent.as_str(),
+            "version": version,
             "installedBy": "loom-setup",
             "protocol": "mcp-only",
             "installedAt": now_string()

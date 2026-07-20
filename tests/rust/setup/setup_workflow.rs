@@ -18,9 +18,9 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "cpp/performance",
     "cpp/templates",
     "cpp/testing",
-    "csharp/aspnet",
     "csharp/blazor",
     "csharp/core",
+    "csharp/modern",
     "csharp/performance",
     "csharp/persistence",
     "csharp/testing",
@@ -45,11 +45,13 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "kotlin/compose",
     "kotlin/core",
     "kotlin/coroutines",
+    "kotlin/dsl",
     "kotlin/ktor",
     "kotlin/multiplatform",
     "kotlin/testing",
     "php/async",
     "php/core",
+    "php/modern",
     "php/laravel",
     "php/symfony",
     "php/testing",
@@ -69,6 +71,12 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "sql/queries",
     "sql/schema",
     "sql/windows",
+    "sql/mysql/schema",
+    "sql/mysql/queries",
+    "sql/mysql/transactions",
+    "sql/postgresql/schema",
+    "sql/postgresql/queries",
+    "sql/postgresql/transactions",
     "swift/concurrency",
     "swift/core",
     "swift/memory",
@@ -107,8 +115,13 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "nestjs/security",
     "nestjs/services",
     "nestjs/testing",
+    "springboot/async",
+    "springboot/cache",
     "springboot/cloud",
     "springboot/data",
+    "springboot/integration",
+    "springboot/observability",
+    "springboot/resilience",
     "springboot/runtime",
     "springboot/security",
     "springboot/testing",
@@ -355,7 +368,9 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
         .exists());
     assert!(fixture
         .user_home
-        .join(".codex/plugins/cache/local-plugins/loom/0.1.0/skills/loom/SKILL.md")
+        .join(format!(
+            ".codex/plugins/cache/local-plugins/loom/{VERSION}/skills/loom/SKILL.md"
+        ))
         .exists());
     assert!(!fixture.loom_home.join("bin/loom-cli").exists());
     assert!(!env.agent_mcp_registration_path(AgentKind::Codex).exists());
@@ -384,6 +399,36 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
             .status,
         "passed"
     );
+    assert_eq!(
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "codex.pluginVersion")
+            .unwrap()
+            .status,
+        "passed"
+    );
+}
+
+#[test]
+fn install_rejects_agent_plugin_version_drift() {
+    let fixture = Fixture::new("plugin_version_drift");
+    fixture.write_package();
+    write_json(
+        &fixture
+            .package_root
+            .join("plugins/codex/.codex-plugin/plugin.json"),
+        &serde_json::json!({"name": "loom", "version": "0.2.4"}),
+    );
+
+    let error = install(&fixture.env(), &[AgentKind::Codex]).unwrap_err();
+    match error {
+        SetupError::InvalidArgument(message) => {
+            assert!(message.contains("agent plugin manifest"));
+            assert!(message.contains(&format!("expected {VERSION}")));
+        }
+        other => panic!("expected plugin version validation error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -959,6 +1004,44 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
             );
         }
     }
+
+    for file in [
+        "codex/.codex-plugin/plugin.json",
+        "claude-code/.claude-plugin/plugin.json",
+    ] {
+        let value = read_json(&plugin_root.join(file));
+        assert_eq!(value["name"], "loom", "{file} must identify Loom");
+        assert_eq!(
+            value["version"].as_str(),
+            Some(VERSION),
+            "{file} must match the MCP runtime version"
+        );
+    }
+}
+
+#[test]
+fn codex_delivery_skill_requires_the_loom_plan_first() {
+    let skill = fs::read_to_string(repo_root().join("plugins/codex/skills/loom/SKILL.md")).unwrap();
+    for required in [
+        "mandatory routing entrypoint",
+        "resolve the Loom route before any repository work",
+        "mcp__loom__plan",
+        "deferred loading hides that tool",
+        "Loom plan software delivery @loom",
+        "Do not search for deploy",
+        "exec_command",
+        "apply_patch",
+    ] {
+        assert!(
+            skill.contains(required),
+            "Codex Loom skill missing {required}"
+        );
+    }
+
+    let deploy_skill =
+        fs::read_to_string(repo_root().join("plugins/codex/skills/loom-deploy/SKILL.md")).unwrap();
+    assert!(deploy_skill.contains("only for an explicit @loom deploy request"));
+    assert!(deploy_skill.contains("not the route for a plain `@loom <request>`"));
 }
 
 #[test]
@@ -982,6 +1065,34 @@ fn deploy_plugin_templates_obey_active_operation_policy_fields() {
                 "{file} must require deploy active_operation policy field {required}"
             );
         }
+    }
+}
+
+#[test]
+fn agent_templates_obey_user_gate_pre_response_contract() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    for file in [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            content.contains("preResponseContract"),
+            "{file} must consume the structured user-gate pre-response contract"
+        );
+        assert!(
+            content.contains("requestReadPlan.groups"),
+            "{file} must keep requestReadPlan.groups as the only read contract"
+        );
+        assert!(
+            content.contains("loom.inspectRequest") && content.contains("loom.readFieldGroup"),
+            "{file} must require inspect-then-group-read before a gated response"
+        );
     }
 }
 
@@ -1034,7 +1145,6 @@ fn opencode_commands_expose_mcp_result_discipline() {
     }
     for forbidden in [
         "MCP-selected references:",
-        "uiQualityContract.referenceProfile.groups",
         "../references/loom/uix/core.md",
         "`groups.core`",
         "../references/loom/uix/anti-patterns.md",
@@ -1106,8 +1216,6 @@ fn agent_templates_expose_reference_loading_protocol() {
         }
         for forbidden in [
             "MCP-selected references:",
-            "uiQualityContract.referenceProfile.groups",
-            "uiQualityContract.designTokenAssetPlan.templateId",
             "../references/loom/uix/core.md",
             "`groups.core`",
             "`groups.scenarios`",
@@ -1224,8 +1332,17 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
         }
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let code_profile = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str());
+        let minimum_lines = if matches!(code_profile, Some("cpp" | "csharp" | "go")) {
+            65
+        } else {
+            25
+        };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a topic code reference: {line_count} lines",
             path.display()
         );
@@ -1238,6 +1355,13 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             assert!(
                 content.contains(required),
                 "{} missing code reference section or boundary {required}",
+                path.display()
+            );
+        }
+        if matches!(code_profile, Some("cpp" | "csharp" | "go")) {
+            assert!(
+                content.contains("## Unsafe Defaults"),
+                "{} missing enhanced code-profile unsafe-default guidance",
                 path.display()
             );
         }
@@ -1269,6 +1393,74 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let java_spring = fs::read_to_string(code_root.join("java/spring.md")).unwrap();
     assert!(java_spring.contains("component scanning"));
     assert!(java_spring.contains("app.<project_slug>"));
+    assert!(java_spring.contains("@Qualifier"));
+    let cpp_core = fs::read_to_string(code_root.join("cpp/core.md")).unwrap();
+    assert!(cpp_core.contains("std::string_view"));
+    assert!(cpp_core.contains("One Definition Rule"));
+    let cpp_modern = fs::read_to_string(code_root.join("cpp/modern.md")).unwrap();
+    assert!(cpp_modern.contains("feature-test macros"));
+    assert!(cpp_modern.contains("std::expected"));
+    let cpp_templates = fs::read_to_string(code_root.join("cpp/templates.md")).unwrap();
+    assert!(cpp_templates.contains("reference collapsing"));
+    assert!(cpp_templates.contains("explicit instantiation"));
+    let cpp_performance = fs::read_to_string(code_root.join("cpp/performance.md")).unwrap();
+    assert!(cpp_performance.contains("anti-optimization"));
+    assert!(cpp_performance.contains("ISA-specific"));
+    let cpp_concurrency = fs::read_to_string(code_root.join("cpp/concurrency.md")).unwrap();
+    assert!(cpp_concurrency.contains("std::jthread"));
+    assert!(cpp_concurrency.contains("happens-before"));
+    let cpp_build = fs::read_to_string(code_root.join("cpp/build.md")).unwrap();
+    assert!(cpp_build.contains("generator expressions"));
+    assert!(cpp_build.contains("target_compile_features"));
+    let cpp_testing = fs::read_to_string(code_root.join("cpp/testing.md")).unwrap();
+    assert!(cpp_testing.contains("ASan"));
+    assert!(cpp_testing.contains("Fuzz targets"));
+    assert!(!code_root.join("csharp/aspnet.md").exists());
+    let csharp_core = fs::read_to_string(code_root.join("csharp/core.md")).unwrap();
+    assert!(csharp_core.contains("OperationCanceledException"));
+    assert!(csharp_core.contains("IServiceProvider"));
+    let csharp_modern = fs::read_to_string(code_root.join("csharp/modern.md")).unwrap();
+    assert!(csharp_modern.contains("LangVersion"));
+    assert!(csharp_modern.contains("Native AOT"));
+    let csharp_persistence = fs::read_to_string(code_root.join("csharp/persistence.md")).unwrap();
+    assert!(csharp_persistence.contains("IDbContextFactory"));
+    assert!(csharp_persistence.contains("DbUpdateConcurrencyException"));
+    let csharp_blazor = fs::read_to_string(code_root.join("csharp/blazor.md")).unwrap();
+    assert!(csharp_blazor.contains("JSDisconnectedException"));
+    assert!(csharp_blazor.contains("persistent component state"));
+    let csharp_performance = fs::read_to_string(code_root.join("csharp/performance.md")).unwrap();
+    assert!(csharp_performance.contains("BenchmarkDotNet"));
+    assert!(csharp_performance.contains("ArrayPool"));
+    let csharp_testing = fs::read_to_string(code_root.join("csharp/testing.md")).unwrap();
+    assert!(csharp_testing.contains("HttpMessageHandler"));
+    assert!(csharp_testing.contains("Mutation testing"));
+    let go_core = fs::read_to_string(code_root.join("go/core.md")).unwrap();
+    assert!(go_core.contains("errors.Join"));
+    assert!(go_core.contains("rows.Err"));
+    let go_concurrency = fs::read_to_string(code_root.join("go/concurrency.md")).unwrap();
+    assert!(go_concurrency.contains("errgroup.WithContext"));
+    assert!(go_concurrency.contains("SetLimit"));
+    let go_interfaces = fs::read_to_string(code_root.join("go/interfaces.md")).unwrap();
+    assert!(go_interfaces.contains("typed nil"));
+    assert!(go_interfaces.contains("pointer-to-interface"));
+    let go_generics = fs::read_to_string(code_root.join("go/generics.md")).unwrap();
+    assert!(go_generics.contains("~T"));
+    assert!(go_generics.contains("Methods cannot introduce"));
+    let go_structure = fs::read_to_string(code_root.join("go/structure.md")).unwrap();
+    assert!(go_structure.contains("go.work"));
+    assert!(go_structure.contains("//go:build"));
+    let go_testing = fs::read_to_string(code_root.join("go/testing.md")).unwrap();
+    assert!(go_testing.contains("httptest.Server"));
+    assert!(go_testing.contains("t.Setenv"));
+    let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
+    assert!(spring_runtime.contains("@ConfigurationProperties"));
+    assert!(spring_runtime.contains("graceful shutdown"));
+    let spring_async = fs::read_to_string(backend_root.join("springboot/async.md")).unwrap();
+    assert!(spring_async.contains("@Async"));
+    assert!(spring_async.contains("same-class self-invocation"));
+    let spring_cache = fs::read_to_string(backend_root.join("springboot/cache.md")).unwrap();
+    assert!(spring_cache.contains("@Cacheable"));
+    assert!(spring_cache.contains("source of truth"));
 
     let mut backend_files = Vec::new();
     collect_markdown_files(&backend_root, &mut backend_files);
@@ -1279,22 +1471,59 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     for path in backend_files {
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let backend_profile = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str());
+        let is_spring_boot = backend_profile == Some("springboot");
+        let is_nestjs = backend_profile == Some("nestjs");
+        let is_aspnet_core = backend_profile == Some("aspnetcore");
+        let minimum_lines = if matches!(
+            backend_profile,
+            Some("springboot" | "fastapi" | "django" | "nestjs" | "aspnetcore")
+        ) {
+            65
+        } else {
+            25
+        };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a backend framework reference: {line_count} lines",
             path.display()
         );
-        for required in [
-            "When To Use",
-            "Implementation Focus",
-            "Verification Focus",
-            "Evidence Focus",
-        ] {
-            assert!(
-                content.contains(required),
-                "{} missing backend framework reference section or boundary {required}",
-                path.display()
-            );
+        if is_spring_boot {
+            for required in ["Verification Focus", "Unsafe Defaults"] {
+                assert!(
+                    content.contains(required),
+                    "{} missing Spring Boot engineering section {required}",
+                    path.display()
+                );
+            }
+        } else if is_nestjs || is_aspnet_core {
+            for required in [
+                "## Verification",
+                "## Delivery Evidence",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing enhanced backend engineering section {required}",
+                    path.display()
+                );
+            }
+        } else {
+            for required in [
+                "When To Use",
+                "Implementation Focus",
+                "Verification Focus",
+                "Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing backend framework reference section or boundary {required}",
+                    path.display()
+                );
+            }
         }
         for forbidden in [
             "referenceLoadPlan",
@@ -1320,6 +1549,78 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let spring_web = fs::read_to_string(backend_root.join("springboot/web.md")).unwrap();
     assert!(spring_web.contains("real Spring Boot base package"));
     assert!(spring_web.contains("com.example"));
+    let fastapi_routing = fs::read_to_string(backend_root.join("fastapi/routing.md")).unwrap();
+    assert!(fastapi_routing.contains("APIRouter"));
+    assert!(fastapi_routing.contains("BackgroundTasks"));
+    let fastapi_schemas = fs::read_to_string(backend_root.join("fastapi/schemas.md")).unwrap();
+    assert!(fastapi_schemas.contains("model_fields_set"));
+    assert!(fastapi_schemas.contains("from_attributes"));
+    let fastapi_data = fs::read_to_string(backend_root.join("fastapi/data.md")).unwrap();
+    assert!(fastapi_data.contains("async_sessionmaker"));
+    assert!(fastapi_data.contains("Alembic"));
+    let fastapi_security = fs::read_to_string(backend_root.join("fastapi/security.md")).unwrap();
+    assert!(fastapi_security.contains("OAuth2PasswordBearer"));
+    assert!(fastapi_security.contains("issuer"));
+    let fastapi_testing = fs::read_to_string(backend_root.join("fastapi/testing.md")).unwrap();
+    assert!(fastapi_testing.contains("ASGITransport"));
+    assert!(fastapi_testing.contains("dependency_overrides"));
+    let fastapi_migration = fs::read_to_string(backend_root.join("fastapi/migration.md")).unwrap();
+    assert!(fastapi_migration.contains("ViewSet"));
+    assert!(fastapi_migration.contains("parity"));
+    let django_models = fs::read_to_string(backend_root.join("django/models.md")).unwrap();
+    assert!(django_models.contains("select_related"));
+    assert!(django_models.contains("apps.get_model"));
+    let django_serializers =
+        fs::read_to_string(backend_root.join("django/serializers.md")).unwrap();
+    assert!(django_serializers.contains("SerializerMethodField"));
+    assert!(django_serializers.contains("partial=True"));
+    let django_views = fs::read_to_string(backend_root.join("django/views.md")).unwrap();
+    assert!(django_views.contains("get_queryset"));
+    assert!(django_views.contains("object-level checks"));
+    let django_security = fs::read_to_string(backend_root.join("django/security.md")).unwrap();
+    assert!(django_security.contains("SimpleJWT"));
+    assert!(django_security.contains("CSRF"));
+    let django_testing = fs::read_to_string(backend_root.join("django/testing.md")).unwrap();
+    assert!(django_testing.contains("TransactionTestCase"));
+    assert!(django_testing.contains("assertNumQueries"));
+    let nest_controllers = fs::read_to_string(backend_root.join("nestjs/controllers.md")).unwrap();
+    assert!(nest_controllers.contains("ParseUUIDPipe"));
+    assert!(nest_controllers.contains("@Res()"));
+    let nest_dtos = fs::read_to_string(backend_root.join("nestjs/dtos.md")).unwrap();
+    assert!(nest_dtos.contains("PartialType"));
+    assert!(nest_dtos.contains("bigint"));
+    let nest_services = fs::read_to_string(backend_root.join("nestjs/services.md")).unwrap();
+    assert!(nest_services.contains("useExisting"));
+    assert!(nest_services.contains("forwardRef"));
+    let nest_security = fs::read_to_string(backend_root.join("nestjs/security.md")).unwrap();
+    assert!(nest_security.contains("getAllAndOverride"));
+    assert!(nest_security.contains("APP_GUARD"));
+    let nest_testing = fs::read_to_string(backend_root.join("nestjs/testing.md")).unwrap();
+    assert!(nest_testing.contains("TestingModule"));
+    assert!(nest_testing.contains("app.getHttpServer()"));
+    let nest_migration = fs::read_to_string(backend_root.join("nestjs/migration.md")).unwrap();
+    assert!(nest_migration.contains("parity matrix"));
+    assert!(nest_migration.contains("routing owner"));
+    let aspnet_architecture =
+        fs::read_to_string(backend_root.join("aspnetcore/architecture.md")).unwrap();
+    assert!(aspnet_architecture.contains("MediatR"));
+    assert!(aspnet_architecture.contains("IServiceProvider"));
+    let aspnet_minimal = fs::read_to_string(backend_root.join("aspnetcore/minimal.md")).unwrap();
+    assert!(aspnet_minimal.contains("TypedResults"));
+    assert!(aspnet_minimal.contains("WebApplicationFactory"));
+    let aspnet_data = fs::read_to_string(backend_root.join("aspnetcore/data.md")).unwrap();
+    assert!(aspnet_data.contains("IEntityTypeConfiguration"));
+    assert!(aspnet_data.contains("DbUpdateConcurrencyException"));
+    let aspnet_security = fs::read_to_string(backend_root.join("aspnetcore/security.md")).unwrap();
+    assert!(aspnet_security.contains("IAuthorizationRequirement"));
+    assert!(aspnet_security.contains("UseAuthentication"));
+    let aspnet_runtime = fs::read_to_string(backend_root.join("aspnetcore/runtime.md")).unwrap();
+    assert!(aspnet_runtime.contains("ValidateOnStart"));
+    assert!(aspnet_runtime.contains("IHttpClientFactory"));
+    assert!(aspnet_runtime.contains("HybridCache"));
+    let aspnet_testing = fs::read_to_string(backend_root.join("aspnetcore/testing.md")).unwrap();
+    assert!(aspnet_testing.contains("WebApplicationFactory<Program>"));
+    assert!(aspnet_testing.contains("EF InMemory"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);
@@ -1330,22 +1631,49 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     for path in frontend_files {
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let frontend_profile = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str());
+        let is_angular = frontend_profile == Some("angular");
+        let is_flutter = frontend_profile == Some("flutter");
+        let is_nextjs = frontend_profile == Some("nextjs");
+        let is_react = frontend_profile == Some("react");
+        let is_react_native = frontend_profile == Some("react-native");
+        let is_vue = frontend_profile == Some("vue");
+        let is_enhanced_frontend =
+            is_angular || is_flutter || is_nextjs || is_react || is_react_native || is_vue;
+        let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a frontend framework reference: {line_count} lines",
             path.display()
         );
-        for required in [
-            "When To Use",
-            "Implementation Focus",
-            "Verification Focus",
-            "Evidence Focus",
-        ] {
-            assert!(
-                content.contains(required),
-                "{} missing frontend framework reference section {required}",
-                path.display()
-            );
+        if is_enhanced_frontend {
+            for required in [
+                "## Verification",
+                "## Delivery Evidence",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing enhanced frontend engineering section {required}",
+                    path.display()
+                );
+            }
+        } else {
+            for required in [
+                "When To Use",
+                "Implementation Focus",
+                "Verification Focus",
+                "Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing frontend framework reference section {required}",
+                    path.display()
+                );
+            }
         }
         for forbidden in [
             "referenceLoadPlan",
@@ -1368,6 +1696,144 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             );
         }
     }
+    let angular_core = fs::read_to_string(frontend_root.join("angular/core.md")).unwrap();
+    assert!(angular_core.contains("ChangeDetectionStrategy.OnPush"));
+    assert!(angular_core.contains("getRawValue()"));
+    let angular_components =
+        fs::read_to_string(frontend_root.join("angular/components.md")).unwrap();
+    assert!(angular_components.contains("input.required"));
+    assert!(angular_components.contains("DestroyRef"));
+    let angular_routing = fs::read_to_string(frontend_root.join("angular/routing.md")).unwrap();
+    assert!(angular_routing.contains("RouterTestingHarness"));
+    assert!(angular_routing.contains("withComponentInputBinding"));
+    let angular_rxjs = fs::read_to_string(frontend_root.join("angular/rxjs.md")).unwrap();
+    assert!(angular_rxjs.contains("takeUntilDestroyed"));
+    assert!(angular_rxjs.contains("shareReplay"));
+    let angular_ngrx = fs::read_to_string(frontend_root.join("angular/ngrx.md")).unwrap();
+    assert!(angular_ngrx.contains("createEntityAdapter"));
+    assert!(angular_ngrx.contains("concatLatestFrom"));
+    let angular_testing = fs::read_to_string(frontend_root.join("angular/testing.md")).unwrap();
+    assert!(angular_testing.contains("provideHttpClientTesting"));
+    assert!(angular_testing.contains("TestScheduler.run"));
+    let flutter_core = fs::read_to_string(frontend_root.join("flutter/core.md")).unwrap();
+    assert!(flutter_core.contains("if (!mounted)"));
+    assert!(flutter_core.contains("Platform.is"));
+    let flutter_widgets = fs::read_to_string(frontend_root.join("flutter/widgets.md")).unwrap();
+    assert!(flutter_widgets.contains("ValueKey"));
+    assert!(flutter_widgets.contains("SliverList"));
+    let flutter_structure = fs::read_to_string(frontend_root.join("flutter/structure.md")).unwrap();
+    assert!(flutter_structure.contains("build_runner"));
+    assert!(flutter_structure.contains("conditional imports"));
+    let flutter_navigation =
+        fs::read_to_string(frontend_root.join("flutter/navigation.md")).unwrap();
+    assert!(flutter_navigation.contains("stateful shell"));
+    assert!(flutter_navigation.contains("pathParameters"));
+    let flutter_riverpod = fs::read_to_string(frontend_root.join("flutter/riverpod.md")).unwrap();
+    assert!(flutter_riverpod.contains("AsyncNotifierProvider"));
+    assert!(flutter_riverpod.contains("copyWithPrevious"));
+    let flutter_bloc = fs::read_to_string(frontend_root.join("flutter/bloc.md")).unwrap();
+    assert!(flutter_bloc.contains("BlocProvider.value"));
+    assert!(flutter_bloc.contains("event transformers"));
+    let flutter_performance =
+        fs::read_to_string(frontend_root.join("flutter/performance.md")).unwrap();
+    assert!(flutter_performance.contains("profile mode"));
+    assert!(flutter_performance.contains("RepaintBoundary"));
+    let flutter_testing = fs::read_to_string(frontend_root.join("flutter/testing.md")).unwrap();
+    assert!(flutter_testing.contains("ProviderContainer"));
+    assert!(flutter_testing.contains("pumpAndSettle"));
+    let next_core = fs::read_to_string(frontend_root.join("nextjs/core.md")).unwrap();
+    assert!(next_core.contains("NEXT_PUBLIC_*"));
+    assert!(next_core.contains("server-only"));
+    let next_router = fs::read_to_string(frontend_root.join("nextjs/app-router.md")).unwrap();
+    assert!(next_router.contains("intercepting routes"));
+    assert!(next_router.contains("notFound()"));
+    let next_server_components =
+        fs::read_to_string(frontend_root.join("nextjs/server-components.md")).unwrap();
+    assert!(next_server_components.contains("Serializable Handoff"));
+    assert!(next_server_components.contains("suppressHydrationWarning"));
+    let next_actions = fs::read_to_string(frontend_root.join("nextjs/actions.md")).unwrap();
+    assert!(next_actions.contains("useActionState"));
+    assert!(next_actions.contains("revalidateTag"));
+    let next_data = fs::read_to_string(frontend_root.join("nextjs/data.md")).unwrap();
+    assert!(next_data.contains("React `cache()`"));
+    assert!(next_data.contains("cross-user/tenant"));
+    let next_runtime = fs::read_to_string(frontend_root.join("nextjs/runtime.md")).unwrap();
+    assert!(next_runtime.contains("output: 'standalone'"));
+    assert!(next_runtime.contains("Edge"));
+    let next_testing = fs::read_to_string(frontend_root.join("nextjs/testing.md")).unwrap();
+    assert!(next_testing.contains("production `next build`"));
+    assert!(next_testing.contains("Server Action"));
+    let react_core = fs::read_to_string(frontend_root.join("react/core.md")).unwrap();
+    assert!(react_core.contains("stable domain keys"));
+    assert!(react_core.contains("dangerouslySetInnerHTML"));
+    let react_hooks = fs::read_to_string(frontend_root.join("react/hooks.md")).unwrap();
+    assert!(react_hooks.contains("AbortController"));
+    assert!(react_hooks.contains("useSyncExternalStore"));
+    let react_state = fs::read_to_string(frontend_root.join("react/state.md")).unwrap();
+    assert!(react_state.contains("TanStack Query"));
+    assert!(react_state.contains("query keys"));
+    let react_migration = fs::read_to_string(frontend_root.join("react/migration.md")).unwrap();
+    assert!(react_migration.contains("componentDidCatch"));
+    assert!(react_migration.contains("behavior assertions proving parity"));
+    let react_performance = fs::read_to_string(frontend_root.join("react/performance.md")).unwrap();
+    assert!(react_performance.contains("representative workload"));
+    assert!(react_performance.contains("Virtualized rows"));
+    let react_19 = fs::read_to_string(frontend_root.join("react/react19.md")).unwrap();
+    assert!(react_19.contains("useActionState"));
+    assert!(react_19.contains("stable operation identity"));
+    let react_server =
+        fs::read_to_string(frontend_root.join("react/server-components.md")).unwrap();
+    assert!(react_server.contains("Serializable Handoff"));
+    assert!(react_server.contains("server-only"));
+    let react_testing = fs::read_to_string(frontend_root.join("react/testing.md")).unwrap();
+    assert!(react_testing.contains("userEvent"));
+    assert!(react_testing.contains("Strict Mode"));
+    let rn_core = fs::read_to_string(frontend_root.join("react-native/core.md")).unwrap();
+    assert!(rn_core.contains("development-client rebuild"));
+    assert!(rn_core.contains("stable target identity"));
+    let rn_structure = fs::read_to_string(frontend_root.join("react-native/structure.md")).unwrap();
+    assert!(rn_structure.contains("generated native output"));
+    assert!(rn_structure.contains("Metro"));
+    let rn_navigation =
+        fs::read_to_string(frontend_root.join("react-native/navigation.md")).unwrap();
+    assert!(rn_navigation.contains("singular/array forms"));
+    assert!(rn_navigation.contains("hardware back"));
+    let rn_platform = fs::read_to_string(frontend_root.join("react-native/platform.md")).unwrap();
+    assert!(rn_platform.contains("Platform.select"));
+    assert!(rn_platform.contains("permanently denied"));
+    let rn_lists = fs::read_to_string(frontend_root.join("react-native/lists.md")).unwrap();
+    assert!(rn_lists.contains("getItemLayout"));
+    assert!(rn_lists.contains("onEndReached"));
+    let rn_storage = fs::read_to_string(frontend_root.join("react-native/storage.md")).unwrap();
+    assert!(rn_storage.contains("schemaVersion"));
+    assert!(rn_storage.contains("late hydration"));
+    let rn_testing = fs::read_to_string(frontend_root.join("react-native/testing.md")).unwrap();
+    assert!(rn_testing.contains("React Native Testing Library"));
+    assert!(rn_testing.contains("both-platform coverage"));
+    let vue_core = fs::read_to_string(frontend_root.join("vue/core.md")).unwrap();
+    assert!(vue_core.contains("watchEffect"));
+    assert!(vue_core.contains("effectScope"));
+    let vue_components = fs::read_to_string(frontend_root.join("vue/components.md")).unwrap();
+    assert!(vue_components.contains("defineModel"));
+    assert!(vue_components.contains("InjectionKey"));
+    let vue_state = fs::read_to_string(frontend_root.join("vue/state.md")).unwrap();
+    assert!(vue_state.contains("storeToRefs"));
+    assert!(vue_state.contains("process-global"));
+    let vue_typescript = fs::read_to_string(frontend_root.join("vue/typescript.md")).unwrap();
+    assert!(vue_typescript.contains("vue-tsc"));
+    assert!(vue_typescript.contains("defineExpose"));
+    let vue_nuxt = fs::read_to_string(frontend_root.join("vue/nuxt.md")).unwrap();
+    assert!(vue_nuxt.contains("useAsyncData"));
+    assert!(vue_nuxt.contains("runtimeConfig.public"));
+    let vue_build = fs::read_to_string(frontend_root.join("vue/build.md")).unwrap();
+    assert!(vue_build.contains("VITE_*"));
+    assert!(vue_build.contains("Manual chunks"));
+    let vue_mobile = fs::read_to_string(frontend_root.join("vue/mobile.md")).unwrap();
+    assert!(vue_mobile.contains("Capacitor"));
+    assert!(vue_mobile.contains("network-only"));
+    let vue_testing = fs::read_to_string(frontend_root.join("vue/testing.md")).unwrap();
+    assert!(vue_testing.contains("Vue Test Utils"));
+    assert!(vue_testing.contains("testing Pinia"));
 }
 
 #[test]
@@ -1388,7 +1854,7 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
             .unwrap_or_else(|error| panic!("read review reference {}: {error}", path.display()));
         let line_count = content.lines().count();
         assert!(
-            line_count >= 30,
+            line_count >= 65,
             "{} is too thin to guide review decisions: {line_count} lines",
             path.display()
         );
@@ -1420,6 +1886,86 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
     let defect_patterns = fs::read_to_string(review_root.join("defect-patterns.md")).unwrap();
     assert!(defect_patterns.contains("placeholder namespaces"));
     assert!(defect_patterns.contains("com.example"));
+    assert!(defect_patterns.contains("Mass assignment"));
+    assert!(defect_patterns.contains("idempotency scope"));
+    let core = fs::read_to_string(review_root.join("core.md")).unwrap();
+    assert!(core.contains("Risk-Based Depth"));
+    assert!(core.contains("Change Interaction"));
+    let spec = fs::read_to_string(review_root.join("spec-compliance.md")).unwrap();
+    assert!(spec.contains("Contract Pair Checks"));
+    assert!(spec.contains("cross-surface closure"));
+    let evidence = fs::read_to_string(review_root.join("test-evidence.md")).unwrap();
+    assert!(evidence.contains("Claim Mapping"));
+    assert!(evidence.contains("stale evidence"));
+    let findings = fs::read_to_string(review_root.join("finding-quality.md")).unwrap();
+    assert!(findings.contains("Severity By Impact"));
+    assert!(findings.contains("Root Cause"));
+}
+
+#[test]
+fn loom_api_references_preserve_production_contract_depth_without_policy_duplication() {
+    let root = repo_root().join("plugins/shared/loom/references/tech/api");
+    let contract = fs::read_to_string(root.join("contract.md")).unwrap();
+    for required in [
+        "Operation Objects",
+        "OpenAPI 3.1 Schema Semantics",
+        "Validation And Generation",
+        "operationId",
+        "additionalProperties",
+        "do not use the OpenAPI 3.0 `nullable` keyword",
+    ] {
+        assert!(
+            contract.contains(required),
+            "API contract reference missing production rule {required}"
+        );
+    }
+
+    let resource = fs::read_to_string(root.join("resource.md")).unwrap();
+    for required in [
+        "Method Semantics",
+        "Success Status And Headers",
+        "`202`",
+        "`204`",
+        "JSON Merge Patch",
+        "Content-Type",
+    ] {
+        assert!(
+            resource.contains(required),
+            "API resource reference missing HTTP rule {required}"
+        );
+    }
+
+    let pagination = fs::read_to_string(root.join("pagination.md")).unwrap();
+    for required in [
+        "Cursor And Keyset Contract",
+        "unique tie-breaker",
+        "opaque client tokens",
+        "cursor/filter or cursor/sort mismatch",
+        "malformed or tampered cursors",
+    ] {
+        assert!(
+            pagination.contains(required),
+            "API pagination reference missing production rule {required}"
+        );
+    }
+
+    let errors = fs::read_to_string(root.join("errors.md")).unwrap();
+    let operations = fs::read_to_string(root.join("operations.md")).unwrap();
+    assert!(errors.contains("Error Code Ownership"));
+    assert!(errors.contains("This reference owns error categories"));
+    for duplicated_policy in [
+        "## Request Tracking And Retry Guidance",
+        "X-Request-ID",
+        "Retry-After",
+    ] {
+        assert!(
+            !errors.contains(duplicated_policy),
+            "errors.md must not duplicate operational policy {duplicated_policy}"
+        );
+    }
+    assert!(operations.contains("This file owns operational policy"));
+    assert!(operations.contains("Retry And Availability Responses"));
+    assert!(operations.contains("Request Tracing"));
 }
 
 #[test]
@@ -1490,11 +2036,41 @@ fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
         "TaskPlan",
         "frontendQualitySelfCheck",
         "frontendExperienceRequirement",
-        "uiQualityContract",
-        "uiTaskQualityGates",
+        "uiProductionBrief",
+        "uiSurfaceDecisionContract",
+        "surfaceDecisionContract",
+        "surfaceDecisionCandidate",
         "gateResults",
         "referenceGroupsChecked",
         "referenceFilesChecked",
+        "referencePlanFilesChecked",
+        "surfaceRegionEvidence",
+        "surfaceActionEvidence",
+        "surfaceStateEvidence",
+        "surfaceQualityRuleEvidence",
+        "contentBoundaryEvidence",
+        "productIntent",
+        "layoutContract",
+        "informationContract",
+        "actionContract",
+        "stateContract",
+        "visualContract",
+        "contentBoundary",
+        "mustShow",
+        "scanPriority",
+        "identityFields",
+        "statusFields",
+        "longContentPolicy",
+        "dataViews",
+        "primaryActions",
+        "contextualActions",
+        "dangerousActions",
+        "placementRule",
+        "postSuccessUpdate",
+        "regionsInScope",
+        "actionsInScope",
+        "statesInScope",
+        "qualityRulesInScope",
         "designTokenEvidence",
         "designTokenAssetPlan",
         "requestRef",
@@ -1529,6 +2105,30 @@ fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
                 relative
             );
         }
+    }
+}
+
+#[test]
+fn loom_agent_adapters_use_current_ui_reference_evidence_field() {
+    let repo = repo_root();
+    let files = [
+        repo.join("plugins/codex/skills/loom/SKILL.md"),
+        repo.join("plugins/claude-code/skills/loom/SKILL.md"),
+        repo.join("plugins/opencode/.opencode/commands/loom.md"),
+    ];
+
+    for path in files {
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("referencePlanFilesChecked"),
+            "{} must use the current UI reference evidence field",
+            path.display()
+        );
+        assert!(
+            !content.contains("referenceFilesChecked"),
+            "{} must not teach the removed UI reference evidence field",
+            path.display()
+        );
     }
 }
 
@@ -1867,7 +2467,7 @@ impl Fixture {
             &self
                 .package_root
                 .join("plugins/codex/.codex-plugin/plugin.json"),
-            &serde_json::json!({"name":"loom","version":"0.1.0"}),
+            &serde_json::json!({"name":"loom","version":VERSION}),
         );
         write_file(
             &self.package_root.join("plugins/codex/skills/loom/SKILL.md"),
@@ -1880,7 +2480,7 @@ impl Fixture {
             &self
                 .package_root
                 .join("plugins/claude-code/.claude-plugin/plugin.json"),
-            &serde_json::json!({"name":"loom","version":"0.1.0"}),
+            &serde_json::json!({"name":"loom","version":VERSION}),
         );
         write_file(
             &self

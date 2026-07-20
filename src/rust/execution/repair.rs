@@ -5,10 +5,10 @@ use std::{
 
 use contracts::{
     api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
-    ui_quality_enum_refs, ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
-    ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    ui_quality_enum_refs, ui_surface_decision_enum_refs, ArchitectureSectionGroup,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -34,17 +34,16 @@ use crate::{
     },
     task_execution::{
         browser_verification_context, browser_verification_profile_for_task,
-        browser_verification_rules, load_current_plan_and_run,
-        runtime_delivery_requirement_read_fields, save_run, task_execution_rules,
+        browser_verification_rules, load_current_plan_and_run, save_run, task_execution_rules,
+        task_projection_runtime_delivery_requirement_read_fields,
         task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
         code_quality_execution_context, code_quality_requirements_for_task,
-        frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_schema_shape,
-        task_result_template_with_code_quality, taskplan_group_result_template,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        runtime_delivery_requirement_template, task_result_contract,
+        task_result_contract_read_fields, taskplan_group_result_template,
         taskplan_outline_result_template,
     },
 };
@@ -310,6 +309,14 @@ fn materialize_delivery_execution_repair_inner(
         phase_id: phase_id.to_string(),
     };
     let (task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
+    let phase_task_execution_request_ref = FileTransitionStore
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+        .and_then(|phase| phase.latest_refs.get("taskExecutionRequestRef"))
+        .cloned();
     if let Some(existing) = existing_delivery_execution_repair_next_if_current(
         project_root,
         delivery_id,
@@ -333,6 +340,13 @@ fn materialize_delivery_execution_repair_inner(
             state::store::StateError::StateCorrupted(message)
         })?;
     let task = selection.task;
+    let source_task_execution_request_ref = source_task_execution_request_ref_for_task(
+        project_root,
+        delivery_id,
+        phase_id,
+        phase_task_execution_request_ref,
+        &task.task_id,
+    )?;
     let request_task = task_with_phase_execution_guidance(root, &locator, task.clone())?;
     let attempt_count = run
         .task_states
@@ -381,6 +395,7 @@ fn materialize_delivery_execution_repair_inner(
         source_ref.clone(),
         finding_refs.clone(),
         attempt_count,
+        source_task_execution_request_ref.clone(),
     );
     let stored = state::write_native_request(
         project_root,
@@ -460,12 +475,6 @@ fn existing_delivery_execution_repair_next_if_current(
         .as_ref()
         .and_then(|details| details.get("resultFile"))
         .and_then(Value::as_str)
-        .or_else(|| {
-            phase
-                .latest_refs
-                .get("taskExecutionResultFile")
-                .map(String::as_str)
-        })
     else {
         return Ok(None);
     };
@@ -549,17 +558,19 @@ fn delivery_execution_repair_request_has_frontend_guidance(
         project_root: project_root.to_string(),
         request_ref: request_ref.to_string(),
         fields: vec![
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
-            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"
+                .to_string(),
+            "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan"
+                .to_string(),
         ],
     })?
     .fields;
     let ui_production_brief = fields
-        .get("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
+        .get("taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
         .map(|field| &field.value)
         .unwrap_or(&Value::Null);
     let style_asset_plan = fields
-        .get("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan")
+        .get("taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan")
         .map(|field| &field.value)
         .unwrap_or(&Value::Null);
     Ok(ui_production_brief.is_object() && style_asset_plan.is_object())
@@ -661,9 +672,9 @@ fn build_repair_execution_request(
     source_ref: Option<String>,
     finding_refs: Vec<String>,
     attempt_count: u32,
+    source_task_execution_request_ref: Option<String>,
 ) -> Value {
     let browser_profile = browser_verification_profile_for_task(task_plan, task);
-    let schema_shape = task_result_schema_shape(task, browser_profile);
     let engineering_quality_requirements = task_plan
         .engineering_quality_requirements
         .iter()
@@ -682,9 +693,11 @@ fn build_repair_execution_request(
         .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
         .cloned()
         .collect::<Vec<_>>();
+    // Repair requests must use the current TaskPlan quality contract. The source
+    // execution request is an agent-facing projection and is not a second authority.
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
-    let result_template =
-        task_result_template_with_code_quality(task, &code_quality_requirements, browser_profile);
+    let result_contract = task_result_contract(task, &code_quality_requirements, browser_profile);
+    let result_template = result_contract["resultTemplate"].clone();
     let mut execution_rules = task_execution_rules(result_file, task, None);
     if browser_profile.is_some() {
         execution_rules["browserVerificationRules"] = browser_verification_rules();
@@ -727,19 +740,19 @@ fn build_repair_execution_request(
         "source.taskPlanRunId",
         "source.taskId",
         "source.groupId",
-        "task.taskId",
-        "task.groupId",
-        "task.title",
-        "task.taskKind",
-        "task.implementationActions",
-        "task.objective",
-        "task.dependsOn",
-        "task.scopeRefs",
-        "task.acceptanceRefs",
-        "task.requirementDetailRefs",
-        "task.writeBoundary.forbiddenPaths",
-        "task.writeBoundary.artifactRefs",
-        "task.verificationIntents",
+        "taskProjection.taskId",
+        "taskProjection.groupId",
+        "taskProjection.title",
+        "taskProjection.taskKind",
+        "taskProjection.implementationActions",
+        "taskProjection.objective",
+        "taskProjection.dependsOn",
+        "taskProjection.scopeRefs",
+        "taskProjection.acceptanceRefs",
+        "taskProjection.requirementDetailRefs",
+        "taskProjection.writeBoundary.forbiddenPaths",
+        "taskProjection.writeBoundary.artifactRefs",
+        "taskProjection.verificationIntents",
         "repairContext.sourceTaskId",
         "repairContext.repairOrigin",
         "executionRules.completionBarrier",
@@ -754,44 +767,38 @@ fn build_repair_execution_request(
     if source_ref.is_some() {
         repair_core_fields.push("repairContext.sourceRef");
     }
+    if source_task_execution_request_ref.is_some() {
+        repair_core_fields.push("source.taskExecutionRequestRef");
+    }
     if !finding_refs.is_empty() {
         repair_core_fields.push("repairContext.findingRefs");
     }
     if !task.concept_refs.is_empty() {
-        repair_core_fields.push("task.conceptRefs");
-    }
-    if !task.concept_responsibilities.is_empty() {
-        repair_core_fields.push("task.conceptResponsibilities");
-    }
-    if !task.concept_verification_intents.is_empty() {
-        repair_core_fields.push("task.conceptVerificationIntents");
+        repair_core_fields.push("taskProjection.conceptRefs");
     }
     if frontend_self_check_applies(task) {
         repair_core_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
-            "task.frontendExperienceRequirement.executionGuidance.purpose",
-            "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
-            "task.frontendExperienceRequirement.executionGuidance.responsibility",
-            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
-            "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
-            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-            "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
-            "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
-            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
-            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "task.frontendExperienceRequirement.uiSurfaceOwnership",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.schemaVersion",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.purpose",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.responsibility",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiTaskScope",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "taskProjection.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
             "executionRules.frontendImplementationOrganizationRules",
             "executionRules.interactiveVerificationProbePolicy",
             "executionRules.controlledRuntimeProbeRules",
         ]);
     }
     if runtime_delivery_evidence_applies(task) {
-        repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
+        repair_core_fields.extend(task_projection_runtime_delivery_requirement_read_fields(
+            task,
+        ));
         repair_core_fields.extend([
             "executionRules.controlledRuntimeProbeRules",
             "executionRules.runtimeDeliveryExecutionRules",
@@ -799,31 +806,33 @@ fn build_repair_execution_request(
     }
     if !task.engineering_quality_requirement_refs.is_empty() {
         repair_core_fields.extend([
-            "task.engineeringQualityRequirementRefs",
+            "taskProjection.engineeringQualityRequirementRefs",
             "sourceContext.engineeringQualityRequirements",
             "executionRules.engineeringQualityExecutionRules",
         ]);
     }
     if !task.architecture_quality_requirement_refs.is_empty() {
         repair_core_fields.extend([
-            "task.architectureQualityRequirementRefs",
+            "taskProjection.architectureQualityRequirementRefs",
             "sourceContext.architectureQualityRequirements",
             "executionRules.architectureQualityExecutionRules",
         ]);
     }
     if !task.api_contract_requirement_refs.is_empty() {
         repair_core_fields.extend([
-            "task.apiContractRequirementRefs",
+            "taskProjection.apiContractRequirementRefs",
             "sourceContext.apiContractRequirements",
             "executionRules.apiContractExecutionRules",
         ]);
     }
-    if !task.code_quality_requirement_refs.is_empty() {
-        repair_core_fields.extend([
-            "task.codeQualityRequirementRefs",
-            "sourceContext.codeQualityExecutionContext",
-            "executionRules.codeQualityExecutionRules",
-        ]);
+    if !code_quality_requirements.is_empty() {
+        repair_core_fields.push("sourceContext.codeQualityExecutionContext");
+        if !task.code_quality_requirement_refs.is_empty() {
+            repair_core_fields.extend([
+                "taskProjection.codeQualityRequirementRefs",
+                "executionRules.codeQualityExecutionRules",
+            ]);
+        }
     }
     if browser_profile.is_some() {
         repair_core_fields.extend([
@@ -857,46 +866,10 @@ fn build_repair_execution_request(
     let mut repair_result_fields = vec![
         "enumRefs.taskResultStatus",
         "enumRefs.verificationStatus",
-        "outputContract.resultFile",
-        "outputContract.requiredTopLevelFields",
-        "outputContract.resultTemplate",
-        "outputContract.schemaShape.properties.status",
-        "outputContract.schemaShape.properties.changedFiles",
-        "outputContract.schemaShape.properties.noChangeReason",
-        "outputContract.schemaShape.properties.verificationResults",
-        "outputContract.schemaShape.properties.selfRepairSummary",
-        "outputContract.schemaShape.properties.failure",
-        "outputContract.schemaShape.properties.executionContinuity",
-        "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.blockedReasons",
-        "outputContract.resultRules",
         "outputContract.blockedReasonOptions",
         "executionRules.completionBarrier",
     ];
-    if frontend_self_check_applies(task) {
-        repair_result_fields
-            .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
-    }
-    if frontend_quality_self_check_applies(task) {
-        repair_result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
-    }
-    if runtime_delivery_evidence_applies(task) {
-        repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
-    }
-    if !task.concept_refs.is_empty() {
-        repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
-    }
-    if !task.architecture_quality_requirement_refs.is_empty() {
-        repair_result_fields
-            .push("outputContract.schemaShape.properties.architectureQualityEvidence");
-    }
-    if !task.api_contract_requirement_refs.is_empty() {
-        repair_result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
-    }
-    if !task.code_quality_requirement_refs.is_empty() {
-        repair_result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
-    }
+    repair_result_fields.extend(task_result_contract_read_fields(task));
     let mut repair_context = json!({
         "sourceTaskId": task.task_id,
         "repairOrigin": repair_origin,
@@ -922,9 +895,10 @@ fn build_repair_execution_request(
             "taskPlanId": task_plan.task_plan_id,
             "taskPlanRunId": run.run_id,
             "taskId": task.task_id,
-            "groupId": task.group_id
+            "groupId": task.group_id,
+            "taskExecutionRequestRef": source_task_execution_request_ref
         },
-        "task": task,
+        "taskProjection": task_projection(task),
         "repairContext": repair_context,
         "executionRules": execution_rules,
         "enumRefs": {
@@ -942,13 +916,13 @@ fn build_repair_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this delivery execution repair."
             }],
-            "requiredTopLevelFields": task_result_required_top_level_fields(task),
+            "requiredTopLevelFields": result_contract["requiredTopLevelFields"].clone(),
             "blockedReasonOptions": [
                 {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
                 {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
                 {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
-            "schemaShape": schema_shape,
+            "schemaShape": result_contract["schemaShape"].clone(),
             "resultTemplate": result_template,
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
@@ -1009,6 +983,15 @@ fn build_repair_execution_request(
         root_value["sourceContext"] = Value::Object(source_context);
     }
     root_value
+}
+
+fn task_projection(task: &TaskDefinition) -> Value {
+    let mut projection = serde_json::to_value(task).unwrap_or_else(|_| json!({}));
+    if let Some(object) = projection.as_object_mut() {
+        object.remove("conceptResponsibilities");
+        object.remove("conceptVerificationIntents");
+    }
+    projection
 }
 
 fn browser_verification_repair_context(
@@ -1080,12 +1063,28 @@ fn materialize_taskplan_repair_action(
             .join(format!("{request_id}.json")),
     )?;
 
-    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
+    let mut context_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_core_context".to_string(),
     })?
     .fields;
+    context_fields.extend(
+        state::read_field_group_flat(ReadFieldGroupInput {
+            project_root: project_root.to_string(),
+            request_ref: original_request_ref.clone(),
+            group_id: "taskplan_requirement_context".to_string(),
+        })?
+        .fields,
+    );
+    context_fields.extend(
+        state::read_field_group_flat(ReadFieldGroupInput {
+            project_root: project_root.to_string(),
+            request_ref: original_request_ref.clone(),
+            group_id: "taskplan_artifact_context".to_string(),
+        })?
+        .fields,
+    );
     let rule_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
@@ -1099,7 +1098,7 @@ fn materialize_taskplan_repair_action(
     })?
     .fields;
     let source_refs = repair_source_refs_from_fields(
-        &core_fields,
+        &context_fields,
         &[
             (
                 "technicalBaselineRef",
@@ -1134,34 +1133,37 @@ fn materialize_taskplan_repair_action(
         ],
     )?;
     let allowed_refs = json!({
-        "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": value_field(&core_fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": value_field(&core_fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": value_field(&core_fields, "allowedRefs.requirementDetailIds"),
-        "moduleRefs": value_field(&core_fields, "allowedRefs.moduleRefs"),
-        "entityRefs": value_field(&core_fields, "allowedRefs.entityRefs"),
-        "interfaceRefs": value_field(&core_fields, "allowedRefs.interfaceRefs"),
-        "userFlowRefs": value_field(&core_fields, "allowedRefs.userFlowRefs"),
-        "stateMachineRefs": value_field(&core_fields, "allowedRefs.stateMachineRefs"),
-        "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
-        "nfrRefs": value_field(&core_fields, "allowedRefs.nfrRefs"),
-        "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
+        "scopeRefs": value_field(&context_fields, "allowedRefs.scopeRefs"),
+        "acceptanceRefs": value_field(&context_fields, "allowedRefs.acceptanceRefs"),
+        "deferredScopeRefs": value_field(&context_fields, "allowedRefs.deferredScopeRefs"),
+        "excludedScopeRefs": value_field(&context_fields, "allowedRefs.excludedScopeRefs"),
+        "requirementDetailIds": value_field(&context_fields, "allowedRefs.requirementDetailIds"),
+        "moduleRefs": value_field(&context_fields, "allowedRefs.moduleRefs"),
+        "entityRefs": value_field(&context_fields, "allowedRefs.entityRefs"),
+        "interfaceRefs": value_field(&context_fields, "allowedRefs.interfaceRefs"),
+        "userFlowRefs": value_field(&context_fields, "allowedRefs.userFlowRefs"),
+        "stateMachineRefs": value_field(&context_fields, "allowedRefs.stateMachineRefs"),
+        "decisionRefs": value_field(&context_fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": value_field(&context_fields, "allowedRefs.nfrRefs"),
+        "riskRefs": value_field(&context_fields, "allowedRefs.riskRefs")
     });
     let context_projection = json!({
-        "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
-        "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
-        "architectureArtifactContractId": field_value(&core_fields, "contextProjection.architectureArtifactContractId")?,
+        "phaseId": field_value(&context_fields, "contextProjection.phaseId")?,
+        "planningContractId": field_value(&context_fields, "contextProjection.planningContractId")?,
+        "architectureArtifactContractId": field_value(&context_fields, "contextProjection.architectureArtifactContractId")?,
         "requirementDetailTransfer": {
-            "requirementDetailAssignment": field_value(&core_fields, "contextProjection.requirementDetailTransfer.requirementDetailAssignment")?,
-            "currentPhaseScope": field_value(&core_fields, "contextProjection.requirementDetailTransfer.currentPhaseScope")?,
-            "acceptanceDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
-            "businessFlowDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.businessFlowDetails")?,
-            "objectOperationDetailRules": field_value(&core_fields, "contextProjection.requirementDetailTransfer.objectOperationDetailRules")?,
-            "architectureDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.architectureDetails")?,
-            "workflowClosureRequirements": field_value(&core_fields, "contextProjection.requirementDetailTransfer.workflowClosureRequirements")?,
-            "conceptRefs": field_value(&core_fields, "contextProjection.requirementDetailTransfer.conceptRefs")?,
-            "taskPlanningFieldMapping": field_value(&core_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
+            "requirementDetailAssignment": field_value(&context_fields, "contextProjection.requirementDetailTransfer.requirementDetailAssignment")?,
+            "currentPhaseScope": field_value(&context_fields, "contextProjection.requirementDetailTransfer.currentPhaseScope")?,
+            "acceptanceDetails": field_value(&context_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
+            "businessFlowDetails": field_value(&context_fields, "contextProjection.requirementDetailTransfer.businessFlowDetails")?,
+            "objectOperationDetailRules": field_value(&context_fields, "contextProjection.requirementDetailTransfer.objectOperationDetailRules")?,
+            "architectureDetails": projected_field_value(
+                &context_fields,
+                "contextProjection.requirementDetailTransfer.architectureDetails",
+            )?,
+            "workflowClosureRequirements": field_value(&context_fields, "contextProjection.requirementDetailTransfer.workflowClosureRequirements")?,
+            "conceptRefs": field_value(&context_fields, "contextProjection.requirementDetailTransfer.conceptRefs")?,
+            "taskPlanningFieldMapping": field_value(&context_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
         }
     });
     let mut generation_rules = json!({
@@ -1221,10 +1223,6 @@ fn materialize_taskplan_repair_action(
     let engineering_quality_template = value_field(
         &contract_fields,
         "outputContract.engineeringQualityRequirementTemplate",
-    );
-    let architecture_quality_template = value_field(
-        &contract_fields,
-        "outputContract.architectureQualityRequirementTemplate",
     );
     let api_contract_template = value_field(
         &contract_fields,
@@ -1319,10 +1317,6 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_template.is_null() {
         taskplan_repair_write_contract_fields
             .push("outputContract.engineeringQualityRequirementTemplate");
-    }
-    if !architecture_quality_template.is_null() {
-        taskplan_repair_write_contract_fields
-            .push("outputContract.architectureQualityRequirementTemplate");
     }
     if !api_contract_template.is_null() {
         taskplan_repair_write_contract_fields.push("outputContract.apiContractRequirementTemplate");
@@ -1448,16 +1442,6 @@ fn materialize_taskplan_repair_action(
             .insert(
                 "engineeringQualityRequirementTemplate".to_string(),
                 engineering_quality_template,
-            );
-    }
-    if !architecture_quality_template.is_null() {
-        request_root
-            .pointer_mut("/outputContract")
-            .and_then(Value::as_object_mut)
-            .expect("taskplan repair outputContract")
-            .insert(
-                "architectureQualityRequirementTemplate".to_string(),
-                architecture_quality_template,
             );
     }
     if !api_contract_template.is_null() {
@@ -1651,12 +1635,9 @@ fn materialize_architecture_repair_action(
         })
         .unwrap_or(Value::Null);
     let context_projection = json!({
-        "phaseScope": {
-            "phaseName": value_field(&core_fields, "contextProjection.phaseScope.phaseName"),
-            "phaseGoal": value_field(&core_fields, "contextProjection.phaseScope.phaseGoal"),
-            "acceptanceCandidates": value_field(&core_fields, "contextProjection.phaseScope.acceptanceCandidates")
-        },
         "phaseScopeSummary": {
+            "phaseName": value_field(&core_fields, "contextProjection.phaseScopeSummary.phaseName"),
+            "phaseGoal": value_field(&core_fields, "contextProjection.phaseScopeSummary.phaseGoal"),
             "includedIds": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedIds"),
             "includedLabels": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedLabels"),
             "includedItems": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedItems"),
@@ -1722,7 +1703,15 @@ fn materialize_architecture_repair_action(
         root,
         &request_id,
         &frontend_experience_source,
-        &context_projection,
+        planning_contract.as_ref().ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "architecture repair source is missing its planning contract".to_string(),
+            )
+        })?,
+        source_refs
+            .get("previousRuntimeDeliveryRef")
+            .and_then(Value::as_str)
+            .is_some(),
         &api_quality_seed,
     )?;
     let candidate_files = section_outputs
@@ -1911,6 +1900,121 @@ fn field_value(
         })
 }
 
+fn source_task_execution_request_ref_for_task(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    phase_candidate: Option<String>,
+    task_id: &str,
+) -> Result<Option<String>, state::store::StateError> {
+    if let Some(candidate) = phase_candidate {
+        let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+            project_root: project_root.to_string(),
+            request_ref: candidate.clone(),
+        })?;
+        if inspected.request_kind == "task_execution_request"
+            && request_source_task_id(project_root, &candidate)?.as_deref() == Some(task_id)
+        {
+            return Ok(Some(candidate));
+        }
+    }
+
+    let index = state::request_index::load_request_index(project_root)?;
+    let mut candidates = index
+        .requests
+        .into_iter()
+        .filter(|entry| {
+            entry.delivery_id.as_deref() == Some(delivery_id)
+                && entry.phase_id.as_deref() == Some(phase_id)
+                && entry.request_kind == "task_execution_request"
+        })
+        .filter_map(|entry| {
+            let task_matches = request_source_task_id(project_root, &entry.request_ref)
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(task_id);
+            task_matches.then_some(entry)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.updated_at.cmp(&right.updated_at));
+    Ok(candidates.pop().map(|entry| entry.request_ref))
+}
+
+fn request_source_task_id(
+    project_root: &str,
+    request_ref: &str,
+) -> Result<Option<String>, state::store::StateError> {
+    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+    })?;
+    let exposes_task_id = inspected
+        .read_groups
+        .iter()
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+        .any(|field| field == "source.taskId");
+    if !exposes_task_id {
+        return Ok(None);
+    }
+    Ok(
+        state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+            project_root: project_root.to_string(),
+            request_ref: request_ref.to_string(),
+            fields: vec!["source.taskId".to_string()],
+        })?
+        .fields
+        .get("source.taskId")
+        .and_then(|field| field.value.as_str())
+        .map(str::to_string),
+    )
+}
+
+fn projected_field_value(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+    field: &str,
+) -> Result<Value, state::store::StateError> {
+    if let Some(result) = fields.get(field) {
+        return Ok(result.value.clone());
+    }
+    let prefix = format!("{field}.");
+    let mut projected = serde_json::Map::new();
+    for (path, result) in fields {
+        let Some(relative) = path.strip_prefix(&prefix) else {
+            continue;
+        };
+        insert_projected_value(&mut projected, relative, result.value.clone());
+    }
+    if projected.is_empty() {
+        return Err(state::store::StateError::StateCorrupted(format!(
+            "replacement source field {field} is missing"
+        )));
+    }
+    Ok(Value::Object(projected))
+}
+
+fn insert_projected_value(
+    object: &mut serde_json::Map<String, Value>,
+    relative_path: &str,
+    value: Value,
+) {
+    let mut parts = relative_path.split('.').peekable();
+    let Some(first) = parts.next() else {
+        return;
+    };
+    if parts.peek().is_none() {
+        object.insert(first.to_string(), value);
+        return;
+    }
+    let child = object
+        .entry(first.to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Some(child_object) = child.as_object_mut() else {
+        return;
+    };
+    insert_projected_value(child_object, &parts.collect::<Vec<_>>().join("."), value);
+}
+
 fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, field: &str) -> Value {
     fields
         .get(field)
@@ -2032,21 +2136,6 @@ fn ui_quality_seed_from_fields(
     }))
 }
 
-fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
-    let authority_ref = frontend_experience_source
-        .get("confirmedFrontendExperienceRef")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            frontend_experience_source
-                .get("currentFrontendExperienceRef")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or_default();
-    json!({
-        "brainstormFrontendExperienceRef": authority_ref
-    })
-}
-
 fn read_project_json_value(
     project_root: &Path,
     relative: &str,
@@ -2088,8 +2177,8 @@ fn architecture_repair_read_groups(
     }
     core_fields.extend([
         "repairContext.sourceArchitectureRequestRef",
-        "contextProjection.phaseScope.phaseName",
-        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScopeSummary.phaseName",
+        "contextProjection.phaseScopeSummary.phaseGoal",
         "contextProjection.phaseScopeSummary.includedIds",
         "contextProjection.phaseScopeSummary.includedLabels",
         "contextProjection.phaseScopeSummary.includedItems",
@@ -2112,7 +2201,6 @@ fn architecture_repair_read_groups(
     }
     if architecture_section_uses_detail_refs(section) {
         core_fields.extend([
-            "contextProjection.phaseScope.acceptanceCandidates",
             "contextProjection.requirementDetailTransfer.requirementDetails",
             "contextProjection.requirementDetailTransfer.acceptanceDetails",
             "contextProjection.requirementDetailTransfer.businessFlows",
@@ -2256,7 +2344,8 @@ fn build_architecture_repair_section_outputs(
     project_root: &Path,
     request_id: &str,
     frontend_experience_source: &Value,
-    context_projection: &Value,
+    planning_contract: &PlanningGenerationContract,
+    has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     Ok(ARCHITECTURE_SECTION_ORDER
@@ -2267,540 +2356,37 @@ fn build_architecture_repair_section_outputs(
                 .join("agent-writable")
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
-            let result_template = architecture_repair_section_result_template(
+            let result_template = architecture::section_result_template(
                 *section,
+                has_previous_runtime_delivery,
                 frontend_experience_source,
-                context_projection,
-                api_quality_seed
+                planning_contract,
+                api_quality_seed,
             );
-            let schema_shape = architecture_repair_section_schema_shape(&result_template["content"]);
-            let mut output = json!({
+            let output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
                 "schemaRef": format!("architecture-section-{}-v1", section_name(*section)),
-                "schemaShape": schema_shape,
+                "schemaShape": architecture::section_schema_shape(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
                 "resultTemplate": result_template,
-                "enumRefs": {
-                    "section": ARCHITECTURE_SECTION_ORDER,
-                    "status": ["ready", "blocked"],
-                    "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-                    "acceptancePriority": ["must", "should", "could"],
-                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-                    "uiQuality": ui_quality_enum_refs(),
-                    "uiSurfaceDecision": ui_surface_decision_enum_refs()
-                },
-                "generationRules": [
-                    format!("Write only the {} section candidate for this request.", section_name(*section)),
-                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
-                ]
+                "enumRefs": architecture::section_enum_refs(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
+                "generationRules": architecture::section_generation_rules(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
             });
-            if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-                output["enumRefs"]["apiQuality"] = api_quality_enum_refs();
-            }
-            if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
-                output["generationRules"] = json!([
-                    "Write only the frontend_experience section candidate for this repair request.",
-                    "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.",
-                    "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.",
-                    "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.",
-                    "Do not write old UI quality contract fields or legacy UI self-check fields. uiSurfaceDecisionContract is MCP-derived from surfaceDecisionCandidate.",
-                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
-                ]);
-            }
             Ok(output)
         })
         .collect::<Result<Vec<_>, state::store::StateError>>()?)
-}
-
-fn architecture_repair_section_result_template(
-    section: ArchitectureSectionGroup,
-    frontend_experience_source: &Value,
-    context_projection: &Value,
-    api_quality_seed: &Value,
-) -> Value {
-    json!({
-        "status": "ready",
-        "content": architecture_repair_section_content_template(
-            section,
-            frontend_experience_source,
-            context_projection,
-            api_quality_seed
-        ),
-        "blockedReasons": []
-    })
-}
-
-fn architecture_repair_section_schema_shape(content_shape: &Value) -> Value {
-    json!({
-        "status": "ready | blocked",
-        "content": content_shape,
-        "blockedReasons": [{
-            "code": "string",
-            "message": "string",
-            "nextNode": "string"
-        }]
-    })
-}
-
-fn architecture_repair_domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
-    if api_quality_seed.is_null() {
-        return json!([]);
-    }
-    json!([{
-        "interfaceId": "api_current_001",
-        "name": "Current phase API or service interface",
-        "type": "http_api",
-        "resource": "",
-        "operationKind": "create",
-        "method": "POST",
-        "path": "/api/current-resources",
-        "requestSchema": [{
-            "field": "replace_with_request_field",
-            "required": true,
-            "kind": "string",
-            "validation": "business validation rule"
-        }],
-        "responseSchema": [{
-            "field": "id",
-            "required": true,
-            "kind": "identifier",
-            "meaning": "Created or affected resource id"
-        }],
-        "statusCodes": {
-            "success": [201],
-            "validation": [400, 422],
-            "businessConflict": [409],
-            "notFound": [404],
-            "auth": [],
-            "rateLimit": [],
-            "serviceUnavailable": [],
-            "serverError": [500]
-        },
-        "errorSchema": [{
-            "field": "message",
-            "required": true,
-            "kind": "user_actionable_message"
-        }],
-        "paginationPolicy": {
-            "strategy": "not_applicable",
-            "requestFields": [],
-            "responseFields": []
-        },
-        "authPolicy": {
-            "required": "not_applicable",
-            "actorRefs": [],
-            "permissionRefs": []
-        },
-        "contractFileRefs": [],
-        "idempotencyPolicy": {
-            "required": false,
-            "keyHeader": "",
-            "duplicateBehavior": ""
-        },
-        "cachePolicy": {
-            "strategy": "not_applicable",
-            "validators": []
-        },
-        "conditionalRequestPolicy": {
-            "required": false,
-            "staleUpdateStatus": null
-        },
-        "rateLimitPolicy": {
-            "applies": false,
-            "status": null,
-            "headers": []
-        },
-        "retryPolicy": {
-            "retryableStatuses": [],
-            "retryAfterHeader": false
-        },
-        "requestIdPolicy": {
-            "header": "",
-            "includedInErrorBody": false
-        },
-        "scopeRefs": [],
-        "acceptanceRefs": [],
-        "requirementDetailRefs": []
-    }])
-}
-
-fn architecture_repair_section_content_template(
-    section: ArchitectureSectionGroup,
-    frontend_experience_source: &Value,
-    context_projection: &Value,
-    api_quality_seed: &Value,
-) -> Value {
-    match section {
-        ArchitectureSectionGroup::Foundation => json!({
-            "engineeringBoundary": {
-                "summary": "",
-                "applications": [{
-                    "applicationId": "app_1",
-                    "name": "",
-                    "kind": "",
-                    "rootPath": "."
-                }],
-                "modules": [{
-                    "moduleId": "module_1",
-                    "name": "",
-                    "scopeRefs": [],
-                    "acceptanceRefs": [],
-                    "summary": ""
-                }],
-                "applicationInteractions": []
-            },
-            "modules": [{
-                "moduleId": "module_1",
-                "name": "",
-                "responsibility": "",
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
-        }),
-        ArchitectureSectionGroup::DomainContract => json!({
-            "dataModel": {
-                "entities": [{
-                    "entityId": "entity_1",
-                    "name": "",
-                    "fields": [],
-                    "constraints": [],
-                    "scopeRefs": [],
-                    "acceptanceRefs": []
-                }],
-                "relationships": [],
-                "constraints": []
-            },
-            "interfaces": architecture_repair_domain_contract_interfaces_template(api_quality_seed)
-        }),
-        ArchitectureSectionGroup::Behavior => json!({
-            "userFlows": [{
-                "flowId": "flow_1",
-                "name": "",
-                "steps": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }],
-            "stateMachines": [{
-                "machineId": "state_machine_1",
-                "name": "",
-                "states": [],
-                "transitions": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
-        }),
-        ArchitectureSectionGroup::FrontendExperience => json!({
-            "frontendExperience": {
-                "required": true,
-                "experienceLevel": "usable_internal_product",
-                "surfaces": [{
-                    "surfaceId": "surface_1",
-                    "name": "",
-                    "purpose": "",
-                    "audienceRefs": []
-                }],
-                "dataViews": [{
-                    "viewId": "view_1",
-                    "name": "",
-                    "fields": [],
-                    "sourceRefs": []
-                }],
-                "actions": [{
-                    "actionId": "action_1",
-                    "label": "",
-                    "entryPoint": "",
-                    "sourceRefs": []
-                }],
-                "operationPaths": [{
-                    "pathId": "path_1",
-                    "name": "",
-                    "surfaceRef": "surface_1",
-                    "dataViewRefs": ["view_1"],
-                    "actionRefs": ["action_1"],
-                    "sourceRefs": []
-                }],
-                "uiSurfaceRegistry": {
-                    "registryId": "ui-registry-1",
-                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
-                    "surfaces": [{
-                        "surfaceId": "surface_1",
-                        "surfaceRole": "page",
-                        "businessPurpose": "",
-                        "productIntent": {
-                            "userRole": "",
-                            "businessObject": "",
-                            "primaryJob": "",
-                            "successOutcome": ""
-                        },
-                        "compositionModel": {
-                            "requiredRegions": [
-                                "business navigation or local context",
-                                "task-relevant data region",
-                                "task-relevant action region",
-                                "scoped feedback region"
-                            ],
-                            "forbiddenRegions": [
-                                "decorative or explanatory region that displaces the task workflow"
-                            ],
-                            "primaryRegion": "task-relevant data or form region",
-                            "supportingRegions": [
-                                "navigation/context",
-                                "detail/summary",
-                                "feedback"
-                            ]
-                        },
-                        "informationModel": {
-                            "mustShow": [
-                                "business object identity",
-                                "business object status",
-                                "fields required to complete the task"
-                            ],
-                            "scanPriority": [
-                                "identity",
-                                "status",
-                                "decision fields",
-                                "available actions"
-                            ],
-                            "identityFields": [],
-                            "statusFields": [],
-                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
-                        },
-                        "actionModel": {
-                            "primaryActions": ["task-owned primary action"],
-                            "contextualActions": [],
-                            "dangerousActions": [],
-                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
-                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
-                        },
-                        "statePlacementModel": {
-                            "loading": "Near the region or control waiting for data or mutation.",
-                            "empty": "In the data/form region with business next action when applicable.",
-                            "error": "Near the affected region with recovery path.",
-                            "success": "Inline object update plus short confirmation when useful.",
-                            "business_blocking": "Near the blocked field, row, detail, or action.",
-                            "validation": "Near the field and summary for longer forms.",
-                            "disabled": "On or near disabled controls with unlock reason when actionable."
-                        },
-                        "visualModel": {
-                            "layoutBaseline": "custom_product_layout",
-                            "density": "balanced",
-                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
-                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
-                            "antiDemoRules": [
-                                "no runtime commands or delivery notes in product UI",
-                                "no marketing hero for operational surfaces",
-                                "no decorative filler before required workflow content"
-                            ]
-                        },
-                        "responsiveModel": {
-                            "desktop": "Keep primary task surface and action path visible without layout shift.",
-                            "tablet": "Preserve task order while reducing secondary regions.",
-                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
-                        },
-                        "requiredComposition": [
-                            "business navigation or context",
-                            "task-relevant data view",
-                            "task-relevant action area",
-                            "local loading, empty, error, success, and business-blocking feedback"
-                        ],
-                        "forbiddenComposition": [
-                            "surface composition unrelated to the task-owned business workflow",
-                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
-                        ],
-                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
-                        "dataViewRefs": ["view_1"],
-                        "actionRefs": ["action_1"],
-                        "operationPathRefs": ["path_1"],
-                        "workflowRefs": [],
-                        "interfaceRefs": []
-                    }]
-                },
-                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
-                "sourceRefs": frontend_source_refs_template(frontend_experience_source)
-            }
-        }),
-        ArchitectureSectionGroup::RuntimeDelivery => json!({
-            "runtimeDelivery": {
-                "status": "modified",
-                "runtimeKind": "",
-                "basis": {
-                    "technicalBaselineRef": ""
-                },
-                "build": {
-                    "command": "",
-                    "workingDirectory": ".",
-                    "outputs": [],
-                    "codeLevelExpectations": [""]
-                },
-                "start": {
-                    "command": "",
-                    "workingDirectory": ".",
-                    "codeLevelExpectations": [""]
-                },
-                "runtimeSurfaces": [{
-                    "surfaceId": "runtime_surface_1",
-                    "kind": "",
-                    "urlPath": "",
-                    "purpose": ""
-                }],
-                "httpProbes": {
-                    "previewPath": "/",
-                    "expectedStatus": "2xx_or_3xx"
-                },
-                "environment": {
-                    "required": [],
-                    "optional": []
-                },
-                "taskPlanningGuidance": {
-                    "requireRuntimeDeliveryRequirementWhenTaskTouches": [
-                        "build_or_packaging",
-                        "runtime_entry",
-                        "serving_or_routing",
-                        "configuration_or_environment",
-                        "generated_artifacts",
-                        "runtime_surface"
-                    ],
-                    "doNotRequireForTaskKinds": [
-                        "domain_only_validation",
-                        "pure_unit_test_additions"
-                    ],
-                    "verificationBoundary": "code_level_only",
-                    "doNotRequireCleanInstallOrContainerBuild": true
-                }
-            }
-        }),
-        ArchitectureSectionGroup::Coverage => coverage_content_template(context_projection),
-    }
-}
-
-fn coverage_content_template(context_projection: &Value) -> Value {
-    let acceptance_matrix = context_projection
-        .pointer("/requirementDetailTransfer/acceptanceDetails")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|acceptance| {
-                    json!({
-                        "acceptanceId": acceptance.get("id").cloned().unwrap_or(Value::Null),
-                        "priority": acceptance.get("priority").cloned().unwrap_or_else(|| json!("must")),
-                        "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
-                        "coverageStatus": "covered",
-                        "coverage": [acceptance_coverage_artifact_template()],
-                        "verificationHints": [{
-                            "kind": "manual",
-                            "description": ""
-                        }]
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let detail_coverage = context_projection
-        .pointer("/requirementDetailTransfer/requirementDetails/items")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|detail| {
-                    json!({
-                        "detailId": detail.get("detailId").cloned().unwrap_or(Value::Null),
-                        "coverageStatus": "covered",
-                        "artifactRefs": detail_coverage_artifact_refs_template()
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    json!({
-        "acceptanceMatrix": acceptance_matrix,
-        "detailCoverage": detail_coverage,
-        "architectureQuality": architecture_quality_repair_template(),
-        "handoff": {
-            "readyForTaskPlan": true,
-            "blockingReasons": [],
-            "nextNode": "task_plan"
-        }
-    })
-}
-
-fn architecture_quality_repair_template() -> Value {
-    json!({
-        "decisions": [{
-            "decisionId": "adr-current-001",
-            "category": "architecture_style",
-            "title": "Current phase architecture decision",
-            "status": "accepted",
-            "context": "State the current-phase forces from the repair request and accepted planning contract.",
-            "decision": "State the selected architecture approach for this phase.",
-            "alternativesConsidered": [{
-                "name": "alternative architecture approach",
-                "tradeoff": "Concrete trade-off compared with the selected approach.",
-                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
-            }],
-            "consequences": {
-                "positive": ["Implementation or verification benefit."],
-                "negative": ["Implementation or operation cost to watch."],
-                "neutral": ["Known side effect that does not block delivery."]
-            },
-            "sourceRefs": {
-                "scopeRefs": ["allowedRefs.scopeRefs item"],
-                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
-            },
-            "verificationHints": ["How later tasks or review can prove this decision was respected."]
-        }],
-        "nfrs": [{
-            "nfrId": "nfr-current-001",
-            "category": "maintainability",
-            "target": "Concrete quality target for this phase.",
-            "rationale": "Why this target matters for the current phase.",
-            "architectureRefs": {
-                "decisions": ["adr-current-001"],
-                "risks": ["risk-current-001"]
-            },
-            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
-        }],
-        "risks": [{
-            "riskId": "risk-current-001",
-            "category": "data_integrity",
-            "severity": "medium",
-            "likelihood": "medium",
-            "impact": "Concrete implementation or operation impact if this risk occurs.",
-            "mitigation": "Concrete design or task-plan mitigation.",
-            "ownerArtifactRefs": {
-                "modules": ["module_1"],
-                "interfaces": ["interface_1"],
-                "decisions": ["adr-current-001"],
-                "nfrs": ["nfr-current-001"]
-            },
-            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
-        }]
-    })
-}
-
-fn acceptance_coverage_artifact_template() -> Value {
-    json!({
-        "type": "module",
-        "refs": [],
-        "description": ""
-    })
-}
-
-fn detail_coverage_artifact_refs_template() -> Value {
-    json!({
-        "modules": [],
-        "entities": [],
-        "fields": [],
-        "constraints": [],
-        "interfaces": [],
-        "userFlows": [],
-        "stateMachines": [],
-        "frontendDataViews": [],
-        "frontendActions": [],
-        "frontendOperationPaths": [],
-        "acceptanceMatrix": []
-    })
 }
 
 fn section_name(section: ArchitectureSectionGroup) -> &'static str {
@@ -2915,10 +2501,6 @@ fn update_latest_execution_request(
         phase.latest_refs.insert(
             "taskExecutionRequestRef".to_string(),
             request_ref.to_string(),
-        );
-        phase.latest_refs.insert(
-            "taskExecutionResultFile".to_string(),
-            result_file.to_string(),
         );
         let mut details = json!({
             "resultFile": result_file,
@@ -3352,6 +2934,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -3362,6 +2945,9 @@ fn repairable(
         resubmit_tool: "loom.repairSubmitFile".to_string(),
         fix_scope: Some("repair_artifact_candidate_only".to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.repairSubmitFile",
+        ),
     })
 }
 

@@ -25,7 +25,7 @@ Examples:
 | Invariants | Which rules must be enforced before data is written or state changes. |
 | Transactions | Which operations must be atomic and what can be eventually consistent. |
 | Relationships | Which relationships are strong references, weak references, denormalized values, or derived views. |
-| Migrations | What schema/data change is needed and which task should own it. |
+| Migrations | What schema/data change is needed and which module or component owns it. |
 | Read models | Which list/detail/search/query views are required and what fields they expose. |
 | Failure behavior | How duplicate, stale, invalid, or partial writes are handled. |
 | Retention and cleanup | Which records/files/events expire, archive, or require manual cleanup when current scope creates durable data. |
@@ -44,6 +44,15 @@ Use selected storage facts from Technical Baseline; do not select a new product 
 | Time-series | timestamp semantics, retention, aggregation/rollup, late data handling, query window limits. |
 | Graph | node/edge ownership, traversal depth, consistency with source records, cycle or orphan handling. |
 | Object/file | metadata record, storage key ownership, access policy, cleanup on failed writes, orphan detection. |
+
+## Concurrency And Evolution
+
+- Define identifier generation and uniqueness ownership when records can be created concurrently or imported from another system.
+- State whether conflicting writes use serialization, optimistic concurrency, explicit version checks, idempotency, or a domain-level rejection.
+- Keep migration steps compatible with the selected provider and the runtime versions that may overlap during rollout.
+- Separate schema creation, data backfill, constraint activation, and cleanup when they cannot complete safely in one change.
+- Define rollback or forward-repair behavior for destructive, long-running, or partially applied migrations.
+- Treat seed/reference data as versioned business data when behavior depends on it; name its owner and update rule.
 
 ## Current Phase Fit
 
@@ -84,14 +93,12 @@ Create risk entries for:
 - Deferring validation until UI or tests only.
 - Omitting migration impact for persistent fields.
 
-## Planning Implications
+## Verification Evidence
 
-Data-affecting tasks should usually own:
+Useful evidence connects the architecture rule to the selected store and code path:
 
-- entity/model changes
-- persistence/migration changes
-- repository/query changes
-- API DTO/payload changes
-- same-provider persistence tests or runtime readback checks
-
-These may also carry engineering quality requirements; keep architecture quality and engineering quality as separate but complementary obligations.
+- constraint and mapping agreement
+- transaction or concurrency behavior under the declared conflict
+- migration behavior against the selected provider
+- bounded query/read-model behavior
+- cleanup, rebuild, or forward-repair behavior for lifecycle and derived data

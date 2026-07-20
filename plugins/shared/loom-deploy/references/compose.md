@@ -109,12 +109,18 @@ When multiple public app ports exist, publish each explicit public runtime port 
 
 ## Health And Logs
 
-- App health probing belongs to loom validation unless the generated Compose file has an obvious HTTP endpoint.
-- Probe common health candidates such as `/`, `/health`, `/healthz`, `/api/health`, `/ready`, `/readiness`, and framework-specific endpoints such as Spring Boot `/actuator/health` or Laravel/Rails `/up`.
-- Respect healthcheck paths and candidates already recorded in `DeploymentSpec`, `sourceModel.services[].healthcheckPath`, and topology validation. Do not invent unrelated probes during Compose repair.
-- When a candidate succeeds, persist that path back into `DeploymentSpec.runtime.healthcheck`.
+- App health probing belongs to Loom validation unless the accepted runtime facts contain an explicit safe health path.
+- Do not guess `/` or probe business endpoints as healthchecks. Only use `DeploymentSpec.runtimeContract.healthPath`, a scanner-confirmed safe probe, or an accepted framework health endpoint.
+- Respect healthcheck paths already recorded in `DeploymentSpec`, `sourceModel.services[].healthcheckPath`, and topology validation. Do not invent unrelated probes during Compose repair.
+- When no safe health path exists, omit the Compose healthcheck and let preview/API validation provide the evidence.
 - Log parsing should target the selected app service for existing Compose and identify fatal startup failures before reporting a preview URL.
 - If the app has no HTTP server, Compose can still build/start it, but the deploy result should not invent an HTTP preview URL.
+
+## Storage Facts
+
+- File databases and stateful dependencies must be mounted from `DeploymentSpec.storageFacts`.
+- A storage fact names the provider, owning service, volume, container path, and environment key when applicable.
+- Do not use `/app/data` as a universal convention and do not decide persistence by searching generated environment values.
 
 ## Repair Clues
 

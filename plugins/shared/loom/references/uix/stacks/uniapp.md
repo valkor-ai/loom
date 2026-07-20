@@ -46,3 +46,20 @@ Use project-native syntax and components; the pattern is about regions, not exac
 - Use the available mini-app/H5 preview target when present.
 - Check safe areas, keyboard behavior, scroll, and platform permission flows.
 - Verify target-specific API limitations or permission prompts do not leave the user on a blank page.
+
+## Cross-Target Page Boundary
+
+UIX owns the page regions and mobile task flow. Platform conditionals, package
+configuration, API adapters, and target build rules remain in the repository's
+UniApp engineering boundary.
+
+```text
+pages.json route -> page shell -> scroll/content region -> action bar
+-> validation/permission -> platform result -> updated page or next route
+```
+
+- Keep one page identity and one primary task across H5, mini-app, and native builds; adapt controls where platform capability requires it.
+- Use platform-native safe areas, navigation bars, tab bars, and keyboard behavior rather than importing desktop web layout assumptions.
+- Put loading, empty, permission, error, success, and business-blocking feedback in the page region that owns the action.
+- Keep conditional compilation around platform adapters or capability-specific controls, not around duplicated business workflow markup.
+- Extend the existing `uni.scss` or theme variables for semantic tokens. Do not create a web-only CSS layer that the target renderer cannot consume.

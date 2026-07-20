@@ -90,8 +90,8 @@ pub struct RuntimeContractEndpoint {
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_command: Option<String>,
+    #[serde(default)]
+    pub commands: DeploymentCommandPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,8 +108,8 @@ pub struct RuntimeContractApi {
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_command: Option<String>,
+    #[serde(default)]
+    pub commands: DeploymentCommandPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,6 +165,25 @@ pub struct RuntimeEnvironmentContract {
     pub optional: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentCommandPhase {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentCommandContract {
+    pub development: DeploymentCommandPhase,
+    pub verification: DeploymentCommandPhase,
+    pub deployment: DeploymentCommandPhase,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentRuntimeContract {
@@ -177,10 +196,7 @@ pub struct DeploymentRuntimeContract {
     pub deployment_shape: Option<DeploymentShape>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_command: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_command: Option<String>,
+    pub commands: DeploymentCommandContract,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     pub preview_path: String,
@@ -353,6 +369,22 @@ pub struct DeploymentFacts {
     pub generated_asset_policy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentStorageFact {
+    pub service_id: String,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_name: Option<String>,
+    pub container_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    pub persistent: bool,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -573,6 +605,8 @@ pub struct DeploymentSpec {
     pub source_model: DeploymentSourceModel,
     pub topology: DeploymentTopology,
     pub facts: DeploymentFacts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storage_facts: Vec<DeploymentStorageFact>,
     #[serde(default)]
     pub frontend_api_binding: FrontendApiBinding,
     pub environment: DeploymentEnvDiagnostics,

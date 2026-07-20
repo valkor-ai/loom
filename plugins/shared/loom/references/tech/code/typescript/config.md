@@ -2,30 +2,39 @@
 
 ## When To Use
 
-- The task changes `tsconfig` files, package build settings, module resolution, declaration output, project references, path aliases, framework TypeScript integration, or strictness flags.
-- Use this when TypeScript configuration is blocking or shaping the implementation. Do not edit config as a shortcut around type errors in application code.
-- If a task only changes normal TypeScript source and existing config works, leave configuration alone.
+- Load only when the task changes `tsconfig` files, package build settings, module resolution, declarations, project references, aliases, framework integration, or compiler strictness.
+- Do not edit configuration as a shortcut around application type errors; fix the source or narrow the config change to the owned package.
+- Inspect `package.json`, package-manager scripts, bundler, test runner, and existing config inheritance before changing compiler options.
+
+## Decision Rules
+
+- Preserve `strict`, `strictNullChecks`, `noImplicitAny`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and related safety flags. A build fix must not weaken them silently.
+- Match module resolution to the runtime: bundler-oriented resolution for bundler applications, and `NodeNext`-compatible settings for Node libraries and CLIs.
+- Add a path alias only when TypeScript, bundler, test runner, linting, and runtime resolve the same mapping. One shortened import is not sufficient justification.
+- Use project references only for real package or layer boundaries that emit separate artifacts; align `composite`, `rootDir`, `outDir`, and declarations.
+- Generate declarations for libraries, SDKs, shared packages, and plugin APIs. Application-only packages do not need them unless the repository consumes them.
+- Keep `include` and `exclude` honest. Never exclude source, tests, or generated contracts to hide diagnostics.
+- Preserve the repository's `skipLibCheck` policy and never use it to hide local source or local declaration failures.
 
 ## Implementation Focus
 
-- Inspect `package.json`, framework tooling, package manager scripts, and existing `tsconfig` layering before changing module settings. Apps using Vite or modern bundlers usually need bundler-oriented resolution; Node libraries and CLIs may need `NodeNext` semantics.
-- Do not downgrade `strict`, `strictNullChecks`, `noImplicitAny`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, or similar safety flags to pass a build. Fix the changed code or narrow the config change to the intended package.
-- When enabling a stricter flag, update the affected code in the same task or keep the change scoped so unrelated packages are not forced into broad repair work.
-- Add path aliases only when the repository already supports alias resolution across TypeScript, bundler, test runner, linting, and runtime. Do not add an alias to shorten one or two imports.
-- Use project references only for multi-package or layered builds that produce separate artifacts. Configure `composite`, `rootDir`, `outDir`, and declaration output consistently or avoid references.
-- Generate declarations for libraries, SDKs, shared packages, or plugin APIs. Application-only packages normally do not need declaration output unless the repo already expects it.
-- Keep `include` and `exclude` honest. Do not exclude broken source files, tests, or generated contract files merely to hide diagnostics.
-- Use config inheritance deliberately: shared base config for common rules, package/framework config for environment-specific `lib`, `jsx`, `types`, and emit settings.
-- Preserve existing `skipLibCheck` policy unless the task explicitly owns dependency type hygiene. Never use it to hide errors from local source or generated local declarations.
-- If `isolatedModules` is required by the transpiler, avoid constructs that cannot be safely transpiled one file at a time, such as namespace-heavy patterns or unsafe const enum assumptions.
+- Put common compiler rules in the existing base config and keep environment-specific `lib`, `jsx`, `types`, and emit options in the package config.
+- If a stricter flag is enabled, repair its affected source in the same task or scope the flag to the intended package.
+- For `isolatedModules`, avoid namespace-heavy or unsafe one-file transpilation patterns and verify the actual framework build.
+- Use incremental compilation or build metadata only when the repository has a reproducible cache location and clean-build path.
+
+## Failure Modes
+
+- Do not change `module`, `moduleResolution`, JSX, or aliases without checking the bundler, test runner, and runtime together.
+- Do not make a local package pass by excluding its tests or source files from a shared config.
+- Do not commit generated declaration or build output when the repository treats it as a derived artifact.
 
 ## Verification Focus
 
-- Run the exact config that changed, for example `tsc -p tsconfig.json --noEmit`, `tsc -b`, or the package script that invokes TypeScript.
-- Run the framework build or test command when module resolution, aliases, JSX, or emitted output can affect bundling/runtime behavior.
-- If declaration output changed, run the package build and confirm generated declarations reference valid public paths.
-- Confirm no changed config silently removes source coverage by excluding files that were previously typechecked.
+- Run the exact changed config with `tsc -p` or `tsc -b`, then run the framework build when aliases, JSX, module resolution, or emitted output can affect runtime.
+- If declaration output changes, inspect generated public paths and run a clean package build.
+- Confirm no changed config silently removes files from typechecking.
 
 ## Evidence Focus
 
-- In the evidence summary, name the config decision: strictness, module resolution, alias ownership, project references, declaration output, framework layering, or include/exclude scope.
+- Record the configuration decision: strictness, module resolution, alias ownership, project references, declaration output, framework layering, or file scope.

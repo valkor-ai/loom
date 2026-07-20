@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
     ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
@@ -32,8 +29,7 @@ use crate::{
     templates::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_schema_shape, task_result_template_with_code_quality,
+        runtime_delivery_evidence_applies, task_result_contract, task_result_contract_read_fields,
     },
 };
 
@@ -454,10 +450,16 @@ fn existing_execution_next_if_current(
     else {
         return Ok(None);
     };
-    let Some(result_file) = phase.latest_refs.get("taskExecutionResultFile") else {
+    let Some(result_file) = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("resultFile"))
+        .and_then(Value::as_str)
+    else {
         return Ok(None);
     };
-    execute_task_next_from_request(project_root, request_ref, task, result_file.clone()).map(Some)
+    execute_task_next_from_request(project_root, request_ref, task, result_file.to_string())
+        .map(Some)
 }
 
 fn build_execution_request(
@@ -508,7 +510,11 @@ fn build_execution_request(
         .map(|profile| browser_verification_context(root, task_plan, profile));
     let architecture_projection =
         task_scoped_architecture_projection(&aac, project_api_contract.as_ref(), &request_task);
-    let schema_shape = task_result_schema_shape(&request_task, browser_verification_profile);
+    let result_contract = task_result_contract(
+        &request_task,
+        &code_quality_requirements,
+        browser_verification_profile,
+    );
     let dependency_results = dependency_results(run, task);
     let read_groups = task_execution_read_groups(
         &request_task,
@@ -598,18 +604,14 @@ fn build_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this planned task."
             }],
-            "requiredTopLevelFields": task_result_required_top_level_fields(&request_task),
+            "requiredTopLevelFields": result_contract["requiredTopLevelFields"].clone(),
             "blockedReasonOptions": [
                 {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
                 {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
                 {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
-            "schemaShape": schema_shape,
-            "resultTemplate": task_result_template_with_code_quality(
-                &request_task,
-                &code_quality_requirements,
-                browser_verification_profile,
-            ),
+            "schemaShape": result_contract["schemaShape"].clone(),
+            "resultTemplate": result_contract["resultTemplate"].clone(),
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
@@ -628,6 +630,7 @@ pub(crate) fn task_execution_rules(
             "submitTool": "loom.recordTaskResultFile",
             "rule": "The task is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
         },
+        "writeTargetRule": "When a file-submit tool accepts writtenTargetIds, pass the active outputContract.writeTargets[].targetId (for TaskResult: result), never the target path or resultFile string.",
         "finalResponseGuard": {
             "mustNotReportProgressBeforeSubmit": true,
             "rule": "Do not stop with a progress-only summary before submitting TaskResult."
@@ -656,12 +659,10 @@ pub(crate) fn task_execution_rules(
         return rules;
     };
     if task_has_frontend_execution(task) {
-        if !runtime_delivery_evidence_applies(task) {
-            object.insert(
-                "frontendImplementationOrganizationRules".to_string(),
-                frontend_implementation_organization_rules(),
-            );
-        }
+        object.insert(
+            "frontendImplementationOrganizationRules".to_string(),
+            frontend_implementation_organization_rules(),
+        );
         object.insert(
             "interactiveVerificationProbePolicy".to_string(),
             interactive_verification_probe_policy(),
@@ -780,10 +781,7 @@ fn interactive_verification_probe_policy() -> Value {
         "appliesWhen": "The task uses browser, e2e, interactive UI, runtime UI, or API-backed UI verification.",
         "deriveProbePlanFrom": [
             "task.verificationIntents[].behavior",
-            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "task.frontendExperienceRequirement.executionGuidance.workflowsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
             "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"
         ],
         "requiredExecutionPattern": [
@@ -799,7 +797,7 @@ fn interactive_verification_probe_policy() -> Value {
             "Stop retrying that verification method when the same failure signature repeats without new observable evidence."
         ],
         "taskResultEvidence": [
-            "Record successful probe facts in verificationResults[].summary for the matching verificationId.",
+            "Record successful probe facts in verificationResults[].summary for the matching verificationId and keep verificationResults[].provenance tied to concrete evidence refs, changed files, test cases, command, and exit code.",
             "Record runtime command or probe evidence in runtimeDeliveryEvidence.commandsRun when runtimeDeliveryEvidence applies.",
             "Record remaining unverified responsibility in notes or runtimeDeliveryEvidence.unverifiedItems according to TaskResult rules."
         ]
@@ -833,6 +831,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
+        "The result template is a conservative starting shape: not_run, not_verified, partial, missing, and not_applicable entries are not completion evidence. Replace them only after the corresponding work or verification actually happened.".to_string(),
     ];
     if frontend_self_check_applies(task) {
         rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present; Loom derives closureRequirementIds from the assigned closure contract.".to_string());
@@ -847,7 +846,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
-        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, report status and evidence in the task.runtimeDeliveryRequirement.requiredCodeLevelChecks order. Loom derives requirementRef, checkedFields, checkId, and contractField.".to_string());
+        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, report status and evidence in the task.runtimeDeliveryRequirement.requiredCodeLevelChecks order. Every applicable check must be passed or explicitly unverified; replace the template's not_applicable status when the check applies. Loom derives requirementRef, checkedFields, checkId, and contractField.".to_string());
         rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
     }
     if !task.engineering_quality_requirement_refs.is_empty() {
@@ -855,14 +854,16 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         rules.push("For persistence_mapping requirements, evidence must cover changed risk field kinds across domain model, storage schema or migration, data access mapping, DTO/API contract, and same-provider persistence behavior when those parts are in task scope.".to_string());
     }
     if !task.architecture_quality_requirement_refs.is_empty() {
-        rules.push("For referenced architectureQualityRequirements, provide one architectureQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. Summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
+        rules.push("For referenced architectureQualityRequirements, provide one architectureQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. The template starts as not_verified; set satisfied only when the changed files and passed verification evidence demonstrate the referenced decision, NFR, or risk mitigation.".to_string());
     }
     if !task.api_contract_requirement_refs.is_empty() {
         rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+        rules.push("The apiContractEvidence template starts as not_verified. Set status=satisfied only after the assigned API behavior has concrete passed verification evidence; for completed or completed_with_notes results, keep knownGaps empty and explain non-applicable checks in summary instead of recording a gap.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
-        rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+        rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
+        rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
 }
@@ -880,6 +881,7 @@ fn engineering_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "When implementation touches persistence, prefer same-provider tests or runtime checks over mock-only evidence.",
+            "When a MySQL or PostgreSQL dialect reference is selected, verify provider-specific behavior against that provider or record the exact unavailable provider behavior; do not claim dialect support from SQLite, H2, or another database.",
             "Record concise alignment evidence in verificationResults[].summary and requirementDetailEvidence[].summary."
         ]
     })
@@ -948,7 +950,9 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "Run the smallest available compile, type, lint, unit, or integration check that proves the changed code.",
-            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence."
+            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence.",
+            "For completed or completed_with_notes results, codeQualityEvidence.status must be satisfied and knownGaps must be an empty array; a reference that is irrelevant to one changed file is explained in summary, not recorded as a gap.",
+            "Do not author requirementId or verificationIds when the result template marks them as MCP-derived; keep evidence entries in the assigned requirement order and let Loom normalize linkage fields."
         ]
     })
 }
@@ -1098,11 +1102,7 @@ fn task_execution_read_groups(
             "task.frontendExperienceRequirement.executionGuidance.purpose",
             "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
             "task.frontendExperienceRequirement.executionGuidance.responsibility",
-            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
-            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
-            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.uiTaskScope",
             "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
@@ -1110,13 +1110,10 @@ fn task_execution_read_groups(
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
             "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
-            "task.frontendExperienceRequirement.uiSurfaceOwnership",
         ]);
     }
     if has_frontend_execution {
-        if !runtime_delivery_evidence_applies(task) {
-            frontend_fields.push("executionRules.frontendImplementationOrganizationRules");
-        }
+        frontend_fields.push("executionRules.frontendImplementationOrganizationRules");
         frontend_fields.push("executionRules.interactiveVerificationProbePolicy");
     }
 
@@ -1184,47 +1181,12 @@ fn task_execution_read_groups(
         "enumRefs.verificationStatus",
         "enumRefs.verificationEvidence",
         "enumRefs.selfRepairStopReason",
-        "outputContract.resultFile",
-        "outputContract.requiredTopLevelFields",
-        "outputContract.resultTemplate",
-        "outputContract.schemaShape.properties.status",
-        "outputContract.schemaShape.properties.changedFiles",
-        "outputContract.schemaShape.properties.noChangeReason",
-        "outputContract.schemaShape.properties.verificationResults",
-        "outputContract.schemaShape.properties.selfRepairSummary",
-        "outputContract.schemaShape.properties.failure",
-        "outputContract.schemaShape.properties.executionContinuity",
-        "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.blockedReasons",
-        "outputContract.resultRules",
-        "outputContract.blockedReasonOptions",
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
         "executionRules.verificationCommandSchedulingRules",
     ];
-    if frontend_self_check_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
-    }
-    if frontend_quality_self_check_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
-    }
-    if runtime_delivery_evidence_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
-    }
-    if !task.concept_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
-    }
-    if !task.architecture_quality_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.architectureQualityEvidence");
-    }
-    if !task.api_contract_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
-    }
-    if !task.code_quality_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
-    }
+    result_fields.extend(task_result_contract_read_fields(task));
 
     let mut groups = vec![
         json!({
@@ -1394,6 +1356,13 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -1412,33 +1381,69 @@ fn task_needs_controlled_runtime_probe_rules(task: &TaskDefinition) -> bool {
 }
 
 pub(crate) fn runtime_delivery_requirement_read_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    runtime_delivery_requirement_read_fields_for_prefix(task, false)
+}
+
+pub(crate) fn task_projection_runtime_delivery_requirement_read_fields(
+    task: &TaskDefinition,
+) -> Vec<&'static str> {
+    runtime_delivery_requirement_read_fields_for_prefix(task, true)
+}
+
+fn runtime_delivery_requirement_read_fields_for_prefix(
+    task: &TaskDefinition,
+    task_projection: bool,
+) -> Vec<&'static str> {
     let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
         return vec![];
     };
-    let mut fields = vec![
-        "task.runtimeDeliveryRequirement.appliesToThisTask",
-        "task.runtimeDeliveryRequirement.reason",
-    ];
+    let (applies, reason, runtime_ref, affected, checks, expected, forbidden, source, failure_ref) =
+        if task_projection {
+            (
+                "taskProjection.runtimeDeliveryRequirement.appliesToThisTask",
+                "taskProjection.runtimeDeliveryRequirement.reason",
+                "taskProjection.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "taskProjection.runtimeDeliveryRequirement.affectedContractFields",
+                "taskProjection.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "taskProjection.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+                "taskProjection.runtimeDeliveryRequirement.forbiddenActions",
+                "taskProjection.runtimeDeliveryRequirement.source",
+                "taskProjection.runtimeDeliveryRequirement.deploymentFailureRef",
+            )
+        } else {
+            (
+                "task.runtimeDeliveryRequirement.appliesToThisTask",
+                "task.runtimeDeliveryRequirement.reason",
+                "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "task.runtimeDeliveryRequirement.affectedContractFields",
+                "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+                "task.runtimeDeliveryRequirement.forbiddenActions",
+                "task.runtimeDeliveryRequirement.source",
+                "task.runtimeDeliveryRequirement.deploymentFailureRef",
+            )
+        };
+    let mut fields = vec![applies, reason];
     if requirement.runtime_delivery_ref.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.runtimeDeliveryRef");
+        fields.push(runtime_ref);
     }
     if !requirement.affected_contract_fields.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.affectedContractFields");
+        fields.push(affected);
     }
     if !requirement.required_code_level_checks.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.requiredCodeLevelChecks");
+        fields.push(checks);
     }
     if !requirement.evidence_expected_in_task_result.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult");
+        fields.push(expected);
     }
     if !requirement.forbidden_actions.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.forbiddenActions");
+        fields.push(forbidden);
     }
     if requirement.source.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.source");
+        fields.push(source);
     }
     if requirement.deployment_failure_ref.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.deploymentFailureRef");
+        fields.push(failure_ref);
     }
     fields
 }
@@ -1497,18 +1502,8 @@ fn task_scoped_architecture_projection(
     let refs = &task.write_boundary.artifact_refs;
     let selected_user_flows =
         selected_values(&aac.user_flows, "flowId", &refs.user_flows, task, true);
-    let interface_refs_from_flows = selected_user_flows
-        .iter()
-        .flat_map(|flow| string_array_at(flow, "interfaceRefs"))
-        .collect::<Vec<_>>();
-    let state_machine_refs_from_flows = selected_user_flows
-        .iter()
-        .flat_map(|flow| {
-            array_at(flow, "steps")
-                .into_iter()
-                .flat_map(|step| string_array_at(step, "stateMachineRefs"))
-        })
-        .collect::<Vec<_>>();
+    let (interface_refs_from_flows, state_machine_refs_from_flows) =
+        behavior_refs_from_user_flows(&selected_user_flows);
     let interface_refs = unique_strings(
         refs.interfaces
             .iter()
@@ -1569,6 +1564,26 @@ fn task_scoped_architecture_projection(
     projection
 }
 
+fn behavior_refs_from_user_flows(user_flows: &[Value]) -> (Vec<String>, Vec<String>) {
+    let steps = user_flows
+        .iter()
+        .flat_map(|flow| array_at(flow, "happyPath"))
+        .collect::<Vec<_>>();
+    let interface_refs = unique_strings(
+        steps
+            .iter()
+            .filter_map(|step| string_at(step, "interactionRef"))
+            .collect(),
+    );
+    let state_machine_refs = unique_strings(
+        steps
+            .iter()
+            .flat_map(|step| string_array_at(step, "stateMachineRefs"))
+            .collect(),
+    );
+    (interface_refs, state_machine_refs)
+}
+
 fn build_frontend_execution_guidance(
     task: &TaskDefinition,
     aac: &ArchitectureArtifactContract,
@@ -1580,11 +1595,7 @@ fn build_frontend_execution_guidance(
             "purpose": "No AAC frontendExperience is present for this task.",
             "userFacingLanguage": user_facing_language,
             "responsibility": task.objective,
-            "surfacesInScope": [],
-            "dataViewsInScope": [],
-            "actionsInScope": [],
-            "operationPathsInScope": [],
-            "frontendBackendBindings": [],
+            "uiTaskScope": empty_ui_task_scope(),
             "dataBindingExpectation": {
                 "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"]
             },
@@ -1631,11 +1642,15 @@ fn build_frontend_execution_guidance(
         "purpose": "Task-scoped frontend execution guidance derived from AAC and TaskPlan refs.",
         "userFacingLanguage": user_facing_language,
         "responsibility": task.objective,
-        "surfacesInScope": surfaces,
-        "dataViewsInScope": data_views,
-        "actionsInScope": actions,
-        "operationPathsInScope": operation_paths,
-        "frontendBackendBindings": frontend_backend_bindings,
+        "uiTaskScope": ui_task_scope_projection(
+            frontend,
+            &task_scope,
+            &surfaces,
+            &data_views,
+            &actions,
+            &operation_paths,
+            &frontend_backend_bindings,
+        ),
         "dataBindingExpectation": {
             "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"],
             "requiredModeForSatisfaction": if closure_requirements.is_empty() { Value::Null } else { json!("wired") },
@@ -1647,11 +1662,58 @@ fn build_frontend_execution_guidance(
         "workflowClosureDetailSource": {
             "closureRequirementIds": closure_requirements.iter().filter_map(|item| string_at(item, "closureId")).collect::<Vec<_>>(),
             "detailAuthority": "Use closureRequirementRefs, frontendBackendBindings, and sourceContext.architectureArtifactProjection from this request.",
-            "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
+            "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, structured happy-path steps, and executable interfaces."
         },
         "uiProductionBrief": ui_production_brief(task, frontend, &task_scope, user_facing_language),
         "styleAssetPlan": style_asset_plan(frontend),
         "guidanceWarnings": warnings
+    })
+}
+
+fn empty_ui_task_scope() -> Value {
+    json!({
+        "source": "MCP-derived TaskPlan uiTaskScope projection",
+        "surfacesInScope": [],
+        "dataViewsInScope": [],
+        "actionsInScope": [],
+        "operationPathsInScope": [],
+        "frontendBackendBindings": [],
+        "regionsInScope": [],
+        "actionsInContract": [],
+        "statesInContract": [],
+        "qualityRulesInScope": [],
+        "ownershipDimensions": []
+    })
+}
+
+fn ui_task_scope_projection(
+    frontend: &Value,
+    scope: &FrontendTaskScope,
+    surfaces: &[Value],
+    data_views: &[Value],
+    actions: &[Value],
+    operation_paths: &[Value],
+    bindings: &[Value],
+) -> Value {
+    let surface_contract = frontend
+        .get("uiSurfaceDecisionContract")
+        .unwrap_or(&Value::Null);
+    json!({
+        "source": "MCP-derived TaskPlan uiTaskScope projection",
+        "surfaceIds": scope.surface_refs,
+        "surfacesInScope": surfaces,
+        "dataViewsInScope": data_views,
+        "actionsInScope": actions,
+        "operationPathsInScope": operation_paths,
+        "frontendBackendBindings": bindings,
+        "regionsInScope": selected_surface_contract_values(surface_contract, "regionModel", "regionId", &scope.surface_region_refs),
+        "actionsInContract": selected_surface_contract_values(surface_contract, "actionModel", "actionId", &scope.surface_action_refs),
+        "statesInContract": selected_surface_contract_values(surface_contract, "stateModel", "state", &scope.state_refs),
+        "qualityRulesInScope": selected_surface_contract_values(surface_contract, "qualityRules", "ruleId", &scope.quality_rule_refs),
+        "ownershipDimensions": scope.ownership_dimensions,
+        "layoutBaseline": surface_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
+        "informationModel": surface_contract.get("informationModel").cloned().unwrap_or(Value::Null),
+        "contentBoundary": surface_contract.get("contentBoundary").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -1683,7 +1745,7 @@ fn frontend_task_scope(
     );
     push_unique_strings(
         &mut scope.interface_refs,
-        task.write_boundary.artifact_refs.interfaces.clone(),
+        task.write_boundary.artifact_refs.all_interfaces(),
     );
     for requirement in closure_requirements {
         push_unique(
@@ -1742,24 +1804,81 @@ fn frontend_task_scope(
         );
         push_unique_strings(
             &mut scope.surface_region_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/regionIdsInScope"),
+            scope_refs_from_requirement(requirement, "/uiTaskScope/regionsInScope", &["regionId"]),
         );
         push_unique_strings(
             &mut scope.surface_action_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/actionIdsInScope"),
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/actionsInContract",
+                &["actionId"],
+            ),
         );
         push_unique_strings(
             &mut scope.state_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/stateKindsInScope"),
+            scope_refs_from_requirement(requirement, "/uiTaskScope/statesInContract", &["state"]),
         );
         push_unique_strings(
             &mut scope.quality_rule_refs,
-            string_array_at_pointer(requirement, "/uiSurfaceOwnership/qualityRuleIdsInScope"),
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/qualityRulesInScope",
+                &["ruleId"],
+            ),
         );
         push_unique_strings(
             &mut scope.ownership_dimensions,
             ownership_dimensions_from_requirement(requirement),
         );
+
+        // A TaskResult submit reconstructs the task from the execution request. Preserve the
+        // previously derived task-scoped contract when the original TaskPlan projection did not
+        // carry explicit UI scope arrays.
+        let brief = requirement
+            .pointer("/executionGuidance/uiProductionBrief")
+            .unwrap_or(&Value::Null);
+        push_unique_strings(
+            &mut scope.surface_refs,
+            string_array_at(brief.get("appliesTo").unwrap_or(&Value::Null), "surfaceIds"),
+        );
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            string_array_at(
+                brief.get("appliesTo").unwrap_or(&Value::Null),
+                "dataViewIds",
+            ),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            string_array_at(brief.get("appliesTo").unwrap_or(&Value::Null), "actionIds"),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            string_array_at(
+                brief.get("appliesTo").unwrap_or(&Value::Null),
+                "operationPathIds",
+            ),
+        );
+        let brief_contract = brief.get("surfaceDecisionContract").unwrap_or(&Value::Null);
+        push_unique_strings(
+            &mut scope.surface_region_refs,
+            scope_refs_from_requirement(brief_contract, "/regionsInScope", &["regionId"]),
+        );
+        push_unique_strings(
+            &mut scope.surface_action_refs,
+            scope_refs_from_requirement(brief_contract, "/actionsInScope", &["actionId"]),
+        );
+        push_unique_strings(
+            &mut scope.state_refs,
+            scope_refs_from_requirement(brief_contract, "/statesInScope", &["state"]),
+        );
+        push_unique_strings(
+            &mut scope.quality_rule_refs,
+            scope_refs_from_requirement(brief_contract, "/qualityRulesInScope", &["ruleId"]),
+        );
+        for region in array_at(brief_contract, "regionsInScope") {
+            push_unique_strings(&mut scope.state_refs, string_array_at(region, "stateRefs"));
+        }
     }
     for detail in &aac.detail_coverage {
         if !task
@@ -1794,52 +1913,84 @@ fn frontend_task_scope(
         enrich_scope_from_operation_paths(frontend, &mut scope);
         enrich_scope_from_surfaces(frontend, &mut scope);
     }
-    if task_has_frontend_execution(task)
-        && scope.surface_refs.is_empty()
-        && scope.data_view_refs.is_empty()
-        && scope.action_refs.is_empty()
-        && scope.operation_path_refs.is_empty()
-    {
-        push_unique_strings(
-            &mut scope.surface_refs,
-            registry_surface_values(frontend)
-                .into_iter()
-                .filter_map(|surface| string_at(surface, "surfaceId"))
-                .chain(
-                    array_at(frontend, "surfaces")
-                        .into_iter()
-                        .filter_map(|surface| string_at(surface, "surfaceId")),
-                )
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.operation_path_refs,
-            array_at(frontend, "operationPaths")
-                .into_iter()
-                .filter_map(|path| string_at(path, "pathId"))
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.data_view_refs,
-            array_at(frontend, "dataViews")
-                .into_iter()
-                .filter_map(|view| string_at(view, "viewId"))
-                .collect(),
-        );
-        push_unique_strings(
-            &mut scope.action_refs,
-            array_at(frontend, "actions")
-                .into_iter()
-                .filter_map(|action| string_at(action, "actionId"))
-                .collect(),
-        );
+    if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+        if scope.surface_region_refs.is_empty()
+            && (!scope.surface_refs.is_empty()
+                || !scope.data_view_refs.is_empty()
+                || !scope.action_refs.is_empty()
+                || !scope.operation_path_refs.is_empty())
+        {
+            for region in array_at(surface_contract, "regionModel") {
+                let refs = string_array_at(region, "surfaceRefs");
+                if refs.is_empty()
+                    || refs.iter().any(|reference| {
+                        scope.surface_refs.contains(reference)
+                            || scope.data_view_refs.contains(reference)
+                            || scope.action_refs.contains(reference)
+                            || scope.operation_path_refs.contains(reference)
+                    })
+                {
+                    push_unique(
+                        &mut scope.surface_region_refs,
+                        string_at(region, "regionId"),
+                    );
+                }
+            }
+        }
+        if scope.quality_rule_refs.is_empty()
+            && (!scope.surface_refs.is_empty()
+                || !scope.data_view_refs.is_empty()
+                || !scope.action_refs.is_empty()
+                || !scope.operation_path_refs.is_empty())
+        {
+            for rule in array_at(surface_contract, "qualityRules") {
+                let refs = string_array_at(rule, "scopeRefs");
+                if refs.is_empty()
+                    || refs.iter().any(|reference| {
+                        scope.surface_refs.contains(reference)
+                            || scope.data_view_refs.contains(reference)
+                            || scope.action_refs.contains(reference)
+                            || scope.operation_path_refs.contains(reference)
+                    })
+                {
+                    push_unique(&mut scope.quality_rule_refs, string_at(rule, "ruleId"));
+                }
+            }
+        }
     }
-    if scope.state_refs.is_empty() {
-        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+    if scope.state_refs.is_empty() && !scope.surface_refs.is_empty() {
+        for surface in selected_frontend_surfaces(frontend, &scope.surface_refs) {
             push_unique_strings(
                 &mut scope.state_refs,
-                object_array_field(surface_contract, "stateModel", "state"),
+                string_array_at(&surface, "stateRefs"),
             );
+            if let Some(model) = surface
+                .get("statePlacementModel")
+                .and_then(Value::as_object)
+            {
+                push_unique_strings(&mut scope.state_refs, model.keys().cloned().collect());
+            }
+        }
+    }
+    if scope.state_refs.is_empty() && !scope.surface_region_refs.is_empty() {
+        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+            for region in array_at(surface_contract, "regionModel") {
+                if string_at(region, "regionId")
+                    .is_some_and(|region_id| scope.surface_region_refs.contains(&region_id))
+                {
+                    push_unique_strings(
+                        &mut scope.state_refs,
+                        string_array_at(region, "stateRefs"),
+                    );
+                }
+            }
+        }
+    }
+    if !scope.surface_region_refs.is_empty() {
+        if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+            for state in array_at(surface_contract, "stateModel") {
+                push_unique(&mut scope.state_refs, string_at(state, "state"));
+            }
         }
     }
     scope.surface_refs = unique_strings(scope.surface_refs);
@@ -2149,15 +2300,7 @@ fn surface_decision_contract_projection(contract: &Value, scope: &FrontendTaskSc
     );
     json!({
         "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": if scope.surface_region_refs.is_empty()
-            && scope.surface_action_refs.is_empty()
-            && scope.state_refs.is_empty()
-            && scope.quality_rule_refs.is_empty()
-        {
-            "all_when_task_scope_empty"
-        } else {
-            "task_scope"
-        },
+        "selectionMode": "task_scope",
         "patternDecision": contract.get("patternDecision").cloned().unwrap_or(Value::Null),
         "semanticFacts": contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
         "layoutModel": contract.get("layoutModel").cloned().unwrap_or(Value::Null),
@@ -2177,10 +2320,10 @@ fn selected_surface_contract_values(
     id_key: &str,
     ids: &[String],
 ) -> Vec<Value> {
-    let values = array_at(contract, array_key);
     if ids.is_empty() {
-        return values.into_iter().cloned().collect();
+        return Vec::new();
     }
+    let values = array_at(contract, array_key);
     selected_from_values(values, id_key, ids)
 }
 
@@ -2307,11 +2450,7 @@ fn state_contract(
     surfaces: &[Value],
     scope: &FrontendTaskScope,
 ) -> Value {
-    let state_refs = if scope.state_refs.is_empty() {
-        object_array_field(surface_contract, "stateModel", "state")
-    } else {
-        scope.state_refs.clone()
-    };
+    let state_refs = scope.state_refs.clone();
     let states_in_scope =
         selected_surface_contract_values(surface_contract, "stateModel", "state", &state_refs);
     json!({
@@ -2491,23 +2630,6 @@ fn default_forbidden_composition() -> Vec<String> {
     ]
 }
 
-fn object_array_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
-    value
-        .get(array_key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    item.get(field_key)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn compact_join(values: Vec<String>, fallback: &str) -> String {
     if values.is_empty() {
         fallback.to_string()
@@ -2534,7 +2656,7 @@ fn workflow_closure_requirements_for_task(
     task: &TaskDefinition,
     aac: &ArchitectureArtifactContract,
 ) -> Vec<Value> {
-    workflow_closure_requirements(aac)
+    crate::task_plan::workflow_closure_requirements(aac)
         .into_iter()
         .filter(|requirement| task_matches_workflow_closure(task, requirement))
         .collect()
@@ -2548,10 +2670,11 @@ fn task_matches_workflow_closure(task: &TaskDefinition, requirement: &Value) -> 
         .map(|workflow_ref| refs.user_flows.iter().any(|item| item == workflow_ref))
         .unwrap_or(false);
     let interface_refs = string_array_at(requirement, "interfaceRefs");
+    let task_interfaces = refs.all_interfaces();
     let interface_matches = !interface_refs.is_empty()
         && interface_refs
             .iter()
-            .any(|interface_ref| refs.interfaces.iter().any(|item| item == interface_ref));
+            .any(|interface_ref| task_interfaces.iter().any(|item| item == interface_ref));
     let acceptance_refs = string_array_at(requirement, "acceptanceRefs");
     let acceptance_matches = acceptance_refs.is_empty()
         || acceptance_refs.iter().any(|acceptance_ref| {
@@ -2562,129 +2685,6 @@ fn task_matches_workflow_closure(task: &TaskDefinition, requirement: &Value) -> 
     task.frontend_experience_requirement.is_some()
         && acceptance_matches
         && (workflow_matches || interface_matches)
-}
-
-fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
-    let Some(frontend) = aac.frontend_experience.as_ref() else {
-        return vec![];
-    };
-    if frontend
-        .get("required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        != true
-    {
-        return vec![];
-    }
-    let flow_by_id = aac
-        .user_flows
-        .iter()
-        .filter_map(|flow| string_at(flow, "flowId").map(|id| (id, flow)))
-        .collect::<BTreeMap<_, _>>();
-    let interface_by_id = aac
-        .interfaces
-        .iter()
-        .filter_map(|interface| string_at(interface, "interfaceId").map(|id| (id, interface)))
-        .collect::<BTreeMap<_, _>>();
-    let mut surface_refs_by_flow: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for surface in array_at(frontend, "surfaces") {
-        let Some(surface_id) = string_at(surface, "surfaceId") else {
-            continue;
-        };
-        for workflow_ref in string_array_at(surface, "workflowRefs") {
-            surface_refs_by_flow
-                .entry(workflow_ref)
-                .or_default()
-                .push(surface_id.clone());
-        }
-    }
-    for operation_path in array_at(frontend, "operationPaths") {
-        let Some(workflow_ref) = string_at(operation_path, "workflowRef") else {
-            continue;
-        };
-        if let Some(surface_ref) = string_at(operation_path, "surfaceRef") {
-            surface_refs_by_flow
-                .entry(workflow_ref)
-                .or_default()
-                .push(surface_ref);
-        }
-    }
-    let mut requirements = Vec::new();
-    for (workflow_ref, surface_refs) in surface_refs_by_flow {
-        let Some(flow) = flow_by_id.get(workflow_ref.as_str()) else {
-            continue;
-        };
-        if string_at(flow, "kind").as_deref() != Some("user_interaction") {
-            continue;
-        }
-        let operation_paths = array_at(frontend, "operationPaths")
-            .into_iter()
-            .filter(|path| {
-                string_at(path, "workflowRef").as_deref() == Some(workflow_ref.as_str())
-                    || string_at(path, "surfaceRef")
-                        .map(|surface_ref| surface_refs.iter().any(|item| item == &surface_ref))
-                        .unwrap_or(false)
-            })
-            .collect::<Vec<_>>();
-        let operation_path_refs = unique_strings(
-            operation_paths
-                .iter()
-                .filter_map(|path| string_at(path, "pathId"))
-                .collect(),
-        );
-        let data_view_refs = unique_strings(
-            operation_paths
-                .iter()
-                .flat_map(|path| string_array_at(path, "dataViewRefs"))
-                .collect(),
-        );
-        let action_refs = unique_strings(
-            operation_paths
-                .iter()
-                .flat_map(|path| string_array_at(path, "actionRefs"))
-                .collect(),
-        );
-        for step in array_at(flow, "steps") {
-            let step_id = string_at(step, "stepId").unwrap_or_else(|| "step".to_string());
-            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
-            if candidate_interface_refs.is_empty() {
-                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
-            }
-            let executable_interfaces = candidate_interface_refs
-                .iter()
-                .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
-                .filter(|interface| {
-                    is_executable_interface(interface) && has_interface_shape(interface)
-                })
-                .collect::<Vec<_>>();
-            if executable_interfaces.is_empty() {
-                continue;
-            }
-            requirements.push(json!({
-                "closureId": format!("closure:{workflow_ref}:{step_id}"),
-                "workflowRef": workflow_ref.clone(),
-                "workflowName": string_at(flow, "name").unwrap_or_else(|| workflow_ref.clone()),
-                "surfaceRefs": unique_strings(surface_refs.clone()),
-                "operationPathRefs": operation_path_refs.clone(),
-                "dataViewRefs": data_view_refs.clone(),
-                "actionRefs": action_refs.clone(),
-                "moduleRefs": string_array_at(flow, "moduleRefs"),
-                "acceptanceRefs": string_array_at(flow, "acceptanceRefs"),
-                "interfaceRefs": unique_strings(executable_interfaces.iter().filter_map(|interface| string_at(interface, "interfaceId")).collect()),
-                "stateMachineRefs": unique_strings(string_array_at(step, "stateMachineRefs")),
-                "stepRefs": [step_id.clone()],
-                "requiredDataBindingMode": "wired",
-                "requiredEvidence": [
-                    "user_action",
-                    "declared_interface_invocation",
-                    "state_or_persistence_change",
-                    "success_or_blocking_feedback"
-                ],
-                "interfaces": executable_interfaces.iter().map(|interface| compact_interface_binding(interface)).collect::<Vec<_>>()
-            }));
-        }
-    }
-    requirements
 }
 
 fn workflow_closure_requirement_execution_view(requirements: &[Value]) -> Vec<Value> {
@@ -2829,20 +2829,6 @@ fn string_array_at(value: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn string_array_at_pointer(value: &Value, pointer: &str) -> Vec<String> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn unique_strings(values: Vec<String>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     values
@@ -2868,19 +2854,6 @@ fn is_executable_interface(interface: &Value) -> bool {
         string_at(interface, "type").as_deref(),
         Some("http_api" | "service_method" | "cli_command" | "event" | "job" | "external_adapter")
     )
-}
-
-fn has_interface_shape(interface: &Value) -> bool {
-    interface
-        .get("requestSchema")
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false)
-        && interface
-            .get("responseSchema")
-            .and_then(Value::as_array)
-            .map(|items| !items.is_empty())
-            .unwrap_or(false)
 }
 
 fn running_or_ready_task_id(run: &TaskPlanRun) -> Option<String> {
@@ -2994,10 +2967,6 @@ fn update_route_for_execution(
             "taskExecutionRequestRef".to_string(),
             request_ref.to_string(),
         );
-        phase.latest_refs.insert(
-            "taskExecutionResultFile".to_string(),
-            result_file.to_string(),
-        );
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ContinueExecution,
             source: "task_execution_request".to_string(),
@@ -3008,7 +2977,8 @@ fn update_route_for_execution(
             details: Some(json!({
                 "taskId": task.task_id,
                 "groupId": task.group_id,
-                "taskPlanRunId": run.run_id
+                "taskPlanRunId": run.run_id,
+                "resultFile": result_file
             })),
             target_phase_id: None,
         });
@@ -3130,6 +3100,33 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn architecture_projection_links_structured_happy_path_refs() {
+        let user_flows = vec![json!({
+            "flowId": "flow.submit-order",
+            "happyPath": [
+                {
+                    "stepId": "step.submit",
+                    "interactionRef": "api.orders.create",
+                    "stateMachineRefs": ["machine.order"]
+                },
+                {
+                    "stepId": "step.notify",
+                    "interactionRef": "event.order-submitted",
+                    "stateMachineRefs": []
+                }
+            ]
+        })];
+
+        let (interaction_refs, state_machine_refs) = behavior_refs_from_user_flows(&user_flows);
+
+        assert_eq!(
+            interaction_refs,
+            vec!["api.orders.create", "event.order-submitted"]
+        );
+        assert_eq!(state_machine_refs, vec!["machine.order"]);
+    }
 
     #[test]
     fn ui_production_brief_surface_projection_is_task_scoped() {

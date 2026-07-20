@@ -95,7 +95,7 @@ impl ServerHandler for LoomMcpServer {
         )
         .with_server_info(Implementation::new("loom-mcp-server", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Loom MCP server. Use registered Loom tools and resources; do not call legacy CLI commands.",
+            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use registered Loom tools and resources; do not call legacy CLI commands. An auto_runnable result is a required continuation checkpoint: the agent must execute its next action and may not finish with a progress summary. If a local or wrapped tool call fails, recover from the exact failure and continue from the latest Loom state; only user_gate, done, blocked, or failed is terminal.",
         )
     }
 
@@ -396,7 +396,7 @@ fn status_tool(input: ProjectToolInput) -> LoomMcpActionResult {
         Ok(status) => status,
         Err(error) if error.code() == "STATE_NOT_INITIALIZED" => {
             return LoomMcpActionResult::Failed(LoomMcpFailureResult {
-                project_root: normalized.display,
+                project_root: normalized.display.clone(),
                 error: LoomMcpFailure {
                     code: "STATE_NOT_INITIALIZED".to_string(),
                     message: error.message().to_string(),
@@ -535,18 +535,40 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             read_groups,
             resubmit_tool,
         }) => {
-            return LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
-                project_root: normalized.display,
+            let result = LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+                project_root: normalized.display.clone(),
+                stop_allowed: false,
                 target_file,
                 target_ids,
                 issues,
-                resubmit_tool,
+                resubmit_tool: resubmit_tool.clone(),
                 fix_scope: Some(
                     "Edit only the authorized artifact JSON target, then resubmit with the same Loom MCP submit tool."
                         .to_string(),
                 ),
                 read_groups,
+                agent_instruction: delivery_core::repairable_error_agent_instruction(&resubmit_tool),
             });
+            if let LoomMcpActionResult::RepairableError(repair) = &result {
+                if let Err(error) = state::record_pending_repair_for_request(
+                    &normalized_input.project_root,
+                    &normalized_input.request_ref,
+                    repair,
+                ) {
+                    return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                        project_root: normalized.display,
+                        error: LoomMcpFailure {
+                            code: "REPAIR_STATE_PERSIST_FAILED".to_string(),
+                            message: error.to_string(),
+                            target_batch: None,
+                            domain: Some("workflow".to_string()),
+                            route_action: Some("repair_preflight".to_string()),
+                            recovery_tool: Some("loom.status".to_string()),
+                        },
+                    });
+                }
+            }
+            return result;
         }
         Err(state::WriteTargetAuthorizationError::Fatal { code, message }) => {
             return LoomMcpActionResult::Failed(LoomMcpFailureResult {
@@ -565,77 +587,117 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
 
     match delivery_core::canonical_tool_name(tool_name) {
         "brainstormAcceptFile" => {
-            return accept_brainstorm_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                accept_brainstorm_file(&normalized_input, &authorized, WorkflowDomainDispatcher),
             );
         }
         "technicalBaselineAcceptFile" => {
-            return accept_technical_baseline_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                accept_technical_baseline_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "repositoryContextAcceptFile" => {
-            return accept_repository_context_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                accept_repository_context_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "architectureSectionSubmitFile" => {
-            return architecture::accept_architecture_section_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                architecture::accept_architecture_section_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "taskPlanAcceptFile" => {
-            return execution::accept_task_plan_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                execution::accept_task_plan_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "recordTaskResultFile" => {
-            return execution::accept_task_result_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                execution::accept_task_result_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "reviewAcceptFile" => {
-            return execution::accept_review_result_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                execution::accept_review_result_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "reviewResolveFile" => {
-            return execution::accept_manual_review_resolution_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                execution::accept_manual_review_resolution_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "repairSubmitFile" => {
             if authorized.artifact_kind == delivery_core::ArtifactKind::ArchitectureArtifactRepair {
-                return architecture::accept_architecture_repair_file(
+                return persist_repairable_result(
                     &normalized_input,
                     &authorized,
-                    WorkflowDomainDispatcher,
+                    architecture::accept_architecture_repair_file(
+                        &normalized_input,
+                        &authorized,
+                        WorkflowDomainDispatcher,
+                    ),
                 );
             }
             if authorized.artifact_kind == delivery_core::ArtifactKind::DeployExecutionRepairResult
             {
-                return deploy::accept_deploy_execution_repair_file(&normalized_input, &authorized);
+                return persist_repairable_result(
+                    &normalized_input,
+                    &authorized,
+                    deploy::accept_deploy_execution_repair_file(&normalized_input, &authorized),
+                );
             }
-            return execution::accept_repair_file(
+            return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                WorkflowDomainDispatcher,
+                execution::accept_repair_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         _ => {}
@@ -703,6 +765,30 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             recovery_tool: None,
         },
     })
+}
+
+fn persist_repairable_result(
+    input: &FileSubmitInput,
+    authorized: &state::AuthorizedWriteSet,
+    result: LoomMcpActionResult,
+) -> LoomMcpActionResult {
+    let LoomMcpActionResult::RepairableError(repair) = &result else {
+        return result;
+    };
+    if let Err(error) = state::record_pending_repair(&input.project_root, authorized, repair) {
+        return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: input.project_root.clone(),
+            error: LoomMcpFailure {
+                code: "REPAIR_STATE_PERSIST_FAILED".to_string(),
+                message: error.to_string(),
+                target_batch: None,
+                domain: Some("workflow".to_string()),
+                route_action: Some("repair_submit".to_string()),
+                recovery_tool: Some("loom.status".to_string()),
+            },
+        });
+    }
+    result
 }
 
 fn normalize_deploy_input(mut input: DeployToolInput) -> Result<DeployToolInput, McpError> {

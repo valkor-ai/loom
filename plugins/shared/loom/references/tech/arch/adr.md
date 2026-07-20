@@ -4,20 +4,14 @@ Use this reference when writing architecture decision records.
 
 Loom ADRs are structured architecture decision entries, not Markdown files unless the user's project explicitly asks for ADR documents.
 
-## Required Shape
+## Decision Quality
 
-Each decision must include:
+Each decision must make four things unambiguous:
 
-- stable decision id
-- category
-- title
-- status
-- context
-- decision
-- alternatives considered
-- consequences
-- source refs
-- verification hints
+- **forces**: current requirements, constraints, and existing boundaries that make a decision necessary
+- **choice**: the structural rule implementation will follow
+- **ownership**: modules and interfaces that can satisfy or violate the choice
+- **evidence**: observable implementation or verification signals that prove the choice was respected
 
 ## Decision Categories
 
@@ -43,6 +37,8 @@ For each alternative:
 
 Do not list strawman alternatives. Compare realistic options.
 
+Every alternative needs a name, the real trade-off it would create, and a rejection reason tied to current-phase forces. Product names or patterns copied from an example are not alternatives unless they could actually satisfy the same requirement.
+
 ## Consequences
 
 Positive consequences should describe implementation or verification benefits.
@@ -51,9 +47,11 @@ Negative consequences should describe real cost, limitation, or future risk.
 
 Neutral consequences can capture follow-up awareness without creating current tasks.
 
+At least one positive and one negative consequence are required for a meaningful trade-off. Empty consequence headings or paraphrases of the decision do not establish architectural cost.
+
 ## Verification Hints
 
-Verification hints should tell planning and review what evidence would prove the decision was respected:
+Verification hints should identify evidence that proves the decision was respected:
 
 - changed module files align with module ownership
 - API paths use declared interface boundary
@@ -71,4 +69,4 @@ Verification hints should tell planning and review what evidence would prove the
 
 ## Current Phase Rule
 
-An ADR belongs in the current phase only when it affects current implementation, verification, or repair ownership. General future architecture notes should stay out of the current task plan.
+An ADR belongs in the current phase only when it affects current implementation or verification. General future architecture notes should stay outside the current-phase design.

@@ -60,3 +60,20 @@ assets|styles/
 - Render and check responsive behavior.
 - Verify forms and transitions preserve user input and focus.
 - Confirm selected UIX references are reflected in changed view/component files, not only in result prose.
+
+## Page, Composable, And Runtime Boundary
+
+Vue UIX owns visible composition and state placement. Vue/Nuxt engineering
+references own route, SSR, data fetching, runtime configuration, and server
+handler boundaries.
+
+```text
+layout/shell -> page view -> feature component -> composable/data adapter
+                                      \\-> loading/empty/error/action feedback
+```
+
+- Use layouts for persistent product chrome and pages for route-owned workflow composition.
+- Keep composables focused on reusable state or behavior; do not hide unrelated navigation, API, and presentation logic in one composable.
+- Separate query state, editable draft, selected record, and action status so a refresh cannot overwrite user input or mutate the wrong record.
+- For Nuxt, preserve SSR determinism, hydration-safe browser access, route middleware, server/client boundaries, and direct deep-link behavior.
+- After a mutation, update or invalidate the exact affected data and keep the user's filter, selection, scroll, and return path when the workflow requires it.

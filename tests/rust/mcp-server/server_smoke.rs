@@ -23,6 +23,11 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
         initialize["result"]["serverInfo"]["name"],
         "loom-mcp-server"
     );
+    let instructions = initialize["result"]["instructions"]
+        .as_str()
+        .expect("server instructions");
+    assert!(instructions.contains("plain @loom software delivery request"));
+    assert!(instructions.contains("call the plan tool first"));
     assert!(initialize["result"]["capabilities"].get("tools").is_some());
     assert!(initialize["result"]["capabilities"]
         .get("resources")

@@ -39,6 +39,14 @@ pub fn path_exists(path: &Path) -> bool {
     path.exists()
 }
 
+pub fn remove_file_if_exists(path: &Path) -> StateResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StateError::Io(error)),
+    }
+}
+
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> StateResult<T> {
     let raw = fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -52,6 +60,49 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> StateResult<T> {
 
 pub fn read_json_value(path: &Path) -> StateResult<serde_json::Value> {
     read_json(path)
+}
+
+/// Read a project-relative JSON reference with an optional JSON Pointer
+/// fragment. A fragment keeps phase projections addressable without creating a
+/// second JSON file that copies the same payload.
+pub fn read_json_reference(project_root: &Path, relative: &str) -> StateResult<serde_json::Value> {
+    read_json_reference_inner(project_root, relative, 0)
+}
+
+fn read_json_reference_inner(
+    project_root: &Path,
+    relative: &str,
+    depth: u8,
+) -> StateResult<serde_json::Value> {
+    if depth > 8 {
+        return Err(StateError::StateCorrupted(
+            "JSON reference indirection exceeds the supported depth".to_string(),
+        ));
+    }
+    let (path_ref, fragment) = relative.split_once('#').unwrap_or((relative, ""));
+    let path = crate::paths::from_project_relative(project_root, path_ref)?;
+    let mut value = read_json_value(&path)?;
+    if let Some(canonical_ref) = value
+        .get("canonicalRef")
+        .and_then(serde_json::Value::as_str)
+    {
+        value = read_json_reference_inner(project_root, canonical_ref, depth + 1)?;
+    }
+    if fragment.is_empty() {
+        return Ok(value);
+    }
+    let pointer = if fragment.starts_with('/') {
+        fragment
+    } else {
+        return Err(StateError::InvalidArgument(format!(
+            "JSON reference fragment must be a JSON Pointer: {relative}"
+        )));
+    };
+    value.pointer(pointer).cloned().ok_or_else(|| {
+        StateError::StateCorrupted(format!(
+            "JSON reference fragment does not exist: {relative}"
+        ))
+    })
 }
 
 pub fn read_text(path: &Path) -> StateResult<String> {

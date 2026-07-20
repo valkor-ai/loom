@@ -595,6 +595,7 @@ where
     };
     let context_file = repository_context_file(project_root, &locator);
     state::store::write_json_atomic(&context_file, &persisted)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
     let context_ref = to_project_relative(project_root, &context_file)?;
 
     let store = FileTransitionStore;
@@ -1137,6 +1138,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -1147,6 +1149,9 @@ fn repairable(
         resubmit_tool: "loom.repositoryContextAcceptFile".to_string(),
         fix_scope: Some("repository_context_candidate_only".to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.repositoryContextAcceptFile",
+        ),
     })
 }
 
@@ -1162,15 +1167,18 @@ fn phase_brainstorm_user_gate(
         object.insert("kind".to_string(), json!("phase_brainstorm_continuation"));
         object.insert("requestRef".to_string(), json!(request_ref));
     }
-    LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: project_root.to_string(),
-        prompt: brainstorm::phase_scope_prompt(phase_id),
-        accepted_responses: vec!["reply_in_chat".to_string()],
-        request_ref: Some(request_ref.to_string()),
-        delivery_id: Some(delivery_id.to_string()),
-        phase_id: Some(phase_id.to_string()),
-        gate: Some(gate),
-    })
+    LoomMcpActionResult::UserGate(
+        LoomMcpUserGateResult::new(
+            project_root.to_string(),
+            brainstorm::phase_scope_prompt(phase_id),
+            vec!["reply_in_chat".to_string()],
+            Some(request_ref.to_string()),
+            Some(delivery_id.to_string()),
+            Some(phase_id.to_string()),
+            Some(gate),
+        )
+        .with_brainstorm_knowledge("phase_scope"),
+    )
 }
 
 fn stale_failure(project_root: &str, message: String) -> LoomMcpActionResult {

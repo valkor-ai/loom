@@ -17,13 +17,13 @@ Call the matching Loom MCP tool for the current project directory before doing a
 - `plan <request>` -> `loom.plan` with `<request>`
 - Any other request text -> `loom.plan` with the full request text
 
-After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress, mark a local plan complete, send a final answer, or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `/loom continue`; do not stop at a progress recap or say "if you want to continue". Complete the reads and knowledge calls, then ask the visible current-block question and wait for the user's answer. Repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
+After the tool returns, follow `LoomMcpActionResult.state`: treat `auto_runnable` as a required continuation checkpoint and continue immediately; do not report progress, mark a local plan complete, send a final answer, or stop while `stopAllowed=false`. If a shell, patch, test, or nested MCP call fails, inspect the exact failure and retry the smallest corrective step in the same turn. When MCP is called through a wrapper, parse the nested structured result and its `state`; the wrapper's status is not the Loom workflow state. For `user_gate` with `preResponseContract`, execute its steps in order before emitting any user-visible response: call `loom.inspectRequest`, read only groups whose `whenToRead` applies before the visible response from `requestReadPlan.groups` with `loom.readFieldGroup`, and run every Brainstorm `knowledge_context_plan` step before forming options or confirmation. Groups scheduled after user confirmation remain required before the confirm/submit call. Do not answer from `prompt` alone, skip to generic options, or call `/loom continue` to bypass the contract. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `/loom continue`; do not stop at a progress recap or say "if you want to continue". Complete the reads and knowledge calls, then ask the visible current-block question and wait for the user's answer. For a gate without `preResponseContract`, present the returned prompt and wait for the accepted response. For `repairable_error`, `stopAllowed=false`: call `loom.inspectRequest`, read every required repair group from `requestReadPlan.groups`, then repair only returned targets, follow the returned `agentInstruction`, and call the returned resubmit tool; stop only for `done`, `blocked`, or `failed`.
 
 ## Result Discipline
 
 Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
 
-For `active_operation`, call only the observation tools named by the result. For `repairable_error`, repair only the returned file or target ids, then call the returned resubmit tool.
+For `active_operation`, call only the observation tools named by the result. For `repairable_error`, `stopAllowed=false`: inspect the returned request and read every required repair group first, then repair only the returned file or target ids, follow `agentInstruction`, and call the returned resubmit tool.
 
 ## Request Reading
 
@@ -52,7 +52,7 @@ Protocol:
 - Read reference files only from `referenceLoadPlan` arrays in the current MCP request/result.
 - Treat any selected group fields as semantic labels for scope and evidence, not as path mappings.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
-- In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
+- In quality self-checks, report the exact `referencePlanFilesChecked` paths from the selected load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
 - Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to `../references/loom/` from this command/plugin location, not relative to the project workspace.

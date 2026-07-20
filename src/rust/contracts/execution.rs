@@ -39,6 +39,20 @@ pub enum ImplementationAction {
     CreateOrUpdatePersistence,
     CreateOrUpdateInterface,
     CreateOrUpdateUiFlow,
+    CreateOrUpdateFrontendNavigation,
+    ImplementReactiveClientFlow,
+    ImplementSharedClientState,
+    OptimizeFrontendPerformance,
+    ImplementServerRenderedComponent,
+    ImplementServerMutation,
+    ImplementFrontendFrameworkVersionFeature,
+    ImplementMobilePlatformBehavior,
+    ImplementClientStorage,
+    ImplementLanguageVersionFeature,
+    ImplementGenericTypeAbstraction,
+    ImplementDependencyAbstraction,
+    RefactorModuleStructure,
+    OptimizeRuntimePerformance,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
     AddReferenceField,
@@ -49,9 +63,22 @@ pub enum ImplementationAction {
     CreateEntityRepository,
     CreateEntityAdminPage,
     CreateEntityMigration,
+    CreateOrUpdatePersistenceQuery,
+    ImplementPersistenceTransaction,
+    OptimizePersistenceQuery,
+    ImplementAnalyticalQuery,
     ImplementEntityLifecycle,
     AddOrUpdateTests,
+    AddOrUpdatePersistenceTests,
     AddOrUpdateConfig,
+    ImplementAuthenticationOrAuthorization,
+    ImplementAsyncProcessing,
+    ImplementCachePolicy,
+    ImplementExternalServiceIntegration,
+    ImplementResiliencePolicy,
+    ConfigureServiceRoutingOrDiscovery,
+    ImplementObservability,
+    MigrateFrameworkImplementation,
     ImplementFrontendExperienceContract,
     ImplementRuntimeDeliveryContract,
     RefactorSupportingCode,
@@ -77,16 +104,37 @@ pub struct TaskArtifactRefs {
     pub entities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<String>,
+    /// Interface contracts consumed by this task without owning their
+    /// implementation. The owner remains in `interfaces`; this split keeps
+    /// client, integration, and verification tasks from claiming duplicate
+    /// write ownership while preserving the contract they must use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumed_interfaces: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_flows: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state_machines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub decisions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub nfrs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub risks: Vec<String>,
+}
+
+impl TaskArtifactRefs {
+    pub fn all_interfaces(&self) -> Vec<String> {
+        self.interfaces
+            .iter()
+            .chain(self.consumed_interfaces.iter())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -584,8 +632,25 @@ pub struct VerificationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_type: Option<VerificationEvidence>,
     pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<VerificationProvenance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_checks: Vec<crate::BrowserCheckResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerificationProvenance {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_case_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

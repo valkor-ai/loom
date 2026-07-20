@@ -64,6 +64,33 @@ screen/component -> state checked -> viewport/device -> evidence command or scre
 
 For UI quality, "build passed" is supporting evidence only. It does not replace rendered layout, state, and interaction checks.
 
+## Review Coverage
+
+Review evidence across four independent dimensions:
+
+| Dimension | Evidence target |
+| --- | --- |
+| Product surface | The first visible surface and the primary user workflow are present. |
+| State and interaction | In-scope loading, empty, validation, error, success, disabled, and business-blocking states are reachable and scoped. |
+| Visual system | Token roles, density, typography, layout, contrast, stable dimensions, and responsive fallback are consistent. |
+| Runtime/browser | Rendered desktop/mobile checks, accessibility behavior, navigation state, hydration, and performance-sensitive behavior are covered when applicable. |
+
+Do not collapse these dimensions into a single visual score. A polished screenshot
+does not prove mutation feedback or keyboard behavior; a passing interaction test
+does not prove responsive layout or typography.
+
+## Environment-Blocked Inspection
+
+When the local preview or browser cannot run:
+
+- State the exact missing capability, attempted command or check, and affected viewport/device.
+- Record source-level fallback checks for semantics, token consumption, state branches,
+  and responsive rules that can be verified without rendering.
+- Keep the UI result below a complete visual pass until the required rendered check
+  is available, unless the task explicitly excludes that check.
+- Do not turn an unavailable browser, missing dependency, missing credentials, or
+  unavailable preview into a source defect without evidence that the product caused it.
+
 If a rendered check cannot run because of missing dependencies, network, auth, credentials, or environment limits, record that as verification blocked. Do not mark it as a product defect unless the UI itself caused the failure.
 
 ## Quality Gate Index

@@ -2,29 +2,39 @@
 
 ## When To Use
 
-- The task changes generic APIs, reusable type helpers, mapped or conditional types, template literal types, route/event key types, package-level contracts, or complex DTO variants.
-- Use this only when advanced typing protects a real contract or removes meaningful duplication. Ordinary business code should stay readable with direct interfaces and unions.
-- If the task does not need reusable type modeling, prefer `typescript.core` guidance and avoid adding type-level machinery.
+- Load only when the task owns generic APIs, reusable type helpers, mapped or conditional types, template literal domains, complex DTO variants, or public declarations.
+- Ordinary interfaces, unions, and local annotations belong to `typescript.core`; do not introduce advanced type machinery for routine fields.
+- The runtime contract and business invariant must be known before selecting a type-level technique.
+
+## Decision Rules
+
+- Start with a named interface or discriminated union. Add a constrained generic only when the same invariant is reused across real call sites.
+- Use `Partial`, `Pick`, `Omit`, `Required`, and `Record` only when their semantics match the operation. A patch payload with immutable fields or coupled fields needs a named update type.
+- Hide conditional and mapped types behind business names such as `UpdateOrder` or `ApiResult<T>`; do not expose dense anonymous expressions at call sites.
+- Use template literal types for stable route keys, event names, feature flags, or tokens only when runtime construction validates the same shape.
+- Keep recursive or distributive types bounded and local to configuration, JSON, or fixtures. Prefer explicit API and persistence types when fields are part of a durable contract.
+- Use `satisfies` for route tables, configuration maps, status dictionaries, and metadata where literal values must remain narrow while the shape is checked.
+- If a helper requires repeated casts, deep compiler work, or type-level debugging to use, replace it with a simpler type and a runtime check.
 
 ## Implementation Focus
 
-- Start from the runtime contract and business invariant, then choose the smallest type construct that protects it. Do not add conditional, recursive, or highly generic types only to make the code look advanced.
-- Generic constraints must name the capability being required, such as `HasId`, `Serializable`, or `RequestShape`. Avoid `T extends any`, unconstrained object bags, and call sites that require readers to mentally execute the type system.
-- Use built-in utility types when they match the business rule. Do not use `Partial<T>` for update or draft payloads if some fields are immutable, required together, or mutually exclusive; define a named type that expresses the rule.
-- Hide conditional and mapped types behind named aliases with business meaning. A call site should read as `UpdatePurchaseRequest` or `ApiResult<T>`, not as a dense stack of anonymous utility expressions.
-- Use template literal types for stable domains such as route params, event names, feature flags, or CSS tokens only when runtime generation follows the same pattern. Do not type arbitrary user strings as a finite template domain.
-- Keep recursive and deep utility types limited to configuration, JSON, immutable fixtures, or well-bounded nested data. Prefer explicit interfaces for API and database records where fields are part of the contract.
-- Use `satisfies` for config maps, route tables, status dictionaries, and metadata objects when you need literal values preserved while checking the object shape.
-- Avoid compile-time cleverness that requires casts at runtime. If a type helper cannot be used without `as`, the helper is probably too ambitious for the task.
-- For exported package APIs, keep helper types stable and documented by usage. Internal type helpers can be narrower and should not leak into public declarations unless they are part of the API.
+- Generic constraints must express a capability such as `HasId` or `Serializable`; reject unconstrained object bags and `T extends any`.
+- Keep public helper types stable and usable from emitted declarations. Internal helpers should not leak into package APIs by accident.
+- Keep type definitions close to the contract they protect and avoid duplicating the same DTO shape in feature modules.
+
+## Failure Modes
+
+- Do not make every property optional with `Partial` when the server requires a meaningful field combination.
+- Do not encode arbitrary user input as a finite template literal union without a runtime parser.
+- Do not accept a recursive type that slows every editor operation when an explicit bounded shape is sufficient.
+- Keep generated contract types and hand-written domain types separated when their release cadence differs.
 
 ## Verification Focus
 
-- Run typecheck after changing generic or utility types; advanced type errors often surface in downstream call sites rather than the edited file.
-- For public type helpers, keep at least one representative usage in tests, examples, or production code that proves the intended inference and invalid case.
-- If declaration files are emitted, run the library build and inspect that public `.d.ts` output does not expose private helper names or unusable generic signatures.
-- Watch for typecheck performance regressions when adding recursive, distributive conditional, or large union types.
+- Run the package typecheck and test representative valid and invalid usages of every public helper.
+- When declarations are emitted, inspect that `.d.ts` output exposes usable names and no private path or helper implementation.
+- Watch typecheck time and editor responsiveness after adding recursive, distributive, or very large union types.
 
 ## Evidence Focus
 
-- In the evidence summary, name the modeling choice: utility DTO, constrained generic, discriminated result, template key, config map with `satisfies`, recursive type, or public declaration shape.
+- Record the modeling choice and the invariant it protects: constrained generic, utility DTO, discriminated result, template key, config map, recursive type, or declaration shape.

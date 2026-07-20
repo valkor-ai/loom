@@ -1,32 +1,80 @@
-# React 19 Quality
+# React 19 Features
 
-This file applies React 19 feature discipline to task-owned forms, `use()`, action state, optimistic updates, and ref-as-prop changes.
+Use React 19 APIs only when the accepted stack version, framework runtime, type packages, and task ownership support them. Preserve established repository patterns when a version-specific API adds no product or delivery value.
 
-## When To Use
+## Compatibility Boundary
 
-- The task explicitly uses React 19 features such as `use()`, `useActionState`, `useFormStatus`, `useOptimistic`, ref as prop, or action-based form patterns.
-- Use this when the repository's React version and framework support the feature. Do not add React 19-only APIs to older projects.
-- If the task can be solved with established repository patterns and React 19 is not already available, do not introduce these features.
+Confirm the installed `react`, `react-dom`, framework, renderer, TypeScript types, test renderer, lint plugin, and bundler support the chosen API. A transitive dependency or external example is not proof that the application can use React 19 semantics.
 
-## Implementation Focus
+Keep framework-specific Server Actions, caching, routing, and deployment behavior in that framework's reference. This file governs React API behavior at the component boundary.
 
-- Confirm package versions, framework support, TypeScript types, and lint rules before using React 19 APIs.
-- Use `use()` only where Suspense semantics are intended and the framework/runtime supports reading the value in render.
-- Keep `useActionState` form state small, typed, and user-actionable. Return validation and business-blocking errors in a shape the form can render near the affected controls.
-- Use `useFormStatus` inside the submitted form subtree so pending state reflects the actual form action.
-- Use `useOptimistic` only when the temporary state is clearly reversible or reconcilable after server response.
-- For optimistic updates, handle conflict, rejection, duplicate submission, and stale server response paths explicitly.
-- Use ref-as-prop only when the repository has adopted React 19 typing; otherwise preserve the existing `forwardRef` convention.
-- Keep progressive enhancement in mind for server action forms: required fields, disabled states, pending labels, error messages, and final readback should still be visible.
+Do not perform a React upgrade as an incidental change. If the task owns an upgrade, include dependency compatibility, deprecated API removal, build/test migration, and rollback scope.
 
-## Verification Focus
+## Reading With `use()`
 
-- Run the framework build/typecheck that proves React 19 APIs are available.
-- Test pending, success, validation failure, business failure, and optimistic rollback paths when touched.
-- Verify server action or mutation behavior updates the visible view and does not leave stale optimistic state.
-- Check that form accessibility, disabled states, and error messaging still work while pending.
+Use `use()` to read a promise or context during render only where React/framework Suspense semantics are established. Create or cache promises at the correct owner; creating a fresh request promise on each client render can restart work continuously.
 
-## Evidence Focus
+Place a meaningful Suspense fallback around the slow region and an error boundary around rejected resources. Preserve target/tenant/auth context in the resource key and prevent stale or cross-user reuse.
 
-- In the evidence summary, name the React 19 decision: `use()` Suspense read, action state shape, form pending behavior, optimistic reconciliation, ref convention, or version compatibility proof.
+Conditional `use(context)` is allowed by the API, but component branches must still be deterministic and providers must retain a clear missing-value policy.
 
+## Action State
+
+Use `useActionState` when an accepted action/form integration owns pending and returned state. Define a typed state union that distinguishes field validation, business rejection, conflict/stale state, authorization failure, service failure, and success where those states apply.
+
+Do not return raw exceptions or provider messages. Keep successful response identity/version/status so the visible view can reconcile with the source of truth.
+
+```tsx
+type SaveState =
+  | { status: 'idle' }
+  | { status: 'invalid'; fields: Record<string, string> }
+  | { status: 'conflict'; message: string }
+  | { status: 'saved'; id: string; version: number }
+```
+
+`useFormStatus` must live below the form whose submission it observes. Use it to disable only conflicting controls, communicate pending state, and prevent duplicate commands without making unrelated page actions unavailable.
+
+## Optimistic State
+
+Use `useOptimistic` only when the temporary transition is understandable, reversible, and keyed to a stable target. Assign unique client operation identity when multiple writes can overlap; a shared `temp` ID is not safe.
+
+Define reconciliation for success, validation rejection, authorization failure, conflict, network uncertainty, out-of-order responses, and server-normalized values. For destructive or high-impact actions, prefer confirmed state unless the product contract explicitly supports optimistic behavior.
+
+An optimistic visual update never authorizes a command. The server remains responsible for authentication, authorization, validation, and concurrency checks.
+
+## Ref As Prop
+
+Use ref-as-prop only after confirming React 19 types and the repository component-library convention. Preserve `forwardRef` where package consumers or supported versions still require it.
+
+Expose refs for an actual imperative/DOM integration, not as a replacement for controlled state. Preserve generic element typing, nullability, and composed refs when wrappers need an internal and external reference.
+
+## Document Metadata And Other APIs
+
+When using React-managed metadata or resource hints, keep route/framework ownership clear and avoid duplicate tags generated by an existing head manager. Resource preloading/preinitialization requires a measured navigation/render need and correct origin/cross-origin attributes.
+
+Review provider shorthand, cleanup APIs, and changed error reporting against the exact installed version before adoption; do not infer semantics from the major version label alone.
+
+## Progressive Forms
+
+For action-backed forms, preserve semantic form submission, labels, required constraints, keyboard behavior, focus on errors, draft values after rejection, and a visible final readback. JavaScript-enhanced pending UX must not make the base form contract ambiguous.
+
+## Verification
+
+- Run the repository typecheck and production build to prove API and renderer compatibility.
+- Test action pending, success, field validation, business rejection, conflict, duplicate submit, and returned readback when owned.
+- Exercise optimistic overlap, rollback, out-of-order completion, and server-normalized results.
+- Verify Suspense fallback, resource rejection, retry, and resource-key isolation for `use()`.
+- Check ref behavior through the actual component-library/compiler/test setup.
+
+## Delivery Evidence
+
+Name the React 19 API, installed-version proof, why the existing pattern was insufficient, and the behavior assertions for pending/error/reconciliation/fallback. Merely compiling an imported hook does not prove framework support or production semantics.
+
+## Unsafe Defaults
+
+- Selecting React 19 behavior from prose while the accepted stack lacks support.
+- Fresh client promises created during render and passed to `use()`.
+- Action state represented by one generic error string.
+- Optimistic writes without stable operation identity and rollback/reconciliation.
+- `useFormStatus` outside the submitted form subtree.
+- Ref-as-prop exported across packages that still support React 18 consumers.

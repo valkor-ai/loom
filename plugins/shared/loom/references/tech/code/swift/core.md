@@ -20,6 +20,15 @@ This file applies core Swift language quality to task-owned changes.
 - Add availability checks or platform-specific compilation where APIs differ across iOS, macOS, watchOS, tvOS, server Swift, or package targets.
 - Keep Objective-C patterns, singletons, notification sprawl, and global mutable state out of new Swift code unless the existing platform boundary requires them.
 
+## Boundary Decisions
+
+- Choose value or reference semantics from identity, shared mutation, lifecycle, and framework requirements. A `class` is not a default substitute for a model that can be a `struct` or enum.
+- Keep optional absence explicit at API, persistence, UI, and platform boundaries. Do not turn a missing value into an empty string or force unwrap merely to satisfy a compiler branch.
+- Separate Codable transport models, domain types, persistence records, and view state when their invariants or wire shapes differ. Do not expose storage or server fields through UI models by accident.
+- Use `throws` for an operation's immediate failure contract and `Result` when success/failure must be stored, combined, or passed as data. Keep error mapping at the boundary that owns user/system output.
+- Keep access control narrow and API names readable at call sites. Add `///` documentation where a public package or framework contract needs lifecycle, threading, availability, or failure expectations.
+- Treat availability and platform compilation conditions as part of the supported target matrix. Verify the selected target rather than assuming an API available on the local host works on iOS, macOS, watchOS, tvOS, or server Swift.
+
 ## Verification Focus
 
 - Run `swift build`, Xcode target build, or the repository's equivalent compile command.

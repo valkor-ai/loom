@@ -2,7 +2,7 @@
 
 Use this reference when writing behavior failure paths, runtime failure expectations, or architecture risk records.
 
-Failure modes are part of architecture, not a Review afterthought.
+Failure modes are part of architecture, not an afterthought once implementation is complete.
 
 ## Risk Categories
 
@@ -45,7 +45,16 @@ For each stateful or externally visible flow, consider:
 - runtime surface starts but API is unreachable
 - user-visible feedback hides the real blocking reason
 
-Only record risks that affect current implementation, verification, or repair ownership.
+For every applicable failure, identify:
+
+- failure origin and affected capability
+- state before the failure and state that remains afterward
+- whether retry is safe, unsafe, bounded, or user-triggered
+- compensation, forward repair, rollback, or manual recovery behavior
+- user/operator-visible signal and correlation evidence
+- owner module, interface, runtime dependency, or durable artifact
+
+Only record risks that affect current implementation, verification, or mitigation ownership.
 
 ## Mitigation Quality
 
@@ -61,12 +70,6 @@ Weak mitigation:
 - "add validation"
 - "make it robust"
 - "monitor later"
-
-## Repair Ownership
-
-- Missing architectural failure-mode risk -> architecture owner.
-- Risk exists but no task owns mitigation -> task planning owner.
-- Task owns risk but implementation gives no evidence -> implementation owner.
 
 ## Anti-Patterns
 

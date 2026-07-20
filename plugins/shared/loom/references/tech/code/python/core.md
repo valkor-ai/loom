@@ -19,6 +19,16 @@
 - Prefer standard library tools that match the need: `collections.abc` for protocols, `contextlib` for resource lifecycles, `itertools` for streaming transforms, `functools` for caching/decorators, and `collections` for queues/counters/grouping.
 - Avoid global mutable state unless it is existing framework state or a deliberately initialized singleton with clear reset behavior for tests.
 
+## Boundary Decisions
+
+- Confirm the supported Python version from `pyproject.toml`, packaging metadata, CI, and runtime images before using syntax or standard-library APIs. The local interpreter is not the project contract.
+- Keep external data as a boundary concern: parse and validate JSON, environment, CLI, and database values before passing them into typed domain objects. Do not let `dict[str, Any]` become the domain model by default.
+- Choose dataclasses for owned data with value semantics, enums for finite states, and a validation model when coercion or error aggregation is part of the boundary. Keep mutable collections behind deliberate ownership.
+- Keep resource lifetime visible through `with`/`async with`, and make cleanup behavior part of the exception path. A context manager is preferable to a comment promising that a client or temporary file will be closed.
+- Use module loggers and structured context for operational events. Never log secrets, tokens, full request bodies, or exception data that can contain credentials.
+- Keep configuration loading at startup or an adapter boundary and pass the resulting typed settings inward. Do not read environment variables from unrelated domain functions.
+- Prefer `collections.abc`, `contextlib`, `functools`, `itertools`, and `pathlib` according to the data/lifecycle problem; do not replace a clear local convention with a broad utility abstraction.
+
 ## Verification Focus
 
 - Run the configured Python test command, typically `pytest` or the package-specific test script.

@@ -37,6 +37,10 @@ pub struct FieldReadAudit<'a> {
     pub request_id: &'a str,
     pub fields: &'a [String],
     pub source: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_fingerprint: Option<&'a str>,
     pub recorded_at: String,
 }
 
@@ -46,6 +50,111 @@ pub fn record_request_size_audit(project_root: &str, audit: RequestSizeAudit<'_>
 
 pub fn record_field_read_audit(project_root: &str, audit: FieldReadAudit<'_>) {
     let _ = append_json_line(project_root, AuditFile::FieldRead, &audit);
+}
+
+pub fn record_request_inspect_audit(project_root: &str, request_ref: &str, request_id: &str) {
+    let _ = append_json_line(
+        project_root,
+        AuditFile::FieldRead,
+        &FieldReadAudit {
+            request_ref,
+            request_id,
+            fields: &[],
+            source: "inspectRequest",
+            group_id: None,
+            contract_fingerprint: None,
+            recorded_at: now_for_audit(),
+        },
+    );
+}
+
+pub fn request_was_inspected(project_root: &str, request_ref: &str) -> bool {
+    read_audit_entries(project_root).iter().any(|entry| {
+        entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+            && entry.get("source").and_then(serde_json::Value::as_str) == Some("inspectRequest")
+    })
+}
+
+pub fn required_groups_not_read(
+    project_root: &str,
+    request_ref: &str,
+    required_group_ids: &[String],
+) -> Vec<String> {
+    let read_groups = read_audit_entries(project_root)
+        .iter()
+        .filter(|entry| {
+            entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+                && entry.get("source").and_then(serde_json::Value::as_str) == Some("readFieldGroup")
+        })
+        .filter_map(|entry| {
+            entry
+                .get("groupId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    required_group_ids
+        .iter()
+        .filter(|group_id| !read_groups.contains(*group_id))
+        .cloned()
+        .collect()
+}
+
+pub fn required_groups_not_read_at_fingerprint(
+    project_root: &str,
+    request_ref: &str,
+    required_group_ids: &[String],
+    contract_group_ids: &[String],
+    contract_fingerprint: Option<&str>,
+) -> Vec<String> {
+    let entries = read_audit_entries(project_root);
+    let read_groups = entries
+        .iter()
+        .filter(|entry| {
+            entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+                && entry.get("source").and_then(serde_json::Value::as_str) == Some("readFieldGroup")
+        })
+        .filter_map(|entry| {
+            let group_id = entry.get("groupId").and_then(serde_json::Value::as_str)?;
+            Some(group_id.to_string())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut missing = required_group_ids
+        .iter()
+        .filter(|group_id| !read_groups.contains(*group_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(contract_fingerprint) = contract_fingerprint {
+        for group_id in contract_group_ids {
+            let matched = entries.iter().any(|entry| {
+                entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+                    && entry.get("source").and_then(serde_json::Value::as_str)
+                        == Some("readFieldGroup")
+                    && entry.get("groupId").and_then(serde_json::Value::as_str) == Some(group_id)
+                    && entry
+                        .get("contractFingerprint")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(contract_fingerprint)
+            });
+            if !matched && !missing.contains(group_id) {
+                missing.push(group_id.clone());
+            }
+        }
+    }
+    missing
+}
+
+fn read_audit_entries(project_root: &str) -> Vec<serde_json::Value> {
+    let Ok(paths) = project_paths(project_root) else {
+        return vec![];
+    };
+    let Ok(content) = std::fs::read_to_string(paths.field_read_audit_file) else {
+        return vec![];
+    };
+    content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect()
 }
 
 enum AuditFile {

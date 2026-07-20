@@ -5,8 +5,8 @@ use delivery_core::{
 
 use crate::{
     paths::{
-        operation_lease_file, project_paths, to_project_relative, transition_decision_file,
-        transition_decision_latest_file,
+        from_project_relative, operation_lease_file, project_paths, to_project_relative,
+        transition_decision_file, transition_decision_latest_file,
     },
     project::initialize_project,
     store::{
@@ -14,6 +14,30 @@ use crate::{
         write_text_atomic, StateResult,
     },
 };
+
+/// Finalize an accepted agent artifact by removing its writable candidate.
+///
+/// Candidates are inputs to acceptance, never another source of truth. Keeping
+/// one shared finalizer prevents individual submit paths from drifting in how
+/// they clean up accepted or repaired artifacts.
+pub fn finalize_agent_candidate(
+    project_root: &std::path::Path,
+    relative_path: &str,
+) -> StateResult<()> {
+    let delivery_candidate = relative_path.starts_with(".loom/deliveries/")
+        && relative_path.contains("/agent-writable/");
+    if !relative_path.starts_with(".loom/agent-writable/") && !delivery_candidate {
+        return Err(crate::store::StateError::InvalidArgument(
+            "accepted candidate must be under .loom/agent-writable/".to_string(),
+        ));
+    }
+    let candidate = from_project_relative(project_root, relative_path)?;
+    crate::store::remove_file_if_exists(&candidate)?;
+    if let Some(parent) = candidate.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitProjectStateResult {
@@ -172,8 +196,18 @@ impl TransitionStore for FileTransitionStore {
         }
         write_json_atomic(&file, diagnostic)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
-        write_json_atomic(&latest, diagnostic)
-            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
+        let decision_ref = crate::paths::to_project_relative(&paths.root, &file)
+            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        write_json_atomic(
+            &latest,
+            &serde_json::json!({
+                "schemaVersion": "1.0",
+                "decisionId": diagnostic.decision_id,
+                "decisionRef": decision_ref,
+                "updatedAt": diagnostic.created_at
+            }),
+        )
+        .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
     }
 
     fn now_millis(&self) -> u128 {

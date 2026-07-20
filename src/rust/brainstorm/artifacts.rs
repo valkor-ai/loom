@@ -12,8 +12,7 @@ use state::{
 };
 
 use crate::paths::{
-    brainstorm_confirmed_frontend_file, brainstorm_contract_file, brainstorm_current_frontend_file,
-    brainstorm_decision_snapshot_file, brainstorm_decisions_index_file,
+    brainstorm_contract_file, brainstorm_decision_snapshot_file, brainstorm_decisions_index_file,
     brainstorm_delivery_glossary_file, brainstorm_latest_file, brainstorm_phase_concept_file,
 };
 
@@ -76,44 +75,18 @@ pub fn write_accepted_artifacts(
         None
     };
 
-    let frontend_refs = if let Some(frontend) = &candidate.frontend_experience {
-        let confirmed_file =
-            brainstorm_confirmed_frontend_file(project_root, delivery_id, phase_id);
-        write_json_atomic(
-            &confirmed_file,
-            &serde_json::json!({
-                "schemaVersion": "1.0",
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "updatedAt": now,
-                "frontendExperience": frontend
-            }),
-        )?;
-        let current_file = brainstorm_current_frontend_file(project_root, delivery_id);
-        write_json_atomic(
-            &current_file,
-            &serde_json::json!({
-                "schemaVersion": "1.0",
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "updatedAt": now,
-                "frontendExperience": frontend,
-                "confirmedFrontendExperienceRef": to_project_relative(project_root, &confirmed_file)?
-            }),
-        )?;
-        Some(FrontendExperienceRefs {
-            confirmed_frontend_experience_ref: Some(to_project_relative(
-                project_root,
-                &confirmed_file,
-            )?),
-            current_frontend_experience_ref: Some(to_project_relative(
-                project_root,
-                &current_file,
-            )?),
-        })
-    } else {
-        None
-    };
+    let contract_file = brainstorm_contract_file(project_root, delivery_id);
+    let contract_ref = to_project_relative(project_root, &contract_file)?;
+    let frontend_ref = candidate
+        .frontend_experience
+        .as_ref()
+        .map(|_| format!("{contract_ref}#/frontendExperience"));
+    let frontend_refs = frontend_ref
+        .clone()
+        .map(|reference| FrontendExperienceRefs {
+            confirmed_frontend_experience_ref: Some(reference.clone()),
+            current_frontend_experience_ref: Some(reference),
+        });
 
     let contract = BrainstormContract {
         schema_version: "1.0".to_string(),
@@ -156,9 +129,7 @@ pub fn write_accepted_artifacts(
         created_at: now.to_string(),
         updated_at: now.to_string(),
     };
-    let contract_file = brainstorm_contract_file(project_root, delivery_id);
     write_json_atomic(&contract_file, &contract)?;
-    let contract_ref = to_project_relative(project_root, &contract_file)?;
 
     let decision_snapshot_file =
         brainstorm_decision_snapshot_file(project_root, delivery_id, phase_id);
@@ -178,7 +149,6 @@ pub fn write_accepted_artifacts(
             "conceptGrounding": contract.concept_grounding,
             "conceptConfirmation": contract.concept_confirmation,
             "clarificationProgress": contract.clarification_progress,
-            "frontendExperience": contract.frontend_experience,
             "phasePlan": contract.phase_plan,
             "userConfirmation": contract.user_confirmation
         }),

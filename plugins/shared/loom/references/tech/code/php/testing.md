@@ -19,6 +19,14 @@ This file applies PHP testing and static-analysis guidance to task-owned changes
 - If changing error handling, include tests for exception/result shape and user-visible error contract, not only the successful branch.
 - When touching queues/events/async handlers, test both dispatch/payload and handler effect if the handler owns behavior.
 
+## Decision Rules
+
+- Select the narrowest proof that covers the owned contract: unit tests for pure domain logic, framework feature tests for routing/validation/authorization/serialization, integration tests for persistence and container wiring, and runtime smoke tests for async workers.
+- Keep PHPUnit/Pest, Laravel, Symfony, and database fixtures aligned with the repository's existing harness. Do not introduce a second test style because an external example uses it.
+- Use data providers or datasets for a finite validation/state matrix, but keep each case's expected business outcome visible. Do not hide meaningful assertions behind a generic snapshot.
+- Use PHPStan/Psalm annotations to describe real boundary shapes and generics. Resolve findings or record a narrow baseline exception; do not blanket-ignore an entire directory.
+- Report changed-branch evidence rather than imposing a universal coverage percentage. A high percentage does not prove authorization, serialization, persistence, or retry behavior when those branches are untested.
+
 ## Verification Focus
 
 - Run the targeted PHP test command and the configured static-analysis command when available.

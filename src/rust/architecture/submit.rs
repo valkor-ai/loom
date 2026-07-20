@@ -25,11 +25,12 @@ use state::{
 
 use crate::{
     paths::{
-        architecture_contract_file, architecture_latest_file, architecture_section_snapshot_file,
+        architecture_contract_file, architecture_latest_file, architecture_section_file,
         project_api_contract_file, section_name,
     },
     request::{
-        architecture_read_groups, required_content_keys, section_enum_refs,
+        architecture_quality_template_from_candidate_plan, architecture_read_groups,
+        build_architecture_quality_seed, required_content_keys, section_enum_refs,
         section_generation_rules, section_order, section_result_template, section_schema_shape,
     },
 };
@@ -192,6 +193,7 @@ where
     let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let mut raw = state::store::read_json_value(&candidate_file)?;
+    normalize_architecture_candidate_null_arrays(&mut raw);
     normalize_architecture_candidate_envelope(
         &mut raw,
         &authorized.request_id,
@@ -239,7 +241,7 @@ where
     let source_refs = read_source_refs(&input.project_root, &input.request_ref, &request_root)?;
     let mut section_outputs =
         parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
-    let allowed_refs = if section_uses_allowed_refs(current_section) {
+    let mut allowed_refs = if section_uses_allowed_refs(current_section) {
         let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
             project_root: input.project_root.clone(),
             request_ref: input.request_ref.clone(),
@@ -265,6 +267,9 @@ where
     } else {
         json!({})
     };
+    if matches!(current_section, ArchitectureSectionGroup::Coverage) {
+        enrich_architecture_artifact_refs(project_root, &section_outputs, &mut allowed_refs)?;
+    }
     let mut candidate_normalized = true;
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
         candidate_normalized = normalize_coverage_deferred_reasons(
@@ -279,18 +284,30 @@ where
     if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
         candidate_normalized = true;
     }
+    if normalize_foundation_interaction_machine_fields(&mut candidate.content) {
+        candidate_normalized = true;
+    }
 
     let mut issues = Vec::new();
     issues.extend(validate_section_content(&candidate));
+    issues.extend(validate_architecture_section_semantics(&candidate));
     issues.extend(validate_structured_communication_boundaries(&candidate));
     issues.extend(validate_http_interfaces(&candidate, &request_root));
     if section_uses_allowed_refs(current_section) {
         issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
     }
     issues.extend(validate_frontend_rules(&candidate, &request_root));
-    issues.extend(validate_runtime_rules(&candidate, &source_refs));
+    issues.extend(validate_runtime_rules(
+        &candidate,
+        &source_refs,
+        &request_root,
+    ));
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
         issues.extend(validate_coverage_section(&candidate.content, &allowed_refs));
+        issues.extend(validate_architecture_quality_candidate_plan(
+            &candidate.content,
+            request_root.pointer("/architectureQualitySeed/candidatePlan"),
+        ));
     }
     if !issues.is_empty() {
         return Ok(repairable(
@@ -306,16 +323,24 @@ where
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
-    let snapshot_file = architecture_section_snapshot_file(
-        project_root,
-        &locator,
-        &authorized.request_id,
-        candidate.section,
-    );
     if candidate_normalized {
         state::store::write_json_atomic(&candidate_file, &candidate)?;
     }
-    state::store::write_json_atomic(&snapshot_file, &candidate)?;
+    let canonical_section_file =
+        architecture_section_file(project_root, &locator, candidate.section);
+    state::store::write_json_atomic(&canonical_section_file, &candidate)?;
+    let canonical_section_ref = to_project_relative(project_root, &canonical_section_file)?;
+    let output = section_outputs
+        .iter_mut()
+        .find(|output| output.section == candidate.section)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "request {} is missing accepted section output {}",
+                authorized.request_id,
+                section_name(candidate.section)
+            ))
+        })?;
+    output.candidate_file = canonical_section_ref;
 
     let next_section = next_section(candidate.section);
     if let Some(next_section) = next_section {
@@ -348,6 +373,22 @@ where
                 &mut next_output,
             )?;
         }
+        let architecture_candidate_plan =
+            if matches!(next_section, ArchitectureSectionGroup::Coverage) {
+                Some(build_architecture_quality_candidate_plan(
+                    project_root,
+                    &section_outputs,
+                )?)
+            } else {
+                None
+            };
+        let architecture_quality_seed =
+            build_architecture_quality_seed(next_section, architecture_candidate_plan.as_ref());
+        apply_architecture_quality_seed(&mut request_root, &architecture_quality_seed);
+        if let Some(candidate_plan) = architecture_candidate_plan.as_ref() {
+            next_output.result_template["content"]["architectureQuality"] =
+                architecture_quality_template_from_candidate_plan(candidate_plan);
+        }
         let include_repair_context = matches!(mode, ArchitectureSubmitMode::Repair);
         let include_repair_source_ref = include_repair_context
             && repair_context_has_source_ref(
@@ -366,11 +407,13 @@ where
             &source_refs,
             &mut section_outputs,
         )?;
+        let agent_field_policies = delivery_core::derive_agent_field_policies(&updated_root);
         update_output_contract_ref(
             &input.project_root,
             &authorized.request_id,
             next_section,
             &next_output,
+            &agent_field_policies,
         )?;
         save_request_root(&input.project_root, &authorized.request_id, &updated_root)?;
         let engine = TransitionEngine {
@@ -402,7 +445,11 @@ where
                     }),
                 },
             )
-            .map_err(to_state_error);
+            .map_err(to_state_error)
+            .and_then(|result| {
+                state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
+                Ok(result)
+            });
     }
 
     let mut contract = assemble_architecture_contract(
@@ -477,7 +524,7 @@ where
         store: FileTransitionStore,
         dispatcher,
     };
-    engine
+    let result = engine
         .advance_after_submit(
             OperationContext {
                 project_root: input.project_root.clone(),
@@ -506,7 +553,9 @@ where
                 }),
             },
         )
-        .map_err(to_state_error)
+        .map_err(to_state_error)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
+    Ok(result)
 }
 
 fn normalize_architecture_candidate_envelope(
@@ -536,6 +585,413 @@ fn normalize_architecture_candidate_envelope(
                 }),
             );
         }
+    }
+    if matches!(current_section, ArchitectureSectionGroup::Coverage) {
+        normalize_architecture_quality_candidate_fields(
+            object.get_mut("content"),
+            request_root.pointer("/architectureQualitySeed/candidatePlan"),
+        );
+    }
+    if matches!(current_section, ArchitectureSectionGroup::RuntimeDelivery) {
+        normalize_runtime_dependency_field_names(object.get_mut("content"));
+    }
+}
+
+fn normalize_architecture_candidate_null_arrays(raw: &mut Value) {
+    const ARRAY_FIELDS: &[&str] = &[
+        "acceptanceRefs",
+        "actions",
+        "applicationInteractions",
+        "composedOf",
+        "constraints",
+        "consumerApplicationRefs",
+        "dataRefs",
+        "decisionDrivers",
+        "derivedData",
+        "enforcementPoints",
+        "entities",
+        "failurePaths",
+        "fields",
+        "happyPath",
+        "invariants",
+        "interfaceRefs",
+        "lifecyclePolicies",
+        "migrationImpacts",
+        "modules",
+        "operationRefs",
+        "ownership",
+        "readModels",
+        "relationships",
+        "scopeRefs",
+        "sourceDataRefs",
+        "stateEffects",
+        "stateMachineRefs",
+        "stateMachines",
+        "structuralRules",
+        "transitions",
+        "userFlows",
+    ];
+    normalize_named_null_arrays(raw, ARRAY_FIELDS);
+}
+
+fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_named_null_arrays(item, array_fields);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if value.is_null() && array_fields.contains(&key.as_str()) {
+                    *value = Value::Array(vec![]);
+                } else {
+                    normalize_named_null_arrays(value, array_fields);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_foundation_interaction_machine_fields(content: &mut Value) -> bool {
+    let Some(object) = content.as_object_mut() else {
+        return false;
+    };
+    let Some(boundary) = object
+        .get_mut("engineeringBoundary")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    let applications = boundary
+        .get("applications")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let modules = boundary
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let provider_applications = applications
+        .iter()
+        .filter(|application| {
+            application
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "backend_service" | "api_service" | "server" | "service" | "worker"
+                    )
+                })
+        })
+        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let consumer_applications = applications
+        .iter()
+        .filter(|application| {
+            application
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "web_client" | "mobile_client" | "native_client" | "desktop_client"
+                    )
+                })
+        })
+        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let module_id = (modules.len() == 1)
+        .then(|| modules[0].get("moduleId").and_then(Value::as_str))
+        .flatten();
+    let Some(interactions) = boundary
+        .get_mut("applicationInteractions")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for interaction in interactions {
+        let Some(interaction) = interaction.as_object_mut() else {
+            continue;
+        };
+        let interaction_type = interaction
+            .get("interactionType")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if interaction
+            .get("providerApplicationRef")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && provider_applications.len() == 1
+        {
+            interaction.insert(
+                "providerApplicationRef".to_string(),
+                json!(provider_applications[0]),
+            );
+            changed = true;
+        }
+        if interaction
+            .get("consumerApplicationRefs")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+            && consumer_applications.len() == 1
+        {
+            interaction.insert(
+                "consumerApplicationRefs".to_string(),
+                json!([consumer_applications[0]]),
+            );
+            changed = true;
+        }
+        if interaction
+            .get("providerModuleRef")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+            && module_id.is_some()
+        {
+            interaction.insert("providerModuleRef".to_string(), json!(module_id));
+            changed = true;
+        }
+        if interaction_type == "http_api" {
+            let Some(policies) = interaction
+                .get_mut("qualityTraits")
+                .and_then(Value::as_object_mut)
+                .and_then(|traits| traits.get_mut("operationalPolicies"))
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            let normalized = policies
+                .iter()
+                .map(|policy| {
+                    policy
+                        .as_str()
+                        .and_then(normalize_operational_policy_alias)
+                        .map(|value| Value::String(value.to_string()))
+                        .unwrap_or_else(|| policy.clone())
+                })
+                .collect::<Vec<_>>();
+            if normalized != *policies {
+                *policies = normalized;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+fn normalize_operational_policy_alias(value: &str) -> Option<&'static str> {
+    match value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+        .as_str()
+    {
+        "idempotent" | "deduplication" | "duplicate_prevention" => Some("idempotency"),
+        "caching" | "cache_control" => Some("cache"),
+        "retries" | "retry_policy" => Some("retry"),
+        "rate_limiting" | "rate_limit_policy" => Some("rate_limit"),
+        "correlation_id" | "trace_id" | "request_correlation" => Some("request_id"),
+        "idempotency" => Some("idempotency"),
+        "cache" => Some("cache"),
+        "retry" => Some("retry"),
+        "rate_limit" => Some("rate_limit"),
+        "request_id" => Some("request_id"),
+        _ => None,
+    }
+}
+
+fn normalize_runtime_dependency_field_names(content: Option<&mut Value>) {
+    let Some(dependencies) = content
+        .and_then(|value| value.pointer_mut("/runtimeDelivery/runtimeDependencies"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for dependency in dependencies {
+        let Some(object) = dependency.as_object_mut() else {
+            continue;
+        };
+        if !object.contains_key("requiredFor") {
+            if let Some(value) = object.remove("affectedCapability") {
+                object.insert(
+                    "requiredFor".to_string(),
+                    match value {
+                        Value::Array(_) => value,
+                        value => Value::Array(vec![value]),
+                    },
+                );
+            }
+        } else {
+            object.remove("affectedCapability");
+        }
+        if !object.contains_key("observability") {
+            if let Some(value) = object.remove("observableSignal") {
+                object.insert(
+                    "observability".to_string(),
+                    match value {
+                        Value::Array(_) => value,
+                        value => Value::Array(vec![value]),
+                    },
+                );
+            }
+        } else {
+            object.remove("observableSignal");
+        }
+    }
+}
+
+fn normalize_architecture_quality_candidate_fields(
+    content: Option<&mut Value>,
+    candidate_plan: Option<&Value>,
+) {
+    let (Some(quality), Some(plan)) = (
+        content
+            .and_then(|content| content.get_mut("architectureQuality"))
+            .and_then(Value::as_object_mut),
+        candidate_plan,
+    ) else {
+        return;
+    };
+    normalize_architecture_quality_collection(
+        quality.get_mut("decisions"),
+        plan.get("decisionCandidates"),
+        plan,
+        "decisionId",
+        |item, candidate, _| {
+            overlay_candidate_field(item, candidate, "decisionId");
+            overlay_candidate_field(item, candidate, "category");
+            overlay_candidate_field(item, candidate, "sourceRefs");
+            overlay_candidate_field(item, candidate, "ownerArtifactRefs");
+        },
+    );
+    normalize_architecture_quality_collection(
+        quality.get_mut("nfrs"),
+        plan.get("nfrCandidates"),
+        plan,
+        "nfrId",
+        |item, candidate, plan| {
+            overlay_candidate_field(item, candidate, "nfrId");
+            overlay_candidate_field(item, candidate, "category");
+            overlay_candidate_field(item, candidate, "source");
+            overlay_candidate_field(item, candidate, "sourceRefs");
+            overlay_candidate_field(item, candidate, "ownerArtifactRefs");
+            let risk_refs = candidate_refs_targeting_id(
+                plan.get("riskCandidates"),
+                "nfrRefs",
+                "riskId",
+                candidate
+                    .get("nfrId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            set_object_field(
+                item,
+                "architectureRefs",
+                json!({
+                    "decisions": candidate.get("decisionRefs").cloned().unwrap_or_else(|| json!([])),
+                    "risks": risk_refs
+                }),
+            );
+        },
+    );
+    normalize_architecture_quality_collection(
+        quality.get_mut("risks"),
+        plan.get("riskCandidates"),
+        plan,
+        "riskId",
+        |item, candidate, _| {
+            overlay_candidate_field(item, candidate, "riskId");
+            overlay_candidate_field(item, candidate, "category");
+            let mut owners = candidate
+                .get("ownerArtifactRefs")
+                .cloned()
+                .unwrap_or_else(|| json!({"modules": [], "interfaces": []}));
+            owners["decisions"] = candidate
+                .get("decisionRefs")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            owners["nfrs"] = candidate
+                .get("nfrRefs")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            set_object_field(item, "ownerArtifactRefs", owners);
+        },
+    );
+}
+
+fn normalize_architecture_quality_collection(
+    actual: Option<&mut Value>,
+    expected: Option<&Value>,
+    plan: &Value,
+    id_field: &str,
+    overlay: impl Fn(&mut Value, &Value, &Value),
+) {
+    let (Some(actual), Some(expected)) = (
+        actual.and_then(Value::as_array_mut),
+        expected.and_then(Value::as_array),
+    ) else {
+        return;
+    };
+    let original = std::mem::take(actual);
+    let expected_ids = expected
+        .iter()
+        .filter_map(|candidate| candidate.get(id_field).and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut consumed = BTreeSet::new();
+    for (expected_index, candidate) in expected.iter().enumerate() {
+        let candidate_id = candidate.get(id_field).and_then(Value::as_str);
+        let matching_index = candidate_id.and_then(|candidate_id| {
+            original.iter().enumerate().find_map(|(index, item)| {
+                (!consumed.contains(&index)
+                    && item.get(id_field).and_then(Value::as_str) == Some(candidate_id))
+                .then_some(index)
+            })
+        });
+        let source_index = matching_index.or_else(|| {
+            (expected_index < original.len() && !consumed.contains(&expected_index))
+                .then_some(expected_index)
+        });
+        let Some(source_index) = source_index else {
+            continue;
+        };
+        consumed.insert(source_index);
+        let mut item = original[source_index].clone();
+        overlay(&mut item, candidate, plan);
+        actual.push(item);
+    }
+    actual.extend(
+        original
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                if consumed.contains(&index)
+                    || item
+                        .get(id_field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| expected_ids.contains(id))
+                {
+                    None
+                } else {
+                    Some(item)
+                }
+            }),
+    );
+}
+
+fn overlay_candidate_field(item: &mut Value, candidate: &Value, field: &str) {
+    if let Some(value) = candidate.get(field) {
+        set_object_field(item, field, value.clone());
+    }
+}
+
+fn set_object_field(item: &mut Value, field: &str, value: Value) {
+    if let Some(object) = item.as_object_mut() {
+        object.insert(field.to_string(), value);
     }
 }
 
@@ -637,20 +1093,622 @@ fn validate_structured_communication_boundaries(
                 ));
             }
         }
-        if interaction_type == "http_api"
-            && object
-                .get("qualityTraits")
-                .and_then(Value::as_object)
-                .is_none()
-        {
+        if interaction_type == "http_api" {
+            let Some(traits) = object.get("qualityTraits").and_then(Value::as_object) else {
+                issues.push(issue(
+                    "HTTP_INTERACTION_QUALITY_TRAITS_REQUIRED",
+                    &format!("{path}.qualityTraits"),
+                    "HTTP interactions must declare structured qualityTraits for API contract generation.",
+                ));
+                continue;
+            };
+            let auth_requirement = traits
+                .get("authRequirement")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !matches!(
+                auth_requirement,
+                "not_applicable" | "required" | "optional" | "deferred_with_risk"
+            ) {
+                issues.push(issue(
+                    "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID",
+                    &format!("{path}.qualityTraits.authRequirement"),
+                    "authRequirement must be not_applicable, required, optional, or deferred_with_risk.",
+                ));
+            }
+            for key in [
+                "paginationRequired",
+                "contractArtifactRequired",
+                "compatibilityRequired",
+            ] {
+                if !traits.get(key).is_some_and(Value::is_boolean) {
+                    issues.push(issue(
+                        "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED",
+                        &format!("{path}.qualityTraits.{key}"),
+                        &format!("{key} must be an explicit boolean."),
+                    ));
+                }
+            }
+            let allowed_policies =
+                BTreeSet::from(["idempotency", "cache", "retry", "rate_limit", "request_id"]);
+            let Some(policies) = traits.get("operationalPolicies").and_then(Value::as_array) else {
+                issues.push(issue(
+                    "HTTP_INTERACTION_OPERATIONAL_POLICIES_REQUIRED",
+                    &format!("{path}.qualityTraits.operationalPolicies"),
+                    "operationalPolicies must be an array, including an empty array when no operational API policy applies.",
+                ));
+                continue;
+            };
+            for (policy_index, policy) in policies.iter().enumerate() {
+                if policy
+                    .as_str()
+                    .is_none_or(|policy| !allowed_policies.contains(policy))
+                {
+                    issues.push(issue(
+                        "HTTP_INTERACTION_OPERATIONAL_POLICY_INVALID",
+                        &format!(
+                            "{path}.qualityTraits.operationalPolicies[{policy_index}]"
+                        ),
+                        "Operational policy must be idempotency, cache, retry, rate_limit, or request_id.",
+                    ));
+                }
+            }
+        }
+    }
+    issues
+}
+
+fn validate_architecture_section_semantics(
+    candidate: &ArchitectureSectionCandidateAgentWritable,
+) -> Vec<delivery_core::RepairIssue> {
+    match candidate.section {
+        ArchitectureSectionGroup::Foundation => {
+            let mut issues = validate_pattern_decision(&candidate.content);
+            issues.extend(validate_foundation_modules(&candidate.content));
+            issues
+        }
+        ArchitectureSectionGroup::DomainContract => validate_data_architecture(&candidate.content),
+        ArchitectureSectionGroup::Behavior => validate_behavior_contract(&candidate.content),
+        _ => vec![],
+    }
+}
+
+fn validate_foundation_modules(content: &Value) -> Vec<delivery_core::RepairIssue> {
+    let Some(modules) = content.get("modules").and_then(Value::as_array) else {
+        return vec![issue(
+            "ARCHITECTURE_MODULES_REQUIRED",
+            "content.modules",
+            "Foundation must declare the current-phase implementation modules as an array.",
+        )];
+    };
+    if modules.is_empty() {
+        return vec![issue(
+            "ARCHITECTURE_MODULES_REQUIRED",
+            "content.modules",
+            "Foundation must identify at least one implementation module that can own architecture decisions and tasks.",
+        )];
+    }
+    let mut issues = Vec::new();
+    let mut module_ids = BTreeSet::new();
+    for (index, module) in modules.iter().enumerate() {
+        let path = format!("content.modules[{index}]");
+        let Some(module) = module.as_object() else {
             issues.push(issue(
-                "HTTP_INTERACTION_QUALITY_TRAITS_REQUIRED",
-                &format!("{path}.qualityTraits"),
-                "HTTP interactions must declare structured qualityTraits for API contract generation.",
+                "ARCHITECTURE_MODULE_OBJECT_REQUIRED",
+                &path,
+                "Each architecture module must be a structured object.",
+            ));
+            continue;
+        };
+        for field in ["moduleId", "name"] {
+            if module
+                .get(field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "ARCHITECTURE_MODULE_FIELD_REQUIRED",
+                    &format!("{path}.{field}"),
+                    "Architecture modules must have a stable id and descriptive name.",
+                ));
+            }
+        }
+        if let Some(id) = module.get("moduleId").and_then(Value::as_str) {
+            if !id.trim().is_empty() && !module_ids.insert(id) {
+                issues.push(issue(
+                    "ARCHITECTURE_MODULE_ID_DUPLICATE",
+                    &format!("{path}.moduleId"),
+                    "Architecture module ids must be unique within the current Foundation.",
+                ));
+            }
+        }
+        let has_responsibility = ["responsibility", "summary"].iter().any(|field| {
+            module
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        if !has_responsibility {
+            issues.push(issue(
+                "ARCHITECTURE_MODULE_FIELD_REQUIRED",
+                &format!("{path}.responsibility"),
+                "Architecture modules must state their current-phase responsibility.",
+            ));
+        }
+        let scope_refs = module
+            .get("scopeRefs")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let acceptance_refs = module
+            .get("acceptanceRefs")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if scope_refs.is_empty() && acceptance_refs.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_MODULE_SOURCE_REQUIRED",
+                &format!("{path}.scopeRefs"),
+                "Every architecture module must cite current-phase scope or acceptance ownership.",
             ));
         }
     }
     issues
+}
+
+fn validate_pattern_decision(content: &Value) -> Vec<delivery_core::RepairIssue> {
+    let path = "content.engineeringBoundary.patternDecision";
+    let Some(decision) = content
+        .pointer("/engineeringBoundary/patternDecision")
+        .and_then(Value::as_object)
+    else {
+        return vec![issue(
+            "ARCHITECTURE_PATTERN_DECISION_REQUIRED",
+            path,
+            "Foundation must include a structured patternDecision for the current phase.",
+        )];
+    };
+    let mut issues = Vec::new();
+    let classification = decision
+        .get("classification")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(classification, "known" | "hybrid" | "custom") {
+        issues.push(issue(
+            "ARCHITECTURE_PATTERN_CLASSIFICATION_INVALID",
+            &format!("{path}.classification"),
+            "patternDecision.classification must be known, hybrid, or custom.",
+        ));
+    }
+    for field in ["patternId", "patternName", "rationale"] {
+        if decision
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            issues.push(issue(
+                "ARCHITECTURE_PATTERN_FIELD_REQUIRED",
+                &format!("{path}.{field}"),
+                "Pattern decisions must name and justify the selected current-phase structure.",
+            ));
+        }
+    }
+    for field in ["decisionDrivers", "structuralRules"] {
+        let Some(values) = decision.get(field).and_then(Value::as_array) else {
+            issues.push(issue(
+                "ARCHITECTURE_PATTERN_EVIDENCE_REQUIRED",
+                &format!("{path}.{field}"),
+                "Pattern decisions must include concrete current-phase drivers and structural rules.",
+            ));
+            continue;
+        };
+        if values.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_PATTERN_EVIDENCE_REQUIRED",
+                &format!("{path}.{field}"),
+                "Pattern decisions must include concrete current-phase drivers and structural rules.",
+            ));
+        }
+        validate_array_entries_are_strings(
+            values,
+            &format!("{path}.{field}"),
+            "ARCHITECTURE_PATTERN_EVIDENCE_REQUIRED",
+            &mut issues,
+        );
+    }
+    match decision.get("composedOf").and_then(Value::as_array) {
+        Some(values) => validate_array_entries_are_strings(
+            values,
+            &format!("{path}.composedOf"),
+            "ARCHITECTURE_PATTERN_COMPOSITION_REQUIRED",
+            &mut issues,
+        ),
+        None => issues.push(issue(
+            "ARCHITECTURE_PATTERN_COMPOSITION_REQUIRED",
+            &format!("{path}.composedOf"),
+            "patternDecision.composedOf must be an array, including an empty array for a non-hybrid structure.",
+        )),
+    }
+    if classification == "hybrid"
+        && decision
+            .get("composedOf")
+            .and_then(Value::as_array)
+            .is_none_or(|items| items.len() < 2)
+    {
+        issues.push(issue(
+            "ARCHITECTURE_PATTERN_COMPOSITION_REQUIRED",
+            &format!("{path}.composedOf"),
+            "Hybrid pattern decisions must identify at least two composed patterns.",
+        ));
+    }
+    issues
+}
+
+fn validate_data_architecture(content: &Value) -> Vec<delivery_core::RepairIssue> {
+    let path = "content.dataModel.dataArchitecture";
+    let Some(architecture) = content
+        .pointer("/dataModel/dataArchitecture")
+        .and_then(Value::as_object)
+    else {
+        return vec![issue(
+            "DATA_ARCHITECTURE_REQUIRED",
+            path,
+            "DomainContract must describe how the current phase uses the selected persistence baseline or intentionally uses no persistence.",
+        )];
+    };
+    let mut issues = Vec::new();
+    let mode = architecture
+        .get("persistenceMode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(mode, "selected_stack" | "no_persistence") {
+        issues.push(issue(
+            "DATA_ARCHITECTURE_PERSISTENCE_MODE_INVALID",
+            &format!("{path}.persistenceMode"),
+            "persistenceMode must be selected_stack or no_persistence.",
+        ));
+    }
+    if mode == "selected_stack"
+        && architecture
+            .get("sourceOfTruth")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        issues.push(issue(
+            "DATA_ARCHITECTURE_SOURCE_OF_TRUTH_REQUIRED",
+            &format!("{path}.sourceOfTruth"),
+            "Persistent data architecture must identify the current-phase source of truth.",
+        ));
+    }
+    for field in [
+        "ownership",
+        "invariants",
+        "transactionBoundaries",
+        "consistencyRules",
+        "migrationImpacts",
+        "readModels",
+        "lifecyclePolicies",
+        "derivedData",
+    ] {
+        if !architecture.get(field).is_some_and(Value::is_array) {
+            issues.push(issue(
+                "DATA_ARCHITECTURE_COLLECTION_REQUIRED",
+                &format!("{path}.{field}"),
+                "Data architecture collections must be explicit arrays, including an empty array when the concern does not apply.",
+            ));
+        }
+    }
+    for (field, string_fields, array_fields) in [
+        (
+            "ownership",
+            &["dataRef", "ownerModuleRef", "boundary"][..],
+            &[][..],
+        ),
+        (
+            "invariants",
+            &["invariantId", "ownerModuleRef", "rule", "failureBehavior"][..],
+            &["enforcementPoints"][..],
+        ),
+        (
+            "transactionBoundaries",
+            &[
+                "transactionId",
+                "ownerModuleRef",
+                "atomicityRule",
+                "failureBehavior",
+            ][..],
+            &["operationRefs"][..],
+        ),
+        (
+            "consistencyRules",
+            &["consistencyId", "mode", "rule", "conflictOrStaleBehavior"][..],
+            &["dataRefs"][..],
+        ),
+        (
+            "migrationImpacts",
+            &[
+                "migrationId",
+                "change",
+                "compatibilityRule",
+                "rollbackOrForwardRepair",
+                "verification",
+            ][..],
+            &["dataRefs"][..],
+        ),
+        (
+            "readModels",
+            &[
+                "readModelId",
+                "ownerModuleRef",
+                "queryPurpose",
+                "boundedReadRule",
+                "freshnessRule",
+            ][..],
+            &["dataRefs"][..],
+        ),
+        (
+            "lifecyclePolicies",
+            &["policyId", "lifecycleRule", "cleanupOrArchiveBehavior"][..],
+            &["dataRefs"][..],
+        ),
+        (
+            "derivedData",
+            &[
+                "derivedDataId",
+                "ownerModuleRef",
+                "refreshTrigger",
+                "freshnessRule",
+                "rebuildStrategy",
+            ][..],
+            &["sourceDataRefs"][..],
+        ),
+    ] {
+        validate_structured_entries(
+            architecture.get(field),
+            &format!("{path}.{field}"),
+            string_fields,
+            array_fields,
+            array_fields,
+            "DATA_ARCHITECTURE_ENTRY_INVALID",
+            &mut issues,
+        );
+    }
+    let has_entities = content
+        .pointer("/dataModel/entities")
+        .and_then(Value::as_array)
+        .is_some_and(|entities| !entities.is_empty());
+    if mode == "selected_stack"
+        && has_entities
+        && architecture
+            .get("ownership")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    {
+        issues.push(issue(
+            "DATA_ARCHITECTURE_OWNERSHIP_REQUIRED",
+            &format!("{path}.ownership"),
+            "Persistent current-phase entities must have explicit data and module ownership.",
+        ));
+    }
+    if let Some(rules) = architecture
+        .get("consistencyRules")
+        .and_then(Value::as_array)
+    {
+        for (index, rule) in rules.iter().enumerate() {
+            if rule
+                .get("mode")
+                .and_then(Value::as_str)
+                .is_some_and(|mode| {
+                    !matches!(
+                        mode,
+                        "strong" | "eventual" | "read_your_writes" | "external_source_owned"
+                    )
+                })
+            {
+                issues.push(issue(
+                    "DATA_ARCHITECTURE_CONSISTENCY_MODE_INVALID",
+                    &format!("{path}.consistencyRules[{index}].mode"),
+                    "Consistency mode must use the declared data architecture enum.",
+                ));
+            }
+        }
+    }
+    issues
+}
+
+fn validate_behavior_contract(content: &Value) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    let Some(flows) = content.get("userFlows").and_then(Value::as_array) else {
+        return vec![issue(
+            "BEHAVIOR_FLOW_COLLECTION_REQUIRED",
+            "content.userFlows",
+            "Behavior must declare userFlows as an array.",
+        )];
+    };
+    for (index, flow) in flows.iter().enumerate() {
+        let path = format!("content.userFlows[{index}]");
+        let Some(flow) = flow.as_object() else {
+            issues.push(issue(
+                "BEHAVIOR_FLOW_OBJECT_REQUIRED",
+                &path,
+                "Every user flow must be a structured object.",
+            ));
+            continue;
+        };
+        for field in ["flowId", "name", "trigger", "actorRef", "successOutcome"] {
+            if flow
+                .get(field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "BEHAVIOR_FLOW_FIELD_REQUIRED",
+                    &format!("{path}.{field}"),
+                    "User flows must identify their trigger, behavior, and observable success outcome.",
+                ));
+            }
+        }
+        if flow
+            .get("happyPath")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+        {
+            issues.push(issue(
+                "BEHAVIOR_HAPPY_PATH_REQUIRED",
+                &format!("{path}.happyPath"),
+                "User flows must include a non-empty structured happyPath.",
+            ));
+        }
+        validate_structured_entries(
+            flow.get("happyPath"),
+            &format!("{path}.happyPath"),
+            &["stepId", "action", "interactionRef", "observableResult"],
+            &["stateMachineRefs", "stateEffects"],
+            &[],
+            "BEHAVIOR_HAPPY_PATH_INVALID",
+            &mut issues,
+        );
+        validate_structured_entries(
+            flow.get("businessBlockingPaths"),
+            &format!("{path}.businessBlockingPaths"),
+            &["condition", "response", "recovery"],
+            &[],
+            &[],
+            "BEHAVIOR_BLOCKING_PATH_INVALID",
+            &mut issues,
+        );
+        validate_structured_entries(
+            flow.get("failurePaths"),
+            &format!("{path}.failurePaths"),
+            &["failure", "impact", "recovery", "observableResult"],
+            &[],
+            &[],
+            "BEHAVIOR_FAILURE_PATH_INVALID",
+            &mut issues,
+        );
+    }
+    let Some(state_machines) = content.get("stateMachines").and_then(Value::as_array) else {
+        issues.push(issue(
+            "STATE_MACHINE_COLLECTION_REQUIRED",
+            "content.stateMachines",
+            "Behavior must declare stateMachines as an array, including an empty array when no lifecycle applies.",
+        ));
+        return issues;
+    };
+    for (index, machine) in state_machines.iter().enumerate() {
+        let path = format!("content.stateMachines[{index}]");
+        let Some(machine) = machine.as_object() else {
+            issues.push(issue(
+                "STATE_MACHINE_OBJECT_REQUIRED",
+                &path,
+                "Every state machine must be a structured object.",
+            ));
+            continue;
+        };
+        for field in ["machineId", "name"] {
+            if machine
+                .get(field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "STATE_MACHINE_FIELD_REQUIRED",
+                    &format!("{path}.{field}"),
+                    "State machines must have a stable id and descriptive name.",
+                ));
+            }
+        }
+        if !machine.get("states").is_some_and(Value::is_array) {
+            issues.push(issue(
+                "STATE_MACHINE_STATES_REQUIRED",
+                &format!("{path}.states"),
+                "State machines must declare states as an array.",
+            ));
+        }
+        validate_structured_entries(
+            machine.get("transitions"),
+            &format!("{path}.transitions"),
+            &["from", "to", "trigger", "failureBehavior"],
+            &["guards", "effects"],
+            &[],
+            "STATE_TRANSITION_INVALID",
+            &mut issues,
+        );
+    }
+    issues
+}
+
+fn validate_structured_entries(
+    value: Option<&Value>,
+    path: &str,
+    required_strings: &[&str],
+    required_arrays: &[&str],
+    non_empty_arrays: &[&str],
+    code: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_shape = format!(
+        "Use an object with required string fields [{}] and array fields [{}].",
+        required_strings.join(", "),
+        required_arrays.join(", ")
+    );
+    let Some(entries) = value.and_then(Value::as_array) else {
+        issues.push(issue(
+            code,
+            path,
+            &format!(
+                "The field must be an explicit array of structured objects, including an empty array when it does not apply. {expected_shape}"
+            ),
+        ));
+        return;
+    };
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_path = format!("{path}[{index}]");
+        let Some(entry) = entry.as_object() else {
+            issues.push(issue(
+                code,
+                &entry_path,
+                &format!("The entry must be an object. {expected_shape}"),
+            ));
+            continue;
+        };
+        for field in required_strings {
+            if entry
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    code,
+                    &format!("{entry_path}.{field}"),
+                    "The structured entry field must be a non-empty string.",
+                ));
+            }
+        }
+        for field in required_arrays {
+            let Some(values) = entry.get(*field).and_then(Value::as_array) else {
+                issues.push(issue(
+                    code,
+                    &format!("{entry_path}.{field}"),
+                    "The structured entry field must be an array.",
+                ));
+                continue;
+            };
+            validate_array_entries_are_strings(
+                values,
+                &format!("{entry_path}.{field}"),
+                code,
+                issues,
+            );
+            if non_empty_arrays.contains(field) && values.is_empty() {
+                issues.push(issue(
+                    code,
+                    &format!("{entry_path}.{field}"),
+                    "The structured entry array must identify at least one applicable item.",
+                ));
+            }
+        }
+    }
 }
 
 fn validate_http_interfaces(
@@ -827,13 +1885,7 @@ fn normalize_frontend_ui_surface_decision_contract(
         return false;
     };
     let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
-    let surface_contract_changed =
-        normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed);
-    let removed_legacy = frontend_experience
-        .as_object_mut()
-        .and_then(|object| object.remove("uiQualityContract"))
-        .is_some();
-    surface_contract_changed || removed_legacy
+    normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed)
 }
 
 fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {
@@ -895,27 +1947,23 @@ fn runtime_endpoint_present(runtime: &Value, field: &str) -> bool {
 }
 
 fn runtime_frontend_is_served_by_integrated_app(runtime: &Value) -> bool {
-    [
-        "/frontend/servedBy",
-        "/frontend/servedByRef",
-        "/deliveryMechanics/staticAssets/servedBy",
-    ]
-    .iter()
-    .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
-    .any(|value| {
-        let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
-        [
-            "springbootstatic",
-            "backendstatic",
-            "serverstatic",
-            "servicestatic",
-            "appstatic",
-            "sameprocess",
-            "sameapp",
-        ]
+    ["/frontend/servedBy", "/frontend/servedByRef"]
         .iter()
-        .any(|needle| normalized.contains(needle))
-    })
+        .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
+        .any(|value| {
+            let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+            [
+                "springbootstatic",
+                "backendstatic",
+                "serverstatic",
+                "servicestatic",
+                "appstatic",
+                "sameprocess",
+                "sameapp",
+            ]
+            .iter()
+            .any(|needle| normalized.contains(needle))
+        })
 }
 
 fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
@@ -941,16 +1989,20 @@ fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
 
 fn runtime_labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
     let mut labels = Vec::new();
-    for command in [
-        runtime.pointer("/build/command").and_then(Value::as_str),
-        runtime.pointer("/buildCommand").and_then(Value::as_str),
-        runtime.pointer("/start/command").and_then(Value::as_str),
-        runtime.pointer("/startCommand").and_then(Value::as_str),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        labels.extend(runtime_labeled_command_segments(command));
+    for phase in ["development", "verification", "deployment"] {
+        for command in [
+            runtime
+                .pointer(&format!("/commands/{phase}/build/command"))
+                .and_then(Value::as_str),
+            runtime
+                .pointer(&format!("/commands/{phase}/start/command"))
+                .and_then(Value::as_str),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            labels.extend(runtime_labeled_command_segments(command));
+        }
     }
     let has_frontend = labels
         .iter()
@@ -987,6 +2039,7 @@ fn runtime_labeled_command_segments(command: &str) -> Vec<String> {
 fn validate_runtime_rules(
     candidate: &ArchitectureSectionCandidateAgentWritable,
     source_refs: &Value,
+    request_root: &Value,
 ) -> Vec<delivery_core::RepairIssue> {
     if !matches!(candidate.section, ArchitectureSectionGroup::RuntimeDelivery) {
         return vec![];
@@ -1022,52 +2075,29 @@ fn validate_runtime_rules(
             "content.runtimeDelivery.basis.technicalBaselineRef",
             &mut issues,
         );
-        require_runtime_string(
-            runtime,
-            "/build/command",
-            "content.runtimeDelivery.build.command",
-            &mut issues,
-        );
-        require_runtime_array(
-            runtime,
-            "/build/codeLevelExpectations",
-            "content.runtimeDelivery.build.codeLevelExpectations",
-            &mut issues,
-        );
-        if runtime.get("start").is_some() {
-            require_runtime_array(
+        for phase in ["development", "verification", "deployment"] {
+            require_runtime_string(
                 runtime,
-                "/start/codeLevelExpectations",
-                "content.runtimeDelivery.start.codeLevelExpectations",
+                &format!("/commands/{phase}/build/command"),
+                &format!("content.runtimeDelivery.commands.{phase}.build.command"),
+                &mut issues,
+            );
+            require_runtime_string(
+                runtime,
+                &format!("/commands/{phase}/start/command"),
+                &format!("content.runtimeDelivery.commands.{phase}.start.command"),
                 &mut issues,
             );
             if runtime
-                .pointer("/start/port")
+                .pointer(&format!("/commands/{phase}/start/port"))
                 .is_some_and(|port| !port.is_number())
             {
                 issues.push(issue(
                     "RUNTIME_FIELD_INVALID",
-                    "content.runtimeDelivery.start.port",
-                    "runtime_delivery start.port must be a number when present; omit it when unknown.",
+                    &format!("content.runtimeDelivery.commands.{phase}.start.port"),
+                    &format!("runtime_delivery {phase} start.port must be a number when present; omit it when unknown."),
                 ));
             }
-        }
-        if runtime
-            .pointer("/start/command")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-            && runtime
-                .get("runtimeSurfaces")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-        {
-            issues.push(issue(
-                "RUNTIME_START_OR_SURFACE_REQUIRED",
-                "content.runtimeDelivery.start.command",
-                "runtime_delivery status=modified requires start.command or at least one runtimeSurfaces entry.",
-            ));
         }
         require_runtime_non_empty_array(
             runtime,
@@ -1075,6 +2105,119 @@ fn validate_runtime_rules(
             "content.runtimeDelivery.runtimeSurfaces",
             &mut issues,
         );
+        match runtime.get("runtimeDependencies") {
+            Some(Value::Array(dependencies)) => {
+                for (index, dependency) in dependencies.iter().enumerate() {
+                    let path = format!("content.runtimeDelivery.runtimeDependencies[{index}]");
+                    let Some(dependency) = dependency.as_object() else {
+                        issues.push(issue(
+                            "RUNTIME_DEPENDENCY_OBJECT_REQUIRED",
+                            &path,
+                            "Each runtime dependency must be a structured object.",
+                        ));
+                        continue;
+                    };
+                    for field in dependency.keys() {
+                        if !matches!(
+                            field.as_str(),
+                            "dependencyId"
+                                | "kind"
+                                | "provider"
+                                | "requiredFor"
+                                | "startupRequirement"
+                                | "failureBehavior"
+                                | "recoveryStrategy"
+                                | "observability"
+                        ) {
+                            issues.push(issue(
+                                "RUNTIME_DEPENDENCY_FIELD_UNKNOWN",
+                                &format!("{path}.{field}"),
+                                "Runtime dependency fields must come from the current write contract; remove legacy or invented fields.",
+                            ));
+                        }
+                    }
+                    for field in [
+                        "dependencyId",
+                        "kind",
+                        "startupRequirement",
+                        "failureBehavior",
+                        "recoveryStrategy",
+                    ] {
+                        if dependency
+                            .get(field)
+                            .and_then(Value::as_str)
+                            .is_none_or(|value| value.trim().is_empty())
+                        {
+                            issues.push(issue(
+                                "RUNTIME_DEPENDENCY_FIELD_REQUIRED",
+                                &format!("{path}.{field}"),
+                                "Runtime dependencies must declare ownership, startup, failure, and recovery semantics.",
+                            ));
+                        }
+                    }
+                    for field in ["requiredFor", "observability"] {
+                        let Some(values) = dependency.get(field).and_then(Value::as_array) else {
+                            issues.push(issue(
+                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
+                                &format!("{path}.{field}"),
+                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
+                            ));
+                            continue;
+                        };
+                        if values.is_empty() {
+                            issues.push(issue(
+                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
+                                &format!("{path}.{field}"),
+                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
+                            ));
+                        }
+                        validate_array_entries_are_strings(
+                            values,
+                            &format!("{path}.{field}"),
+                            "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
+                            &mut issues,
+                        );
+                    }
+                    if dependency
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| {
+                            !matches!(
+                                kind,
+                                "service" | "storage" | "queue" | "filesystem" | "external_runtime"
+                            )
+                        })
+                    {
+                        issues.push(issue(
+                            "RUNTIME_DEPENDENCY_KIND_INVALID",
+                            &format!("{path}.kind"),
+                            "Runtime dependency kind must use the declared enum.",
+                        ));
+                    }
+                    if dependency
+                        .get("startupRequirement")
+                        .and_then(Value::as_str)
+                        .is_some_and(|requirement| {
+                            !matches!(requirement, "required" | "optional" | "not_applicable")
+                        })
+                    {
+                        issues.push(issue(
+                            "RUNTIME_DEPENDENCY_STARTUP_INVALID",
+                            &format!("{path}.startupRequirement"),
+                            "startupRequirement must be required, optional, or not_applicable.",
+                        ));
+                    }
+                }
+            }
+            _ => {
+                issues.push(issue(
+                    "RUNTIME_DEPENDENCIES_INVALID",
+                    "content.runtimeDelivery.runtimeDependencies",
+                    "runtimeDependencies must be an explicit array, including an empty array when there are no current runtime dependencies.",
+                ));
+            }
+        }
+        validate_runtime_dependency_seed(runtime, request_root, &mut issues);
         require_runtime_string(
             runtime,
             "/httpProbes/previewPath",
@@ -1135,16 +2278,51 @@ fn validate_runtime_rules(
                 &mut issues,
             );
         }
-        if runtime.pointer("/deliveryMechanics/codegen").is_some() {
-            require_runtime_array(
-                runtime,
-                "/deliveryMechanics/codegen/codeLevelExpectations",
-                "content.runtimeDelivery.deliveryMechanics.codegen.codeLevelExpectations",
-                &mut issues,
-            );
-        }
     }
     issues
+}
+
+fn validate_runtime_dependency_seed(
+    runtime: &Value,
+    request_root: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(candidates) = request_root
+        .pointer("/runtimeDependencySeed/candidates")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    let dependencies = runtime
+        .get("runtimeDependencies")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(candidate_id) = candidate.get("dependencyId").and_then(Value::as_str) else {
+            continue;
+        };
+        let matched = dependencies.iter().any(|dependency| {
+            dependency.get("dependencyId").and_then(Value::as_str) == Some(candidate_id)
+                && dependency.get("kind") == candidate.get("kind")
+                && dependency.get("startupRequirement") == candidate.get("startupRequirement")
+                && candidate
+                    .get("provider")
+                    .is_none_or(|provider| dependency.get("provider") == Some(provider))
+        });
+        if !matched {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_SEED_UNSATISFIED",
+                &format!("content.runtimeDelivery.runtimeDependencies[{index}]"),
+                &format!(
+                    "MCP derived runtime dependency {candidate_id} must be represented with kind and startupRequirement from runtimeDependencySeed; it cannot be removed or replaced with an unrelated dependency."
+                ),
+            ));
+        }
+    }
 }
 
 fn require_runtime_string(
@@ -1164,21 +2342,6 @@ fn require_runtime_string(
             "RUNTIME_FIELD_REQUIRED",
             field_path,
             "runtime_delivery status=modified requires this field for TaskPlan, Execution, Deploy, and Repair.",
-        ));
-    }
-}
-
-fn require_runtime_array(
-    root: &Value,
-    pointer: &str,
-    field_path: &str,
-    issues: &mut Vec<delivery_core::RepairIssue>,
-) {
-    if root.pointer(pointer).and_then(Value::as_array).is_none() {
-        issues.push(issue(
-            "RUNTIME_FIELD_REQUIRED",
-            field_path,
-            "runtime_delivery status=modified requires this array field for code-level verification planning.",
         ));
     }
 }
@@ -1637,6 +2800,8 @@ fn validate_architecture_quality(
     ]);
     let allowed_nfr_categories = BTreeSet::from([
         "performance",
+        "scalability",
+        "availability",
         "reliability",
         "security",
         "maintainability",
@@ -1657,6 +2822,8 @@ fn validate_architecture_quality(
     let allowed_scope_refs = string_set(allowed_refs.pointer("/scopeRefs"));
     let allowed_acceptance_refs = string_set(allowed_refs.pointer("/acceptanceRefs"));
     let allowed_detail_refs = string_set(allowed_refs.pointer("/requirementDetailIds"));
+    let allowed_module_refs = string_set(allowed_refs.pointer("/moduleRefs"));
+    let allowed_interface_refs = string_set(allowed_refs.pointer("/interfaceRefs"));
     let decision_ids = model
         .decisions
         .iter()
@@ -1672,6 +2839,24 @@ fn validate_architecture_quality(
         .iter()
         .map(|risk| risk.risk_id.clone())
         .collect::<BTreeSet<_>>();
+    validate_unique_ids(
+        model.decisions.iter().map(|item| item.decision_id.as_str()),
+        "content.architectureQuality.decisions",
+        "decisionId",
+        issues,
+    );
+    validate_unique_ids(
+        model.nfrs.iter().map(|item| item.nfr_id.as_str()),
+        "content.architectureQuality.nfrs",
+        "nfrId",
+        issues,
+    );
+    validate_unique_ids(
+        model.risks.iter().map(|item| item.risk_id.as_str()),
+        "content.architectureQuality.risks",
+        "riskId",
+        issues,
+    );
     for (index, decision) in model.decisions.iter().enumerate() {
         validate_non_empty(
             &decision.decision_id,
@@ -1714,6 +2899,29 @@ fn validate_architecture_quality(
                 "architecture decisions must include at least one alternative with a rejectedBecause reason.",
             ));
         }
+        for (alternative_index, alternative) in decision.alternatives_considered.iter().enumerate()
+        {
+            for (field, value) in [
+                ("name", alternative.name.as_str()),
+                ("tradeoff", alternative.tradeoff.as_str()),
+                ("rejectedBecause", alternative.rejected_because.as_str()),
+            ] {
+                validate_non_empty(
+                    value,
+                    &format!(
+                        "content.architectureQuality.decisions[{index}].alternativesConsidered[{alternative_index}].{field}"
+                    ),
+                    issues,
+                );
+            }
+        }
+        if decision.consequences.positive.is_empty() || decision.consequences.negative.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INCOMPLETE",
+                &format!("content.architectureQuality.decisions[{index}].consequences"),
+                "architecture decisions must include at least one positive and one negative consequence.",
+            ));
+        }
         if decision.verification_hints.is_empty() {
             issues.push(issue(
                 "ARCHITECTURE_QUALITY_INCOMPLETE",
@@ -1741,6 +2949,37 @@ fn validate_architecture_quality(
             ),
             issues,
         );
+        if decision.source_refs.scope_refs.is_empty()
+            && decision.source_refs.acceptance_refs.is_empty()
+            && decision.source_refs.requirement_detail_refs.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_SOURCE_REQUIRED",
+                &format!("content.architectureQuality.decisions[{index}].sourceRefs"),
+                "architecture decisions must cite at least one current-phase scope, acceptance, or requirement detail ref.",
+            ));
+        }
+        validate_ref_members(
+            &decision.owner_artifact_refs.modules,
+            &allowed_module_refs,
+            &format!("content.architectureQuality.decisions[{index}].ownerArtifactRefs.modules"),
+            issues,
+        );
+        validate_ref_members(
+            &decision.owner_artifact_refs.interfaces,
+            &allowed_interface_refs,
+            &format!("content.architectureQuality.decisions[{index}].ownerArtifactRefs.interfaces"),
+            issues,
+        );
+        if decision.owner_artifact_refs.modules.is_empty()
+            && decision.owner_artifact_refs.interfaces.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_OWNER_REQUIRED",
+                &format!("content.architectureQuality.decisions[{index}].ownerArtifactRefs"),
+                "architecture decisions must identify at least one owning module or interface.",
+            ));
+        }
     }
     for (index, nfr) in model.nfrs.iter().enumerate() {
         validate_non_empty(
@@ -1763,6 +3002,33 @@ fn validate_architecture_quality(
             &format!("content.architectureQuality.nfrs[{index}].verificationStrategy"),
             issues,
         );
+        if !matches!(
+            nfr.source.as_str(),
+            "confirmed_requirement" | "derived_minimum"
+        ) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.nfrs[{index}].source"),
+                "nfr source must be confirmed_requirement or derived_minimum.",
+            ));
+        }
+        for (field, value) in [
+            ("indicator", nfr.measurement.indicator.as_str()),
+            (
+                "workloadOrCondition",
+                nfr.measurement.workload_or_condition.as_str(),
+            ),
+            (
+                "evaluationBoundary",
+                nfr.measurement.evaluation_boundary.as_str(),
+            ),
+        ] {
+            validate_non_empty(
+                value,
+                &format!("content.architectureQuality.nfrs[{index}].measurement.{field}"),
+                issues,
+            );
+        }
         if !allowed_nfr_categories.contains(nfr.category.as_str()) {
             issues.push(issue(
                 "ARCHITECTURE_QUALITY_INVALID",
@@ -1771,11 +3037,70 @@ fn validate_architecture_quality(
             ));
         }
         validate_ref_members(
+            &nfr.source_refs.scope_refs,
+            &allowed_scope_refs,
+            &format!("content.architectureQuality.nfrs[{index}].sourceRefs.scopeRefs"),
+            issues,
+        );
+        validate_ref_members(
+            &nfr.source_refs.acceptance_refs,
+            &allowed_acceptance_refs,
+            &format!("content.architectureQuality.nfrs[{index}].sourceRefs.acceptanceRefs"),
+            issues,
+        );
+        validate_ref_members(
+            &nfr.source_refs.requirement_detail_refs,
+            &allowed_detail_refs,
+            &format!("content.architectureQuality.nfrs[{index}].sourceRefs.requirementDetailRefs"),
+            issues,
+        );
+        if nfr.source_refs.scope_refs.is_empty()
+            && nfr.source_refs.acceptance_refs.is_empty()
+            && nfr.source_refs.requirement_detail_refs.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_SOURCE_REQUIRED",
+                &format!("content.architectureQuality.nfrs[{index}].sourceRefs"),
+                "architecture NFRs must cite at least one current-phase scope, acceptance, or requirement detail ref.",
+            ));
+        }
+        if nfr.source == "confirmed_requirement"
+            && nfr.source_refs.acceptance_refs.is_empty()
+            && nfr.source_refs.requirement_detail_refs.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_CONFIRMED_SOURCE_INVALID",
+                &format!("content.architectureQuality.nfrs[{index}].sourceRefs"),
+                "confirmed_requirement NFRs must cite an accepted criterion or requirement detail; a scope ref alone does not establish a confirmed quality target.",
+            ));
+        }
+        validate_ref_members(
             &nfr.architecture_refs.decisions,
             &decision_ids,
             &format!("content.architectureQuality.nfrs[{index}].architectureRefs.decisions"),
             issues,
         );
+        validate_ref_members(
+            &nfr.owner_artifact_refs.modules,
+            &allowed_module_refs,
+            &format!("content.architectureQuality.nfrs[{index}].ownerArtifactRefs.modules"),
+            issues,
+        );
+        validate_ref_members(
+            &nfr.owner_artifact_refs.interfaces,
+            &allowed_interface_refs,
+            &format!("content.architectureQuality.nfrs[{index}].ownerArtifactRefs.interfaces"),
+            issues,
+        );
+        if nfr.owner_artifact_refs.modules.is_empty()
+            && nfr.owner_artifact_refs.interfaces.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_OWNER_REQUIRED",
+                &format!("content.architectureQuality.nfrs[{index}].ownerArtifactRefs"),
+                "architecture NFRs must identify at least one owning module or interface.",
+            ));
+        }
         validate_ref_members(
             &nfr.architecture_refs.risks,
             &risk_ids,
@@ -1827,6 +3152,18 @@ fn validate_architecture_quality(
             issues,
         );
         validate_ref_members(
+            &risk.owner_artifact_refs.modules,
+            &allowed_module_refs,
+            &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs.modules"),
+            issues,
+        );
+        validate_ref_members(
+            &risk.owner_artifact_refs.interfaces,
+            &allowed_interface_refs,
+            &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs.interfaces"),
+            issues,
+        );
+        validate_ref_members(
             &risk.owner_artifact_refs.nfrs,
             &nfr_ids,
             &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs.nfrs"),
@@ -1837,6 +3174,218 @@ fn validate_architecture_quality(
                 "ARCHITECTURE_QUALITY_INCOMPLETE",
                 &format!("content.architectureQuality.risks[{index}].verificationHints"),
                 "architecture risks must include verificationHints for downstream tasks or review.",
+            ));
+        }
+        if risk.owner_artifact_refs.modules.is_empty()
+            && risk.owner_artifact_refs.interfaces.is_empty()
+            && risk.owner_artifact_refs.decisions.is_empty()
+            && risk.owner_artifact_refs.nfrs.is_empty()
+        {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_OWNER_REQUIRED",
+                &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs"),
+                "architecture risks must identify at least one owning artifact.",
+            ));
+        }
+    }
+}
+
+fn validate_architecture_quality_candidate_plan(
+    content: &Value,
+    candidate_plan: Option<&Value>,
+) -> Vec<delivery_core::RepairIssue> {
+    let Some(plan) = candidate_plan else {
+        return vec![issue(
+            "ARCHITECTURE_QUALITY_CANDIDATE_PLAN_REQUIRED",
+            "architectureQualitySeed.candidatePlan",
+            "Coverage requires the MCP-derived architecture quality candidate plan.",
+        )];
+    };
+    let quality = content.get("architectureQuality").unwrap_or(&Value::Null);
+    let mut issues = Vec::new();
+    for (plan_key, quality_key, id_key) in [
+        ("decisionCandidates", "decisions", "decisionId"),
+        ("nfrCandidates", "nfrs", "nfrId"),
+        ("riskCandidates", "risks", "riskId"),
+    ] {
+        let expected = candidate_map(plan.get(plan_key), id_key);
+        let actual = candidate_map(quality.get(quality_key), id_key);
+        let expected_ids = expected.keys().cloned().collect::<BTreeSet<_>>();
+        let actual_ids = actual.keys().cloned().collect::<BTreeSet<_>>();
+        if !expected_ids.is_subset(&actual_ids) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_CANDIDATE_COVERAGE_INVALID",
+                &format!("content.architectureQuality.{quality_key}"),
+                "Architecture quality output must complete every MCP-derived candidate exactly once; additional items require independently valid accepted source facts and ownership.",
+            ));
+            continue;
+        }
+        for (id, expected_item) in expected {
+            let Some(actual_item) = actual.get(&id) else {
+                continue;
+            };
+            for field in ["category", "source"] {
+                if let Some(expected_value) = expected_item.get(field) {
+                    if actual_item.get(field) != Some(expected_value) {
+                        issues.push(issue(
+                            "ARCHITECTURE_QUALITY_CANDIDATE_IDENTITY_INVALID",
+                            &format!("content.architectureQuality.{quality_key}.{id}.{field}"),
+                            "Candidate identity fields are MCP-derived and must be preserved exactly.",
+                        ));
+                    }
+                }
+            }
+            if let Some(expected_owners) = expected_item.get("ownerArtifactRefs") {
+                for owner_field in ["modules", "interfaces"] {
+                    let expected_refs = string_set(expected_owners.get(owner_field));
+                    let actual_refs = string_set(
+                        actual_item
+                            .get("ownerArtifactRefs")
+                            .and_then(|owners| owners.get(owner_field)),
+                    );
+                    if expected_refs != actual_refs {
+                        issues.push(issue(
+                            "ARCHITECTURE_QUALITY_CANDIDATE_OWNER_INVALID",
+                            &format!(
+                                "content.architectureQuality.{quality_key}.{id}.ownerArtifactRefs.{owner_field}"
+                            ),
+                            "Candidate module and interface ownership is MCP-derived and must be preserved exactly.",
+                        ));
+                    }
+                }
+            }
+            if let Some(expected_sources) = expected_item.get("sourceRefs") {
+                for source_field in ["scopeRefs", "acceptanceRefs", "requirementDetailRefs"] {
+                    let expected_refs = string_set(expected_sources.get(source_field));
+                    let actual_refs = string_set(
+                        actual_item
+                            .get("sourceRefs")
+                            .and_then(|sources| sources.get(source_field)),
+                    );
+                    if expected_refs != actual_refs {
+                        issues.push(issue(
+                            "ARCHITECTURE_QUALITY_CANDIDATE_SOURCE_INVALID",
+                            &format!(
+                                "content.architectureQuality.{quality_key}.{id}.sourceRefs.{source_field}"
+                            ),
+                            "Candidate source refs are MCP-derived from accepted architecture facts and must be preserved exactly.",
+                        ));
+                    }
+                }
+            }
+            match quality_key {
+                "nfrs" => {
+                    validate_candidate_ref_identity(
+                        expected_item.get("decisionRefs"),
+                        actual_item.pointer("/architectureRefs/decisions"),
+                        &format!(
+                            "content.architectureQuality.{quality_key}.{id}.architectureRefs.decisions"
+                        ),
+                        &mut issues,
+                    );
+                    let expected_risk_refs = candidate_refs_targeting_id(
+                        plan.get("riskCandidates"),
+                        "nfrRefs",
+                        "riskId",
+                        &id,
+                    );
+                    validate_candidate_ref_identity(
+                        Some(&expected_risk_refs),
+                        actual_item.pointer("/architectureRefs/risks"),
+                        &format!(
+                            "content.architectureQuality.{quality_key}.{id}.architectureRefs.risks"
+                        ),
+                        &mut issues,
+                    );
+                }
+                "risks" => {
+                    validate_candidate_ref_identity(
+                        expected_item.get("decisionRefs"),
+                        actual_item.pointer("/ownerArtifactRefs/decisions"),
+                        &format!(
+                            "content.architectureQuality.{quality_key}.{id}.ownerArtifactRefs.decisions"
+                        ),
+                        &mut issues,
+                    );
+                    validate_candidate_ref_identity(
+                        expected_item.get("nfrRefs"),
+                        actual_item.pointer("/ownerArtifactRefs/nfrs"),
+                        &format!(
+                            "content.architectureQuality.{quality_key}.{id}.ownerArtifactRefs.nfrs"
+                        ),
+                        &mut issues,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    issues
+}
+
+fn candidate_map(value: Option<&Value>, id_key: &str) -> BTreeMap<String, Value> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get(id_key)
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), item.clone()))
+        })
+        .collect()
+}
+
+fn candidate_refs_targeting_id(
+    candidates: Option<&Value>,
+    target_refs_field: &str,
+    id_field: &str,
+    target_id: &str,
+) -> Value {
+    json!(candidates
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|candidate| {
+            candidate
+                .get(target_refs_field)
+                .and_then(Value::as_array)
+                .is_some_and(|refs| refs.iter().any(|item| item.as_str() == Some(target_id)))
+        })
+        .filter_map(|candidate| candidate.get(id_field).and_then(Value::as_str))
+        .collect::<Vec<_>>())
+}
+
+fn validate_candidate_ref_identity(
+    expected: Option<&Value>,
+    actual: Option<&Value>,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_refs = string_set(expected);
+    let actual_refs = string_set(actual);
+    if expected_refs != actual_refs {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_CANDIDATE_LINK_INVALID",
+            field_path,
+            "Architecture quality links are MCP-derived from the candidate plan and must be preserved exactly.",
+        ));
+    }
+}
+
+fn validate_unique_ids<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    field_path: &str,
+    id_field: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        if !id.trim().is_empty() && !seen.insert(id) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_ID_DUPLICATE",
+                field_path,
+                &format!("architecture quality {id_field} values must be unique."),
             ));
         }
     }
@@ -2138,21 +3687,14 @@ fn update_request_for_next_section(
             ))
         })?;
     *section_output = next_output.clone();
-    if let Some(inline_section_outputs) =
-        root.get_mut("sectionOutputs").and_then(Value::as_array_mut)
-    {
-        let next_section_value =
-            serde_json::to_value(next_section).map_err(state::store::StateError::Json)?;
-        let inline_output = inline_section_outputs
-            .iter_mut()
-            .find(|output| output.get("section") == Some(&next_section_value))
-            .ok_or_else(|| {
-                state::store::StateError::StateCorrupted(format!(
-                    "architecture request sectionOutputs is missing {}",
-                    section_name(next_section)
-                ))
-            })?;
-        *inline_output = next_output_value.clone();
+    let section_outputs_value = Value::Array(
+        section_outputs
+            .iter()
+            .map(|output| serde_json::to_value(output).map_err(state::store::StateError::Json))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    if root.get("sectionOutputs").is_some() {
+        root["sectionOutputs"] = section_outputs_value;
     } else {
         write_private_section_outputs(project_root, request_id, section_outputs)?;
     }
@@ -2170,6 +3712,8 @@ fn update_request_for_next_section(
         root["outputContract"]["schemaProjection"]["requiredContentKeys"] =
             serde_json::to_value(crate::request::required_content_keys(next_section))
                 .map_err(state::store::StateError::Json)?;
+        root["outputContract"]["schemaProjection"]["requiredTopLevelFields"] =
+            json!(["section", "status", "content"]);
     }
     let frontend_experience_source = root
         .get("frontendExperienceSource")
@@ -2202,6 +3746,571 @@ fn apply_api_quality_seed(root: &mut Value, seed: &Value) {
     if let Some(enum_refs) = object.get_mut("enumRefs").and_then(Value::as_object_mut) {
         enum_refs.insert("apiQuality".to_string(), contracts::api_quality_enum_refs());
     }
+}
+
+fn apply_architecture_quality_seed(root: &mut Value, seed: &Value) {
+    if let Some(object) = root.as_object_mut() {
+        object.insert("architectureQualitySeed".to_string(), seed.clone());
+    }
+}
+
+fn build_architecture_quality_candidate_plan(
+    project_root: &Path,
+    section_outputs: &[SectionStateOutput],
+) -> Result<Value, state::store::StateError> {
+    let foundation = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::Foundation,
+    )?;
+    let domain = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::DomainContract,
+    )?;
+    let behavior = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::Behavior,
+    )?;
+    let runtime = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::RuntimeDelivery,
+    )?;
+    Ok(architecture_quality_candidate_plan_from_sections(
+        &foundation,
+        &domain,
+        &behavior,
+        &runtime,
+    ))
+}
+
+fn architecture_quality_candidate_plan_from_sections(
+    foundation: &Value,
+    domain: &Value,
+    behavior: &Value,
+    runtime: &Value,
+) -> Value {
+    let module_refs = ids_at(&foundation, "/modules", "moduleId");
+    let interface_refs = ids_at(&domain, "/interfaces", "interfaceId");
+    let entity_refs = ids_at(&domain, "/dataModel/entities", "entityId");
+    let state_machine_refs = ids_at(&behavior, "/stateMachines", "machineId");
+    let interactions = foundation
+        .pointer("/engineeringBoundary/applicationInteractions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let runtime_surfaces = runtime
+        .pointer("/runtimeDelivery/runtimeSurfaces")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let runtime_dependencies = runtime
+        .pointer("/runtimeDelivery/runtimeDependencies")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let pattern_id = foundation
+        .pointer("/engineeringBoundary/patternDecision/patternId")
+        .and_then(Value::as_str)
+        .unwrap_or("current_phase_structure");
+    let has_auth_boundary = interactions.iter().any(|interaction| {
+        matches!(
+            interaction
+                .pointer("/qualityTraits/authRequirement")
+                .and_then(Value::as_str),
+            Some("required" | "optional" | "deferred_with_risk")
+        )
+    });
+    let has_async_boundary = interactions.iter().any(|interaction| {
+        matches!(
+            interaction.get("interactionType").and_then(Value::as_str),
+            Some("event" | "job")
+        )
+    }) || matches!(
+        pattern_id,
+        "event_driven" | "background_worker" | "serverless_function"
+    );
+    let has_pagination = domain
+        .get("interfaces")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|interface| {
+            interface
+                .pointer("/paginationPolicy/strategy")
+                .and_then(Value::as_str)
+                .is_some_and(|strategy| !matches!(strategy, "" | "not_applicable"))
+        });
+    let source_refs = architecture_candidate_source_refs([foundation, domain, behavior, runtime]);
+    let declared_module_refs = module_refs.iter().cloned().collect::<BTreeSet<_>>();
+    let data_owner_module_refs = named_string_values(
+        domain
+            .pointer("/dataModel/dataArchitecture")
+            .unwrap_or(&Value::Null),
+        "ownerModuleRef",
+    )
+    .into_iter()
+    .filter(|module_ref| declared_module_refs.contains(module_ref))
+    .collect::<Vec<_>>();
+    let interaction_owner_module_refs = named_string_values(
+        foundation
+            .pointer("/engineeringBoundary/applicationInteractions")
+            .unwrap_or(&Value::Null),
+        "providerModuleRef",
+    )
+    .into_iter()
+    .filter(|module_ref| declared_module_refs.contains(module_ref))
+    .collect::<Vec<_>>();
+    let default_owners = json!({
+        "modules": module_refs,
+        "interfaces": []
+    });
+    let data_owners = json!({
+        "modules": if data_owner_module_refs.is_empty() {
+            default_owners["modules"].clone()
+        } else {
+            json!(data_owner_module_refs)
+        },
+        "interfaces": []
+    });
+    let interface_owners = json!({
+        "modules": interaction_owner_module_refs,
+        "interfaces": interface_refs
+    });
+
+    let mut decisions = vec![architecture_decision_candidate(
+        "adr-architecture-style",
+        "architecture_style",
+        format!("Foundation selected the current-phase structural pattern {pattern_id}."),
+        default_owners.clone(),
+        source_refs.clone(),
+    )];
+    if default_owners["modules"]
+        .as_array()
+        .is_some_and(|items| items.len() > 1)
+    {
+        decisions.push(architecture_decision_candidate(
+            "adr-module-boundary",
+            "module_boundary",
+            "Multiple current-phase modules require explicit responsibility and dependency boundaries.",
+            default_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    if !entity_refs.is_empty() {
+        decisions.push(architecture_decision_candidate(
+            "adr-data-boundary",
+            "data_boundary",
+            "The current phase owns persistent or stateful entities and must preserve source-of-truth, invariant, and transaction boundaries.",
+            data_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    if !interactions.is_empty() {
+        decisions.push(architecture_decision_candidate(
+            "adr-integration-boundary",
+            "integration_boundary",
+            "Structured application interactions require an explicit provider, consumer, protocol, and failure boundary.",
+            interface_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    if !runtime_surfaces.is_empty() {
+        decisions.push(architecture_decision_candidate(
+            "adr-runtime-boundary",
+            "runtime_boundary",
+            "Accepted runtime surfaces require a concrete build, start, probe, and environment boundary.",
+            default_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    if has_auth_boundary {
+        decisions.push(architecture_decision_candidate(
+            "adr-security-boundary",
+            "security_boundary",
+            "At least one accepted interaction declares authentication or authorization behavior.",
+            interface_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    if has_async_boundary || !runtime_dependencies.is_empty() {
+        decisions.push(architecture_decision_candidate(
+            "adr-operability",
+            "operability",
+            "Asynchronous work or runtime dependencies require observable failure and recovery behavior.",
+            default_owners.clone(),
+            source_refs.clone(),
+        ));
+    }
+    let mut nfrs = vec![architecture_nfr_candidate(
+        "nfr-maintainability",
+        "maintainability",
+        "derived_minimum",
+        "Current-phase module and interface ownership must remain traceable in implementation and review.",
+        source_refs.clone(),
+        default_owners.clone(),
+        candidate_ids_for_categories(
+            &decisions,
+            "decisionId",
+            &["architecture_style", "module_boundary"],
+        ),
+    )];
+    if !entity_refs.is_empty() || !state_machine_refs.is_empty() {
+        nfrs.push(architecture_nfr_candidate(
+            "nfr-reliability",
+            "reliability",
+            "derived_minimum",
+            "Stateful behavior requires verifiable invariant, transaction, and recovery boundaries.",
+            source_refs.clone(),
+            data_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["data_boundary", "architecture_style"],
+            ),
+        ));
+    }
+    if has_pagination {
+        nfrs.push(architecture_nfr_candidate(
+            "nfr-scalability",
+            "scalability",
+            "derived_minimum",
+            "A growing collection contract requires bounded reads under the accepted pagination policy.",
+            source_refs.clone(),
+            interface_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["data_boundary", "integration_boundary"],
+            ),
+        ));
+    }
+    if !runtime_dependencies.is_empty() {
+        nfrs.push(architecture_nfr_candidate(
+            "nfr-availability",
+            "availability",
+            "derived_minimum",
+            "Runtime dependencies require explicit degraded or unavailable behavior.",
+            source_refs.clone(),
+            default_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["runtime_boundary", "operability"],
+            ),
+        ));
+    }
+    if has_auth_boundary {
+        nfrs.push(architecture_nfr_candidate(
+            "nfr-security",
+            "security",
+            "derived_minimum",
+            "Protected interactions require server-enforced access and safe failure disclosure.",
+            source_refs.clone(),
+            interface_owners.clone(),
+            candidate_ids_for_categories(&decisions, "decisionId", &["security_boundary"]),
+        ));
+    }
+    if has_async_boundary || !runtime_dependencies.is_empty() {
+        nfrs.push(architecture_nfr_candidate(
+            "nfr-observability",
+            "observability",
+            "derived_minimum",
+            "Asynchronous or dependency failure paths require an observable completion or failure signal.",
+            source_refs.clone(),
+            default_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["integration_boundary", "runtime_boundary", "operability"],
+            ),
+        ));
+    }
+
+    let mut risks = Vec::new();
+    if !entity_refs.is_empty() || !state_machine_refs.is_empty() {
+        risks.push(architecture_risk_candidate(
+            "risk-data-integrity",
+            "data_integrity",
+            "Stateful writes can violate invariants, become partial, or expose stale state without the declared ownership and transaction rules.",
+            data_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["data_boundary", "architecture_style"],
+            ),
+            candidate_ids_for_categories(&nfrs, "nfrId", &["reliability"]),
+        ));
+    }
+    if !interactions.is_empty() {
+        risks.push(architecture_risk_candidate(
+            "risk-integration",
+            "integration",
+            "Provider, consumer, or protocol failure can leave the current operation incomplete or inconsistent.",
+            interface_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["integration_boundary"],
+            ),
+            candidate_ids_for_categories(
+                &nfrs,
+                "nfrId",
+                &["reliability", "observability"],
+            ),
+        ));
+    }
+    if !runtime_surfaces.is_empty() {
+        risks.push(architecture_risk_candidate(
+            "risk-runtime",
+            "runtime",
+            "Build or start success can still leave an accepted runtime surface or dependency unreachable.",
+            default_owners.clone(),
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["runtime_boundary", "operability"],
+            ),
+            candidate_ids_for_categories(
+                &nfrs,
+                "nfrId",
+                &["availability", "observability"],
+            ),
+        ));
+    }
+    if has_auth_boundary {
+        risks.push(architecture_risk_candidate(
+            "risk-security",
+            "security",
+            "A protected operation can be exposed or disclose sensitive state when access checks and failure behavior drift.",
+            interface_owners.clone(),
+            candidate_ids_for_categories(&decisions, "decisionId", &["security_boundary"]),
+            candidate_ids_for_categories(&nfrs, "nfrId", &["security"]),
+        ));
+    }
+    if risks.is_empty() {
+        risks.push(architecture_risk_candidate(
+            "risk-maintainability",
+            "maintainability",
+            "Implementation can drift from the accepted module and interface boundary when ownership is not evidenced.",
+            default_owners,
+            candidate_ids_for_categories(
+                &decisions,
+                "decisionId",
+                &["architecture_style", "module_boundary"],
+            ),
+            candidate_ids_for_categories(&nfrs, "nfrId", &["maintainability"]),
+        ));
+    }
+    json!({
+        "decisionCandidates": decisions,
+        "nfrCandidates": nfrs,
+        "riskCandidates": risks
+    })
+}
+
+fn enrich_architecture_artifact_refs(
+    project_root: &Path,
+    section_outputs: &[SectionStateOutput],
+    allowed_refs: &mut Value,
+) -> Result<(), state::store::StateError> {
+    let foundation = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::Foundation,
+    )?;
+    let domain = read_section_candidate_content(
+        project_root,
+        section_outputs,
+        ArchitectureSectionGroup::DomainContract,
+    )?;
+    allowed_refs["moduleRefs"] = json!(ids_at(&foundation, "/modules", "moduleId"));
+    allowed_refs["interfaceRefs"] = json!(ids_at(&domain, "/interfaces", "interfaceId"));
+    Ok(())
+}
+
+fn read_section_candidate_content(
+    project_root: &Path,
+    section_outputs: &[SectionStateOutput],
+    section: ArchitectureSectionGroup,
+) -> Result<Value, state::store::StateError> {
+    let output = section_outputs
+        .iter()
+        .find(|output| output.section == section)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "architecture request is missing {} output",
+                section_name(section)
+            ))
+        })?;
+    let path = from_project_relative(project_root, &output.candidate_file)?;
+    let candidate: ArchitectureSectionCandidateAgentWritable = state::store::read_json(&path)?;
+    Ok(candidate.content)
+}
+
+fn ids_at(value: &Value, pointer: &str, id_field: &str) -> Vec<String> {
+    let mut ids = value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_field).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn named_string_values(value: &Value, key: &str) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    collect_named_string_values(value, key, &mut values);
+    values.into_iter().collect()
+}
+
+fn collect_named_string_values(value: &Value, key: &str, values: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            for (field, child) in object {
+                if field == key {
+                    if let Some(value) = child.as_str().filter(|value| !value.trim().is_empty()) {
+                        values.insert(value.to_string());
+                    }
+                }
+                collect_named_string_values(child, key, values);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_named_string_values(item, key, values);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn candidate_ids_for_categories(
+    candidates: &[Value],
+    id_field: &str,
+    categories: &[&str],
+) -> Vec<Value> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .get("category")
+                .and_then(Value::as_str)
+                .is_some_and(|category| categories.contains(&category))
+        })
+        .filter_map(|candidate| candidate.get(id_field).cloned())
+        .collect()
+}
+
+fn architecture_candidate_source_refs<'a>(values: impl IntoIterator<Item = &'a Value>) -> Value {
+    let mut scope_refs = BTreeSet::new();
+    let mut acceptance_refs = BTreeSet::new();
+    let mut detail_refs = BTreeSet::new();
+    for value in values {
+        collect_named_string_refs(
+            value,
+            &mut scope_refs,
+            &mut acceptance_refs,
+            &mut detail_refs,
+        );
+    }
+    json!({
+        "scopeRefs": scope_refs.into_iter().collect::<Vec<_>>(),
+        "acceptanceRefs": acceptance_refs.into_iter().collect::<Vec<_>>(),
+        "requirementDetailRefs": detail_refs.into_iter().collect::<Vec<_>>()
+    })
+}
+
+fn collect_named_string_refs(
+    value: &Value,
+    scope_refs: &mut BTreeSet<String>,
+    acceptance_refs: &mut BTreeSet<String>,
+    detail_refs: &mut BTreeSet<String>,
+) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                let target = match key.as_str() {
+                    "scopeRefs" => Some(&mut *scope_refs),
+                    "acceptanceRefs" => Some(&mut *acceptance_refs),
+                    "requirementDetailRefs" => Some(&mut *detail_refs),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    if let Some(items) = child.as_array() {
+                        target.extend(items.iter().filter_map(Value::as_str).map(str::to_string));
+                    }
+                }
+                collect_named_string_refs(child, scope_refs, acceptance_refs, detail_refs);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_named_string_refs(item, scope_refs, acceptance_refs, detail_refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn architecture_decision_candidate(
+    decision_id: &str,
+    category: &str,
+    reason: impl Into<String>,
+    owner_artifact_refs: Value,
+    source_refs: Value,
+) -> Value {
+    json!({
+        "decisionId": decision_id,
+        "category": category,
+        "reason": reason.into(),
+        "ownerArtifactRefs": owner_artifact_refs,
+        "sourceRefs": source_refs
+    })
+}
+
+fn architecture_nfr_candidate(
+    nfr_id: &str,
+    category: &str,
+    source: &str,
+    reason: &str,
+    source_refs: Value,
+    owner_artifact_refs: Value,
+    decision_refs: Vec<Value>,
+) -> Value {
+    json!({
+        "nfrId": nfr_id,
+        "category": category,
+        "source": source,
+        "reason": reason,
+        "sourceRefs": source_refs,
+        "ownerArtifactRefs": owner_artifact_refs,
+        "decisionRefs": decision_refs
+    })
+}
+
+fn architecture_risk_candidate(
+    risk_id: &str,
+    category: &str,
+    reason: &str,
+    owner_artifact_refs: Value,
+    decision_refs: Vec<Value>,
+    nfr_refs: Vec<Value>,
+) -> Value {
+    json!({
+        "riskId": risk_id,
+        "category": category,
+        "reason": reason,
+        "ownerArtifactRefs": owner_artifact_refs,
+        "decisionRefs": decision_refs,
+        "nfrRefs": nfr_refs
+    })
 }
 
 fn rebuild_domain_contract_output(
@@ -2294,6 +4403,661 @@ mod tests {
         validate_ui_surface_decision_contract,
     };
 
+    fn foundation_candidate(interaction: Value) -> ArchitectureSectionCandidateAgentWritable {
+        ArchitectureSectionCandidateAgentWritable {
+            schema_version: String::new(),
+            request_id: String::new(),
+            delivery_id: String::new(),
+            phase_id: String::new(),
+            section: ArchitectureSectionGroup::Foundation,
+            status: ArchitectureSectionStatus::Ready,
+            content: json!({
+                "engineeringBoundary": {
+                    "applicationInteractions": [interaction]
+                }
+            }),
+            blocked_reasons: vec![],
+            created_at: String::new(),
+        }
+    }
+
+    fn http_interaction(quality_traits: Value) -> Value {
+        json!({
+            "interactionId": "interaction-orders",
+            "providerApplicationRef": "app-api",
+            "consumerApplicationRefs": ["app-web"],
+            "providerModuleRef": "module-orders",
+            "interactionType": "http_api",
+            "qualityTraits": quality_traits
+        })
+    }
+
+    #[test]
+    fn complete_http_quality_traits_pass_foundation_validation() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "authRequirement": "required",
+            "paginationRequired": true,
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false,
+            "operationalPolicies": ["idempotency", "request_id"]
+        })));
+
+        assert!(
+            validate_structured_communication_boundaries(&candidate).is_empty(),
+            "complete structured HTTP quality traits must pass"
+        );
+    }
+
+    #[test]
+    fn incomplete_http_quality_traits_report_exact_field_paths() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false
+        })));
+        let issues = validate_structured_communication_boundaries(&candidate);
+        let issue_keys = issues
+            .iter()
+            .map(|issue| (issue.code.clone(), issue.field_path.clone()))
+            .collect::<BTreeSet<_>>();
+        let base = "content.engineeringBoundary.applicationInteractions[0].qualityTraits";
+
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID".to_string(),
+            Some(format!("{base}.authRequirement"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED".to_string(),
+            Some(format!("{base}.paginationRequired"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_OPERATIONAL_POLICIES_REQUIRED".to_string(),
+            Some(format!("{base}.operationalPolicies"))
+        )));
+    }
+
+    #[test]
+    fn invalid_http_quality_trait_values_report_exact_field_paths() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "authRequirement": "sometimes",
+            "paginationRequired": "yes",
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false,
+            "operationalPolicies": ["circuit_breaker"]
+        })));
+        let issues = validate_structured_communication_boundaries(&candidate);
+        let issue_keys = issues
+            .iter()
+            .map(|issue| (issue.code.clone(), issue.field_path.clone()))
+            .collect::<BTreeSet<_>>();
+        let base = "content.engineeringBoundary.applicationInteractions[0].qualityTraits";
+
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID".to_string(),
+            Some(format!("{base}.authRequirement"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED".to_string(),
+            Some(format!("{base}.paginationRequired"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_OPERATIONAL_POLICY_INVALID".to_string(),
+            Some(format!("{base}.operationalPolicies[0]"))
+        )));
+    }
+
+    #[test]
+    fn foundation_normalization_fills_unambiguous_owners_and_policy_aliases() {
+        let mut content = json!({
+            "engineeringBoundary": {
+                "applications": [
+                    {"applicationId": "app-web", "kind": "web_client"},
+                    {"applicationId": "app-api", "kind": "backend_service"}
+                ],
+                "modules": [{"moduleId": "module-api"}],
+                "applicationInteractions": [{
+                    "interactionId": "interaction-api",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "operationalPolicies": ["retry_policy", "correlation-id"]
+                    }
+                }]
+            }
+        });
+
+        assert!(normalize_foundation_interaction_machine_fields(
+            &mut content
+        ));
+        let interaction = &content["engineeringBoundary"]["applicationInteractions"][0];
+        assert_eq!(interaction["providerApplicationRef"], "app-api");
+        assert_eq!(interaction["consumerApplicationRefs"], json!(["app-web"]));
+        assert_eq!(interaction["providerModuleRef"], "module-api");
+        assert_eq!(
+            interaction["qualityTraits"]["operationalPolicies"],
+            json!(["retry", "request_id"])
+        );
+        assert!(
+            validate_structured_communication_boundaries(&foundation_candidate(
+                interaction.clone()
+            ))
+            .iter()
+            .all(|issue| !issue.code.contains("OPERATIONAL_POLICY"))
+        );
+    }
+
+    #[test]
+    fn architecture_candidate_null_collections_become_empty_arrays_before_schema_validation() {
+        let mut candidate = json!({
+            "content": {
+                "engineeringBoundary": {
+                    "applicationInteractions": null,
+                    "patternDecision": {
+                        "decisionDrivers": null,
+                        "structuralRules": null
+                    }
+                },
+                "modules": null,
+                "dataModel": {
+                    "entities": [{"fields": null, "constraints": null}]
+                }
+            }
+        });
+
+        normalize_architecture_candidate_null_arrays(&mut candidate);
+
+        assert_eq!(
+            candidate["content"]["engineeringBoundary"]["applicationInteractions"],
+            json!([])
+        );
+        assert_eq!(candidate["content"]["modules"], json!([]));
+        assert_eq!(
+            candidate["content"]["dataModel"]["entities"][0]["fields"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn custom_pattern_decision_keeps_full_structural_obligations() {
+        let content = json!({
+            "engineeringBoundary": {
+                "patternDecision": {
+                    "classification": "custom",
+                    "patternId": "local-first-sync-engine",
+                    "patternName": "Local-first synchronization engine",
+                    "composedOf": [],
+                    "decisionDrivers": ["Offline mutation and deterministic reconciliation are current-phase behavior."],
+                    "structuralRules": ["The local log owns pending writes and the sync adapter owns remote reconciliation."],
+                    "rationale": "Known request/response patterns do not describe the accepted offline boundary."
+                }
+            }
+        });
+        assert!(validate_pattern_decision(&content).is_empty());
+    }
+
+    #[test]
+    fn foundation_modules_require_current_phase_ownership() {
+        let mut content = json!({
+            "modules": [{
+                "moduleId": "module-orders",
+                "name": "Orders",
+                "responsibility": "Own order behavior.",
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        });
+        let issues = validate_foundation_modules(&content);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "ARCHITECTURE_MODULE_SOURCE_REQUIRED"));
+
+        let duplicate = content["modules"][0].clone();
+        content["modules"].as_array_mut().unwrap().push(duplicate);
+        assert!(validate_foundation_modules(&content)
+            .iter()
+            .any(|issue| issue.code == "ARCHITECTURE_MODULE_ID_DUPLICATE"));
+    }
+
+    #[test]
+    fn architecture_quality_candidates_keep_data_and_integration_ownership_specific() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "patternDecision": {"patternId": "modular_monolith"},
+                "applicationInteractions": [{
+                    "interactionType": "http_api",
+                    "providerModuleRef": "module-notifications",
+                    "qualityTraits": {"authRequirement": "required"}
+                }]
+            },
+            "modules": [
+                {"moduleId": "module-orders", "scopeRefs": ["scope-orders"]},
+                {"moduleId": "module-notifications", "scopeRefs": ["scope-notifications"]}
+            ]
+        });
+        let domain = json!({
+            "dataModel": {
+                "entities": [{"entityId": "entity-order"}],
+                "dataArchitecture": {
+                    "ownership": [{"dataRef": "entity-order", "ownerModuleRef": "module-orders"}]
+                }
+            },
+            "interfaces": [{"interfaceId": "api-notifications"}]
+        });
+        let behavior = json!({"stateMachines": [{"machineId": "machine-order"}]});
+        let runtime = json!({
+            "runtimeDelivery": {
+                "runtimeSurfaces": [{"surfaceId": "surface-api"}],
+                "runtimeDependencies": []
+            }
+        });
+
+        let plan = architecture_quality_candidate_plan_from_sections(
+            &foundation,
+            &domain,
+            &behavior,
+            &runtime,
+        );
+        let candidate = |group: &str, id_field: &str, id: &str| {
+            plan[group]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item[id_field] == id)
+                .unwrap()
+        };
+
+        assert_eq!(
+            candidate("decisionCandidates", "decisionId", "adr-data-boundary")["ownerArtifactRefs"]
+                ["modules"],
+            json!(["module-orders"])
+        );
+        assert_eq!(
+            candidate(
+                "decisionCandidates",
+                "decisionId",
+                "adr-integration-boundary"
+            )["ownerArtifactRefs"],
+            json!({
+                "modules": ["module-notifications"],
+                "interfaces": ["api-notifications"]
+            })
+        );
+        assert_eq!(
+            candidate("nfrCandidates", "nfrId", "nfr-reliability")["decisionRefs"],
+            json!(["adr-architecture-style", "adr-data-boundary"])
+        );
+        assert_eq!(
+            candidate("riskCandidates", "riskId", "risk-data-integrity")["ownerArtifactRefs"]
+                ["modules"],
+            json!(["module-orders"])
+        );
+    }
+
+    #[test]
+    fn domain_contract_requires_structured_data_architecture() {
+        let missing = validate_data_architecture(&json!({"dataModel": {}}));
+        assert!(missing
+            .iter()
+            .any(|issue| issue.code == "DATA_ARCHITECTURE_REQUIRED"));
+
+        let complete = json!({
+            "dataModel": {
+                "dataArchitecture": {
+                    "persistenceMode": "selected_stack",
+                    "sourceOfTruth": "primary-order-store",
+                    "ownership": [],
+                    "invariants": [],
+                    "transactionBoundaries": [],
+                    "consistencyRules": [],
+                    "migrationImpacts": [],
+                    "readModels": [],
+                    "lifecyclePolicies": [],
+                    "derivedData": []
+                }
+            }
+        });
+        assert!(validate_data_architecture(&complete).is_empty());
+    }
+
+    #[test]
+    fn data_architecture_rejects_prose_only_transaction_entries() {
+        let content = json!({
+            "dataModel": {
+                "dataArchitecture": {
+                    "persistenceMode": "selected_stack",
+                    "sourceOfTruth": "primary-order-store",
+                    "ownership": [],
+                    "invariants": [],
+                    "transactionBoundaries": ["save the order atomically"],
+                    "consistencyRules": [],
+                    "migrationImpacts": [],
+                    "readModels": [],
+                    "lifecyclePolicies": [],
+                    "derivedData": []
+                }
+            }
+        });
+        assert!(validate_data_architecture(&content)
+            .iter()
+            .any(|issue| issue.code == "DATA_ARCHITECTURE_ENTRY_INVALID"));
+    }
+
+    #[test]
+    fn runtime_dependency_seed_cannot_be_removed_from_a_modified_delivery() {
+        let request_root = json!({
+            "runtimeDependencySeed": {
+                "candidates": [{
+                    "dependencyId": "runtime_persistence",
+                    "kind": "storage",
+                    "startupRequirement": "required"
+                }]
+            }
+        });
+        let mut issues = Vec::new();
+        validate_runtime_dependency_seed(
+            &json!({"runtimeDependencies": []}),
+            &request_root,
+            &mut issues,
+        );
+        assert_eq!(issues[0].code, "RUNTIME_DEPENDENCY_SEED_UNSATISFIED");
+
+        issues.clear();
+        validate_runtime_dependency_seed(
+            &json!({
+                "runtimeDependencies": [{
+                    "dependencyId": "runtime_persistence",
+                    "kind": "storage",
+                    "startupRequirement": "required"
+                }]
+            }),
+            &request_root,
+            &mut issues,
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn behavior_contract_rejects_incomplete_paths_and_transitions() {
+        let content = json!({
+            "userFlows": [{
+                "flowId": "flow-orders",
+                "name": "Submit order",
+                "trigger": "Staff submits an order.",
+                "actorRef": "staff",
+                "happyPath": [{"stepId": "step-submit", "action": "Submit", "stateEffects": []}],
+                "businessBlockingPaths": [],
+                "failurePaths": [{"failure": "storage unavailable"}],
+                "successOutcome": "The order is visible."
+            }],
+            "stateMachines": [{
+                "machineId": "machine-order",
+                "name": "Order lifecycle",
+                "states": [],
+                "transitions": [{"from": "draft", "to": "submitted", "trigger": "submit"}]
+            }]
+        });
+        let issues = validate_behavior_contract(&content);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "BEHAVIOR_HAPPY_PATH_INVALID"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "BEHAVIOR_FAILURE_PATH_INVALID"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "STATE_TRANSITION_INVALID"));
+    }
+
+    fn complete_architecture_quality() -> Value {
+        json!({
+            "decisions": [{
+                "decisionId": "adr-runtime",
+                "category": "runtime_boundary",
+                "title": "Keep the runtime boundary explicit",
+                "status": "accepted",
+                "context": "The current phase owns one runtime surface and one dependency.",
+                "decision": "Keep startup and dependency recovery in the owning module.",
+                "alternativesConsidered": [{
+                    "name": "Implicit framework startup",
+                    "tradeoff": "Less configuration but no explicit recovery boundary.",
+                    "rejectedBecause": "The dependency failure must be observable."
+                }],
+                "consequences": {
+                    "positive": ["Startup ownership is verifiable."],
+                    "negative": ["The module owns additional recovery code."],
+                    "neutral": []
+                },
+                "sourceRefs": {
+                    "scopeRefs": ["scope-1"],
+                    "acceptanceRefs": [],
+                    "requirementDetailRefs": []
+                },
+                "ownerArtifactRefs": {
+                    "modules": ["module-1"],
+                    "interfaces": []
+                },
+                "verificationHints": ["Exercise dependency-unavailable startup behavior."]
+            }],
+            "nfrs": [{
+                "nfrId": "nfr-availability",
+                "category": "availability",
+                "source": "derived_minimum",
+                "target": "Dependency failure produces a deterministic unavailable state.",
+                "rationale": "Silent startup would expose a broken runtime surface.",
+                "measurement": {
+                    "indicator": "Unavailable state is observable.",
+                    "workloadOrCondition": "Required dependency cannot be reached.",
+                    "evaluationBoundary": "Runtime dependency test."
+                },
+                "sourceRefs": {
+                    "scopeRefs": ["scope-1"],
+                    "acceptanceRefs": [],
+                    "requirementDetailRefs": []
+                },
+                "architectureRefs": {"decisions": ["adr-runtime"], "risks": ["risk-runtime"]},
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []},
+                "verificationStrategy": "Run the dependency-unavailable runtime test."
+            }],
+            "risks": [{
+                "riskId": "risk-runtime",
+                "category": "runtime",
+                "severity": "high",
+                "likelihood": "medium",
+                "impact": "The runtime surface accepts traffic while unusable.",
+                "mitigation": "Fail startup or expose a deterministic unavailable state.",
+                "ownerArtifactRefs": {
+                    "modules": ["module-1"],
+                    "interfaces": [],
+                    "decisions": ["adr-runtime"],
+                    "nfrs": ["nfr-availability"]
+                },
+                "verificationHints": ["Verify the declared unavailable behavior."]
+            }]
+        })
+    }
+
+    #[test]
+    fn architecture_quality_accepts_availability_with_complete_ownership() {
+        let mut issues = Vec::new();
+        validate_architecture_quality(
+            Some(&complete_architecture_quality()),
+            &json!({
+                "scopeRefs": ["scope-1"],
+                "acceptanceRefs": [],
+                "requirementDetailIds": [],
+                "moduleRefs": ["module-1"],
+                "interfaceRefs": []
+            }),
+            &mut issues,
+        );
+        assert!(
+            issues.is_empty(),
+            "complete architecture quality: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn architecture_quality_reports_duplicate_ids_and_empty_tradeoffs_together() {
+        let mut quality = complete_architecture_quality();
+        let duplicate = quality["decisions"][0].clone();
+        quality["decisions"].as_array_mut().unwrap().push(duplicate);
+        quality["decisions"][0]["alternativesConsidered"][0]["tradeoff"] = json!("");
+        quality["decisions"][0]["consequences"]["negative"] = json!([]);
+        let mut issues = Vec::new();
+        validate_architecture_quality(
+            Some(&quality),
+            &json!({
+                "scopeRefs": ["scope-1"],
+                "acceptanceRefs": [],
+                "requirementDetailIds": [],
+                "moduleRefs": ["module-1"],
+                "interfaceRefs": []
+            }),
+            &mut issues,
+        );
+        let codes = issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("ARCHITECTURE_QUALITY_ID_DUPLICATE"));
+        assert!(codes.contains("ARCHITECTURE_QUALITY_INCOMPLETE"));
+    }
+
+    #[test]
+    fn confirmed_nfr_requires_acceptance_or_requirement_detail_source() {
+        let mut quality = complete_architecture_quality();
+        quality["nfrs"][0]["source"] = json!("confirmed_requirement");
+        let mut issues = Vec::new();
+        validate_architecture_quality(
+            Some(&quality),
+            &json!({
+                "scopeRefs": ["scope-1"],
+                "acceptanceRefs": [],
+                "requirementDetailIds": [],
+                "moduleRefs": ["module-1"],
+                "interfaceRefs": []
+            }),
+            &mut issues,
+        );
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "ARCHITECTURE_QUALITY_CONFIRMED_SOURCE_INVALID"));
+    }
+
+    #[test]
+    fn coverage_quality_must_complete_the_mcp_candidate_plan_exactly() {
+        let content = json!({"architectureQuality": complete_architecture_quality()});
+        let plan = json!({
+            "decisionCandidates": [{
+                "decisionId": "adr-runtime",
+                "category": "runtime_boundary",
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "nfrCandidates": [{
+                "nfrId": "nfr-availability",
+                "category": "availability",
+                "source": "derived_minimum",
+                "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                "decisionRefs": ["adr-runtime"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "riskCandidates": [{
+                "riskId": "risk-runtime",
+                "category": "runtime",
+                "decisionRefs": ["adr-runtime"],
+                "nfrRefs": ["nfr-availability"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }]
+        });
+        assert!(validate_architecture_quality_candidate_plan(&content, Some(&plan)).is_empty());
+
+        let incomplete = json!({
+            "architectureQuality": {
+                "decisions": content["architectureQuality"]["decisions"].clone(),
+                "nfrs": content["architectureQuality"]["nfrs"].clone(),
+                "risks": []
+            }
+        });
+        assert!(
+            validate_architecture_quality_candidate_plan(&incomplete, Some(&plan))
+                .iter()
+                .any(|issue| issue.code == "ARCHITECTURE_QUALITY_CANDIDATE_COVERAGE_INVALID")
+        );
+
+        let mut changed_source = content;
+        changed_source["architectureQuality"]["nfrs"][0]["sourceRefs"]["scopeRefs"] = json!([]);
+        assert!(
+            validate_architecture_quality_candidate_plan(&changed_source, Some(&plan))
+                .iter()
+                .any(|issue| issue.code == "ARCHITECTURE_QUALITY_CANDIDATE_SOURCE_INVALID")
+        );
+
+        let mut changed_link = json!({"architectureQuality": complete_architecture_quality()});
+        changed_link["architectureQuality"]["nfrs"][0]["architectureRefs"]["risks"] = json!([]);
+        assert!(
+            validate_architecture_quality_candidate_plan(&changed_link, Some(&plan))
+                .iter()
+                .any(|issue| issue.code == "ARCHITECTURE_QUALITY_CANDIDATE_LINK_INVALID")
+        );
+    }
+
+    #[test]
+    fn coverage_normalization_restores_mcp_owned_candidate_fields() {
+        let mut content = json!({"architectureQuality": complete_architecture_quality()});
+        content["architectureQuality"]["decisions"][0]["decisionId"] = json!("agent-id");
+        content["architectureQuality"]["decisions"][0]["category"] = json!("agent-category");
+        content["architectureQuality"]["nfrs"][0]["sourceRefs"] = json!({});
+        content["architectureQuality"]["nfrs"][0]["architectureRefs"] = json!({});
+        content["architectureQuality"]["risks"][0]["ownerArtifactRefs"] = json!({});
+        let semantic_title = content["architectureQuality"]["decisions"][0]["title"].clone();
+        let plan = json!({
+            "decisionCandidates": [{
+                "decisionId": "adr-runtime",
+                "category": "runtime_boundary",
+                "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "nfrCandidates": [{
+                "nfrId": "nfr-availability",
+                "category": "availability",
+                "source": "derived_minimum",
+                "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                "decisionRefs": ["adr-runtime"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "riskCandidates": [{
+                "riskId": "risk-runtime",
+                "category": "runtime",
+                "decisionRefs": ["adr-runtime"],
+                "nfrRefs": ["nfr-availability"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }]
+        });
+
+        normalize_architecture_quality_candidate_fields(Some(&mut content), Some(&plan));
+
+        assert_eq!(
+            content["architectureQuality"]["decisions"][0]["decisionId"],
+            json!("adr-runtime")
+        );
+        assert_eq!(
+            content["architectureQuality"]["decisions"][0]["title"],
+            semantic_title
+        );
+        assert_eq!(
+            content["architectureQuality"]["nfrs"][0]["architectureRefs"],
+            json!({"decisions": ["adr-runtime"], "risks": ["risk-runtime"]})
+        );
+        assert_eq!(
+            content["architectureQuality"]["risks"][0]["ownerArtifactRefs"],
+            json!({
+                "modules": ["module-1"],
+                "interfaces": [],
+                "decisions": ["adr-runtime"],
+                "nfrs": ["nfr-availability"]
+            })
+        );
+        assert!(validate_architecture_quality_candidate_plan(&content, Some(&plan)).is_empty());
+    }
+
     #[test]
     fn frontend_submit_normalization_writes_surface_decision_contract() {
         let ui_quality_seed = build_ui_quality_seed(None, None);
@@ -2346,10 +5110,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("collection_workbench"),
             "uiSurfaceDecisionContract pattern must be derived from surfaceDecisionCandidate"
-        );
-        assert!(
-            frontend.get("uiQualityContract").is_none(),
-            "submit normalization must not persist legacy uiQualityContract"
         );
         let issues = validate_ui_surface_decision_contract(frontend);
         assert!(
@@ -2427,6 +5187,7 @@ fn update_output_contract_ref(
     request_id: &str,
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
+    field_policies: &std::collections::BTreeMap<String, delivery_core::AgentFieldPolicy>,
 ) -> Result<(), state::store::StateError> {
     let output_contract_file = output_contract_ref_file(project_root, request_id)?;
     let mut output_contract = state::store::read_json_value(&output_contract_file)?;
@@ -2440,6 +5201,9 @@ fn update_output_contract_ref(
     output_contract["schemaProjection"]["requiredContentKeys"] =
         serde_json::to_value(crate::request::required_content_keys(next_section))
             .map_err(state::store::StateError::Json)?;
+    output_contract["schemaProjection"]["requiredTopLevelFields"] =
+        json!(["section", "status", "content"]);
+    delivery_core::finalize_output_contract(&mut output_contract, field_policies);
     state::store::write_json_atomic(&output_contract_file, &output_contract)
 }
 
@@ -2509,28 +5273,7 @@ fn assemble_architecture_contract(
         .ok_or_else(|| {
             state::store::StateError::StateCorrupted("missing coverage section".to_string())
         })?;
-    let source = ArchitectureArtifactSource {
-        planning_generation_contract_id: foundation
-            .content
-            .pointer("/source/planningGenerationContractId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        technical_baseline_id: foundation
-            .content
-            .pointer("/source/technicalBaselineId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        brainstorm_contract_ref: source_refs
-            .get("brainstormContractRef")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        repository_context_ref: source_refs
-            .get("repositoryContextRef")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    };
+    let source = canonical_architecture_source(root, source_refs)?;
     let acceptance_matrix: Vec<AcceptanceMatrixEntry> = serde_json::from_value(
         coverage
             .content
@@ -2618,6 +5361,44 @@ fn assemble_architecture_contract(
         handoff,
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
+    })
+}
+
+fn canonical_architecture_source(
+    project_root: &Path,
+    source_refs: &Value,
+) -> Result<ArchitectureArtifactSource, state::store::StateError> {
+    let planning_ref = source_refs
+        .get("planningContractRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "Architecture source requires the accepted planning contract ref.".to_string(),
+            )
+        })?;
+    let baseline_ref = source_refs
+        .get("technicalBaselineRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "Architecture source requires the accepted Technical Baseline ref.".to_string(),
+            )
+        })?;
+    let planning: contracts::PlanningGenerationContract =
+        read_project_json(project_root, planning_ref)?;
+    let baseline: contracts::TechnicalBaselineContract =
+        read_project_json(project_root, baseline_ref)?;
+    Ok(ArchitectureArtifactSource {
+        planning_generation_contract_id: planning.planning_contract_id,
+        technical_baseline_id: baseline.technical_baseline_id,
+        brainstorm_contract_ref: source_refs
+            .get("brainstormContractRef")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        repository_context_ref: source_refs
+            .get("repositoryContextRef")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -2958,6 +5739,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -2968,6 +5750,7 @@ fn repairable(
         resubmit_tool: mode.resubmit_tool().to_string(),
         fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(mode.resubmit_tool()),
     })
 }
 

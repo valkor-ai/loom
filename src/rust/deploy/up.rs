@@ -709,8 +709,17 @@ fn compose_logs(compose_file: &Path) -> Option<String> {
 fn is_runtime_build_command_failure(spec: &contracts::DeploymentSpec, text: &str) -> bool {
     let build_command = spec
         .runtime_contract
-        .build_command
+        .commands
+        .deployment
+        .build
         .as_deref()
+        .or_else(|| {
+            spec.source_model
+                .services
+                .iter()
+                .find(|service| service.service_id == spec.source_model.primary_service_id)
+                .and_then(|service| service.build_command.as_deref())
+        })
         .unwrap_or_default()
         .to_ascii_lowercase();
     let build_command_seen = !build_command.is_empty() && text.contains(&build_command);
@@ -741,13 +750,19 @@ fn classify_startup_log_failure(
     if text.trim().is_empty() {
         return None;
     }
-    let start_command = spec.runtime_contract.start_command.as_deref().or_else(|| {
-        spec.source_model
-            .services
-            .iter()
-            .find(|service| service.service_id == spec.source_model.primary_service_id)
-            .and_then(|service| service.start_command.as_deref())
-    });
+    let start_command = spec
+        .runtime_contract
+        .commands
+        .deployment
+        .start
+        .as_deref()
+        .or_else(|| {
+            spec.source_model
+                .services
+                .iter()
+                .find(|service| service.service_id == spec.source_model.primary_service_id)
+                .and_then(|service| service.start_command.as_deref())
+        });
     let script_name = start_command.and_then(package_script_name_from_command);
     let missing_script = missing_script_name(&text);
     if start_command.is_some()

@@ -1,33 +1,75 @@
-# Flutter Bloc Quality
+# Flutter Shared State With Bloc And Cubit
 
-This file applies Bloc/Cubit discipline to task-owned blocs, cubits, immutable states, events, listeners, providers, and event-driven Flutter workflows.
+Apply Bloc/Cubit only when TechnicalBaseline selects Bloc and the task owns shared client state. Do not introduce it for local widget state or into a Riverpod-only architecture.
 
-## When To Use
+## Cubit Or Bloc
 
-- The task creates or changes Bloc/Cubit state management, event-to-state transitions, feature workflow state, auth/forms/wizards, BlocProvider boundaries, BlocBuilder/Listener/Consumer usage, or bloc tests.
-- Use Bloc when the repository already uses it or when the task explicitly requires event-driven state with predictable transitions.
-- Do not introduce Bloc for tiny local widget state or into a Riverpod-only codebase unless the accepted architecture calls for it.
+Use Cubit for command-to-state workflows whose event source and concurrency are straightforward. Use Bloc when explicit event semantics, event transformers/concurrency, multiple producers, or auditable transition modeling add real value.
 
-## Implementation Focus
+Events describe user/system facts and commands precisely; states are immutable UI workflow snapshots. Avoid `UpdateEverything`, one state per field, and event payloads that omit the target and depend on a mutable selected record.
 
-- Keep events focused on user/system inputs and states focused on immutable UI workflow snapshots. Avoid vague events such as `UpdateEverything`.
-- Use Cubit for simple command/state workflows and Bloc for event-driven workflows that need explicit event semantics, concurrency, or auditability.
-- Keep states immutable with value equality, copy methods, Freezed, Equatable, or the repository's existing pattern.
-- Keep business logic inside blocs/cubits or use cases, not inside widgets. Keep UI-only formatting and layout outside blocs.
-- Use `BlocBuilder` for rendering, `BlocListener` for side effects, and `BlocConsumer` only when a widget truly owns both.
-- Use `buildWhen` and `listenWhen` to avoid unnecessary rebuilds or duplicate side effects when state objects carry multiple fields.
-- Do not use `context.watch` inside callbacks. Dispatch events or call cubit commands with `context.read`.
-- Keep bloc provisioning at the narrowest stable boundary: route, feature shell, tab, or app root according to state lifetime.
-- Keep navigation and snack/dialog side effects in listeners or route layers; blocs should emit intent/state, not hold `BuildContext`.
+```dart
+sealed class ApprovalEvent {
+  const ApprovalEvent();
+}
 
-## Verification Focus
+final class ApprovalRequested extends ApprovalEvent {
+  const ApprovalRequested(this.orderId, this.expectedVersion);
+  final String orderId;
+  final int expectedVersion;
+}
+```
 
-- Test blocs/cubits with explicit initial state, event/command, expected emitted states, and failure paths.
-- Verify form, auth, wizard, mutation, and destructive flows emit disabled/submitting/success/failure states in the right order.
-- Verify listeners fire once for side effects such as navigation, snack bars, dialogs, or analytics.
-- Verify widgets dispatch the right event for the displayed record and render each relevant state.
-- Run `flutter analyze`, bloc tests, and widget tests around BlocProvider/Builder/Listener integration.
+Use the repository's equality/immutable generation convention (Equatable, Freezed, sealed records/classes). Replace collections/models instead of mutating them in place.
 
-## Evidence Focus
+## State Model
 
-- In the evidence summary, name the Bloc decision: Cubit-vs-Bloc boundary, event contract, immutable state model, provider lifetime, buildWhen/listenWhen, side-effect listener, or bloc-test proof.
+Represent initial/loading/empty/ready/refreshing/submitting/success and typed validation/conflict/forbidden/offline/unavailable failure where relevant. Preserve usable previous data during refresh/mutation only when accepted.
+
+Keep domain/persistence entities out of widget state when a stable view model is needed. Do not store `BuildContext`, widgets, controllers, snack bars, or navigation objects in state/bloc.
+
+State transitions should clear stale failure/pending fields at the correct time and reconcile server-returned ID/version/status after writes.
+
+## Event Concurrency And Async Work
+
+Choose event transformers from product behavior: restartable/latest for replaceable searches, droppable for duplicate submit prevention, sequential for ordered writes, concurrent for independent bounded work.
+
+Do not start required side effects without awaiting/tracking them. Handle repository errors into typed states and keep the bloc event stream alive. Propagate cancellation where supported.
+
+Keep external/network/storage operations in injected repositories/use cases. One bloc/cubit operation owns ordering and partial-failure behavior; widgets should not coordinate a second copy.
+
+## Provisioning And Lifetime
+
+Provide blocs at the narrowest stable app/feature/route/tab boundary matching state lifetime. Use `BlocProvider.value` only for an existing instance whose disposal remains owned elsewhere; creating an instance with `.value` can leak it.
+
+Do not create a bloc in `build()` or repeatedly in list rows. Close manually owned blocs/streams and avoid global singleton feature blocs without an app-wide lifecycle requirement.
+
+## Widget Integration And Side Effects
+
+Use `BlocBuilder` for rendering, `BlocListener` for one-shot navigation/dialog/snack/analytics, and `BlocConsumer` only when the same subtree genuinely owns both.
+
+Use `context.watch`/selectors for rendering and `context.read` in callbacks. `buildWhen`/`listenWhen` may narrow work but cannot repair a monolithic state model.
+
+Listeners must fire once on meaningful transitions. Navigation and dialogs belong in listeners/route orchestration, never reducers/events/state or during build.
+
+## Verification
+
+- Test initial state, commands/events, exact emitted sequence, and repository interactions.
+- Cover load/empty/refresh, validation/conflict/forbidden/offline, submit success/failure, duplicate prevention, and ordered/concurrent behavior owned by the task.
+- Verify immutable updates and returned record/version reconciliation.
+- Test provider lifetime/disposal and no duplicate bloc instances after route/tab rebuild.
+- Verify builders render task-owned states and listeners fire once for the displayed target.
+- Analyze/build generated immutable state code when applicable.
+
+## Delivery Evidence
+
+Identify the Cubit-vs-Bloc choice, event/command, state sequence, concurrency, and listener assertion proving it. A single `blocTest` happy path or widget provider presence cannot prove target identity, error recovery, lifetime, concurrency, or side-effect deduplication.
+
+## Unsafe Defaults
+
+- Bloc loaded/introduced without selected stack and shared-state ownership.
+- Bloc chosen for trivial local state solely for uniformity.
+- Vague events reading mutable selected state later.
+- Mutable state collections or `BuildContext` held in bloc/state.
+- Bloc instances created during build or leaked through `BlocProvider.value`.
+- Navigation/snack/dialog actions emitted during build or duplicated by listeners.

@@ -15,12 +15,12 @@ When this scenario is selected, map scenario rules into the task brief this way:
 
 | Brief area | Admin dashboard extraction |
 | --- | --- |
-| `layoutContract` | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
-| `informationContract` | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
-| `actionContract` | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
-| `stateContract` | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
-| `visualContract` | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
-| `contentBoundary` | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
+| Layout | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
+| Information | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
+| Actions | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
+| States | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
+| Visual system | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
+| Content boundary | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
 
 ## Required Patterns
 
@@ -220,3 +220,32 @@ On mobile, do not simply shrink this table. Use record cards or a drill-down lis
 | `admin.shell.work_surface` | First viewport contains compact app identity, navigation/current context, a real table/list/form/detail/action region, and primary business action access. | Page opens with hero copy, large intro, footer-like explanation, decorative metrics, or no immediately usable work surface. |
 | `admin.topbar.context_actions` | Topbar/header carries operational context such as current page, search/filter, user/workspace, or relevant command. | Header is filler copy, product explanation, or detached from the active task. |
 | `admin.list.filter_table_detail` | Record screens preserve list context across filters, pagination, selection, detail, and mutation feedback. | Selection or mutation loses context, table lacks state handling, or every action is isolated in generic modals without row/detail readback. |
+
+## Filter, Selection, And Mutation Continuity
+
+Treat list, detail, and mutation as one workflow. A filter or selected record is
+part of the user's working context and must survive the next operation.
+
+```text
+filter state -> result list -> selected record -> detail/action -> updated row/detail
+```
+
+- Keep filter, sort, page, and search state in the route or the screen state that owns the list; do not reset it when a detail drawer opens.
+- Identify the selected record in the URL, a stable key, or an equivalent recoverable state. A browser refresh must not leave a blank detail region.
+- After a successful mutation, update the affected row and detail view from the returned record or an explicit refetch. A toast alone is not readback.
+- After an error, preserve the record, input, and list context. Explain whether the user can correct the request, retry it, or contact an administrator.
+- When selection becomes invalid because of a filter or deletion, clear only the invalid selection and keep the remaining query context.
+
+```tsx
+const nextView = {
+  query: currentQuery,
+  selectedId: updatedRecord.id,
+  records: records.map((record) =>
+    record.id === updatedRecord.id ? updatedRecord : record,
+  ),
+};
+```
+
+Do not implement the same record as independent stale copies in a table, drawer,
+and modal. Share the record identity and make the affected surfaces reconcile
+after each action.

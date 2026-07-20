@@ -62,3 +62,26 @@ navigation -> back/cancel/restore context
 - Tiny table cells, cramped toolbars, and desktop sidebars.
 - Ignoring platform back behavior or safe areas.
 - Hiding critical action state in transient toast only.
+
+## Platform Resolution
+
+Resolve platform behavior before styling the screen. The same product action can
+need different navigation, permission, keyboard, and feedback behavior on iOS,
+Android, or a cross-platform runtime.
+
+| Concern | Required decision |
+| --- | --- |
+| Navigation | Platform back gesture/button, deep link, tab/stack ownership, and restoration after relaunch. |
+| Safe area | Insets for status bars, notches, home indicators, sheets, and keyboard. |
+| Input | Keyboard type, focus order, scroll-to-focused-field, autofill, and dismissal behavior. |
+| Permission | Pre-permission explanation, denied state, retry/settings route, and feature fallback. |
+| Feedback | Native or platform-consistent pending, success, error, and destructive confirmation behavior. |
+| Touch | Minimum target size, gesture conflict resolution, and reachable primary action. |
+
+```text
+screen shell -> platform header/back -> task content -> validation/permission
+-> bottom or inline action -> success route or recoverable failure
+```
+
+Do not hide a platform limitation in a generic error. Explain what the user can
+do next and keep already entered data when recovery is possible.

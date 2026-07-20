@@ -1,57 +1,101 @@
-# Loom Review Finding Quality
+# Actionable Review Findings
 
-Use this reference when writing review findings. A useful finding tells the next Loom step exactly what failed, why it matters, where the evidence is, and which repair owner should fix it.
+Use this reference when converting verified observations into concise findings. Exact schema, enum values, references, and next actions are supplied by the active review request; this file owns finding quality.
 
 ## Finding Content
 
-Each finding should include:
+Each finding should make five facts clear:
 
-- A short summary that names the defect, not a generic quality label.
-- Concrete evidence from a changed file, diff ref, task result, verification result, or review matrix.
-- The affected task, group, acceptance ref, or requirement detail when available.
-- The user or system impact if the defect ships.
-- The smallest repair owner that can satisfy the current contract.
+1. What concrete behavior, contract, safety property, or evidence is wrong.
+2. Where it occurs in a changed file or other narrow inspected source.
+3. Under which input/state/lifecycle it manifests.
+4. What user/system impact follows.
+5. What smallest responsible correction would close it.
 
-## Severity
+Write the title as the defect, not a category label: “Concurrent retries can create duplicate charges,” not “Concurrency issue.”
 
-| Severity | Use When |
-|---|---|
-| critical | Security bypass, data loss, corruption, crash on primary path, or impossible current-phase delivery. |
-| major | Accepted behavior missing, important negative path broken, integration failure, weak evidence for must-level scope, or serious maintainability risk. |
-| minor | Non-blocking quality issue, localized maintainability issue, or small verification gap with low product risk. |
-| note | Review limitation, observation, or positive/neutral evidence that should not block delivery. |
+Lead with impact and evidence. Keep background only when it is needed to understand why the code is wrong.
 
-## Category Selection
+## Evidence And Location
 
-- Use functional_correctness when implemented behavior is wrong or incomplete.
-- Use acceptance_not_satisfied when the acceptance ref itself is not met.
-- Use evidence_insufficient when behavior may be correct but the submitted evidence cannot prove it.
-- Use test_gap when the missing evidence is specifically an automated or runtime check.
-- Use architecture_design_gap, api_contract, code_quality, or frontend_experience when the defect belongs to that quality axis.
-- Use task_scope_mismatch for current-phase scope creep or future-phase implementation.
-- Use environment_or_dependency when review or execution is blocked by runtime environment rather than product code.
+Cite the narrowest changed location that demonstrates the defect. Include related consumer/test/config locations only when they establish the mismatch.
 
-## Evidence Refs
+Explain the causal path from code to impact. A linter warning, failed test, matrix signal, or suspicious line is evidence to investigate, not always the root defect.
 
-- readRefs prove what the reviewer inspected.
-- evidenceRefs point at task results, verification results, diff refs, changed files, or manual notes.
-- A blocking finding should avoid empty readRefs and should cite a specific location when source context is available.
-- Do not cite broad objects when a narrower task, file, diff, or verification ref is available.
+Do not cite an entire module, broad summary object, or old snapshot when a current file/function/check is available.
+
+When the defect is omission, anchor to the changed owner where behavior should exist and state the missing branch/contract.
+
+## Severity By Impact
+
+Choose severity from realistic impact and reach:
+
+- Highest: exploitable authorization/security, data loss/corruption, irreversible external effect, crash/unavailable primary path, or impossible required delivery.
+- High: accepted behavior missing/wrong, serious integration/concurrency/reliability defect, or evidence absent for a must-level high-risk behavior.
+- Low: localized non-blocking maintainability/readability/performance risk with a plausible future or secondary impact.
+- Informational: limitation, question, neutral observation, or positive context that does not require code repair.
+
+Do not inflate severity to force prioritization. Do not downgrade a deterministic product defect because a workaround exists.
+
+## Category And Root Cause
+
+Classify by the root defect rather than the visible symptom. A UI “Not Found” caused by a rewritten API path is an integration/API routing defect; a missing test is secondary if source already proves the bug.
+
+Combine symptoms that share one repair. Split findings that have independent causes, owners, or fixes.
+
+Separate:
+
+- missing/wrong implementation,
+- accepted behavior not satisfied,
+- insufficient evidence,
+- environment/review limitation,
+- architecture/planning ownership gap,
+- current scope mismatch.
 
 ## Actionability
 
-Good findings answer these questions:
+Describe the invariant or behavior the repair must establish, not a speculative rewrite. Mention an implementation technique only when it is necessary or the safe correction is unambiguous.
 
-- What exact behavior or evidence failed?
-- Which accepted contract item is affected?
-- What is the smallest repair?
-- Which repair owner should handle it?
-- What would be enough evidence to approve after repair?
+Examples should be short and adapted to the repository. Do not paste generic replacement code that ignores local framework, error, transaction, or test conventions.
+
+A finding should let the repair owner answer: what to change, what not to expand, and what evidence will prove closure.
+
+## Questions And Ambiguity
+
+Ask a question only when the accepted behavior is genuinely unresolved. First inspect requirements, surrounding code, analogous features, types, tests, and configuration.
+
+State the conflicting interpretations and why the choice changes implementation. Do not phrase a known defect as a question to soften it.
+
+## Non-Blocking Notes
+
+Use notes sparingly for actual limitations, useful follow-up, or a pattern worth preserving. Do not require speculative refactors, unmeasured optimization, stylistic preferences, or future scope.
+
+Positive feedback should be specific and brief; it must not bury findings or become a required quota.
+
+## Repair Ownership
+
+Identify the smallest boundary able to correct the root cause: current implementation, missing verification, plan/task ownership, architecture/interface contract, environment capability, or user-owned decision.
+
+Do not send clear code defects to human review, and do not ask implementation repair to invent an unresolved product decision.
+
+## Final Consistency
+
+Before submitting findings, verify:
+
+- Every blocking finding has current evidence and concrete impact.
+- Severity matches impact and overall decision.
+- Location belongs to the reviewed change or explains a direct changed interaction.
+- Duplicate root causes are consolidated.
+- Suggested correction does not expand scope unnecessarily.
+- Evidence gaps are not mislabeled as confirmed product defects, or vice versa.
+- No finding depends only on personal preference.
 
 ## Anti-Patterns
 
-- "Needs more tests" without naming the unproved behavior.
-- "Code is messy" without a concrete maintainability or correctness impact.
-- Repeating review signals as findings without explaining the real defect.
-- Bundling unrelated defects into one large finding.
-- Using human review to avoid naming a clear repair owner.
+- “Needs more tests” without naming unproved behavior and assertion.
+- “Code is messy” without a concrete risk.
+- Repeating automated output without root-cause analysis.
+- Writing a markdown report template instead of the required structured result.
+- Bundling unrelated defects into one large item.
+- Empty praise, apology, or agreement language that adds no technical information.
+- Using human review to avoid assigning a clear repair owner.

@@ -1,34 +1,88 @@
-# Angular Core Quality
+# Angular Application Implementation
 
-This file applies Angular 17+ implementation discipline to task-owned application shells, screens, standalone components, services, and feature modules.
+Implement the accepted frontend experience within the repository's Angular version, application bootstrap, design system, API contract, and feature boundaries. Angular 17+ patterns are available only when the selected project version supports them.
 
-## When To Use
+## Application Composition
 
-- The task creates or changes Angular application structure, standalone components, feature screens, forms, lists, services, or UI orchestration.
-- Use this for Angular-specific component boundaries, signal usage, dependency injection, change detection, control flow syntax, and client-visible workflow behavior.
-- If the task only changes route configuration, RxJS stream semantics, NgRx state, or tests, pair this file with the focused Angular reference for that topic.
+Preserve standalone versus NgModule architecture. New standalone features should use `ApplicationConfig`, `bootstrapApplication`, route/provider functions, and explicit component imports; an established NgModule application should not be partially rewritten unless migration is task-owned.
 
-## Implementation Focus
+Register application-wide providers once in the composition root. Keep feature services/state/routes close to their owning capability and avoid `providedIn: 'root'` for stateful providers that should have route/feature lifetime.
 
-- Preserve the repository's Angular version, CLI conventions, folder layout, styling system, component library, and test runner before adding new patterns.
-- Prefer standalone components for new Angular work unless the repository is intentionally NgModule-based and the task must remain compatible with that module boundary.
-- Use `ChangeDetectionStrategy.OnPush` for task-owned components that render business data, lists, forms, or status panels. Keep inputs immutable enough for OnPush to be meaningful.
-- Use signals for local UI state, derived labels, eligibility flags, and small view models. Use `computed()` for derived state rather than recalculating values in templates or event handlers.
-- Use signal `input()`, `input.required()`, `output<T>()`, and `model<T>()` when the repository is already on a compatible Angular version. Keep older `@Input()` / `@Output()` style only when existing code or Angular version requires it.
-- Keep container/smart components responsible for data loading, navigation decisions, and business actions. Keep presentational components focused on inputs, outputs, rendering, and accessibility.
-- Use modern control flow (`@if`, `@for`, `@switch`) in new compatible code. Use stable domain identifiers in `@for ... track`; do not track mutable array indexes for dynamic rows.
-- Use `inject()` consistently in new services, guards, resolvers, effects, and components when existing Angular style supports it. Do not create constructor injection churn in files that intentionally use constructors.
-- Keep business-blocking responses explicit in the UI. Do not collapse permission denial, validation failure, duplicate record, stale state, and transport failure into the same generic message.
-- Keep product UI free of delivery notes, runtime commands, framework explanations, verification instructions, and implementation progress text.
+Use injection tokens for configurable ports and browser/runtime abstractions. `inject()` and constructor injection are both valid; follow repository style and use `runInInjectionContext` only when a function genuinely needs an injection context.
 
-## Verification Focus
+## State Boundary
 
-- Run the repository's Angular build, typecheck, lint, and focused component/service tests when available.
-- Verify loading, empty, ready, validation error, business-blocking error, submitting, success, and disabled states touched by the task.
-- For lists and tables, verify stable tracking, action targeting, sorting/filtering, empty state, and error state.
-- For forms, verify editable draft separation from persisted records, field-level validation, submit disablement, backend error display, and resubmit behavior.
-- For OnPush and signal work, verify the view updates after task-owned state changes without forcing unrelated refreshes or brittle manual change detection.
+Choose state by lifetime and sharing needs:
 
-## Evidence Focus
+| State | Suitable owner |
+|---|---|
+| Local visual/edit state | component signals/form model |
+| Derived local state | `computed()` |
+| Reusable feature operation | service/facade |
+| Shared cross-surface lifecycle | selected store such as NgRx |
+| URL-shareable filters/selection | router params/query params |
+| Server source of truth | API service/cache policy, not duplicated client truth |
 
-- In the evidence summary, name the Angular decision: standalone boundary, signal state model, OnPush rendering, container/presentational split, control-flow tracking, DI style, or explicit business state handling.
+Signals are synchronous state primitives. Use `signal`, `computed`, and controlled `effect` for local/derived state; avoid effects that copy one signal into another, issue uncontrolled writes, or hide dependency cycles.
+
+```typescript
+readonly records = signal<readonly RecordSummary[]>([]);
+readonly selectedId = signal<string | null>(null);
+readonly selected = computed(() =>
+  this.records().find(record => record.id === this.selectedId()) ?? null,
+);
+```
+
+Keep persisted records immutable enough for OnPush/signal equality to be meaningful. Maintain a separate editable draft and reconcile it after accepted save/readback.
+
+## API And Error Boundary
+
+Centralize HTTP transport in typed services/adapters. Preserve accepted method, path, payload, status, error, auth, pagination, and same-origin/base URL rules. Do not duplicate endpoint strings across components.
+
+Use interceptors for cross-cutting transport concerns such as credentials, correlation, or error normalization only when they apply broadly. Business-specific error mapping belongs in the feature service/facade.
+
+Distinguish validation, conflict/stale state, permission denial, not found, unavailable dependency, and transport failure in UI state. Do not convert every failure to an empty list or generic toast.
+
+## Rendering And Change Detection
+
+Use `ChangeDetectionStrategy.OnPush` for task-owned business components where compatible. Update signals/immutable inputs through explicit events and avoid manual `detectChanges`/`markForCheck` as a routine state mechanism.
+
+Use `@if`, `@for`, `@switch`, and deferred views only on compatible Angular versions. Track dynamic collections by stable domain identity, never mutable array index. `@defer` needs loading, placeholder, error, and triggering behavior that does not hide primary work.
+
+Keep expensive transformation out of templates. Use computed view models, pure pipes, selectors, or bounded service projections. Do not call APIs or mutate state from template getters.
+
+## Forms And Workflow State
+
+Use reactive forms for business workflows with validation, nested structures, dynamic rows, and explicit submit lifecycle. Typed forms should model nullability and disabled controls correctly; `form.value` may omit disabled fields while `getRawValue()` includes them.
+
+Client validation improves feedback but does not replace server rules. Map backend field/global errors without discarding the user's draft, and clear stale errors when relevant fields change or a resubmit succeeds.
+
+Represent loading, empty, ready, submitting, success, disabled, and business-blocking states at the owning region/control. Prevent duplicate writes while preserving retry/recovery.
+
+## Security And Content
+
+Treat all browser code/config as public. Never embed secrets or rely on route guards/UI visibility as server authorization. Sanitize or avoid untrusted HTML; use Angular's binding model and do not bypass security with `DomSanitizer` without a reviewed source contract.
+
+Keep product surfaces free of runtime commands, framework explanations, delivery progress, verification instructions, and implementation notes. Use the accepted UIX tokens/components and business language.
+
+## Verification
+
+- Build/typecheck the affected Angular project and compile templates/imports/providers.
+- Exercise task-owned loading, empty, ready, validation, conflict, permission, unavailable, submitting, and success states.
+- Verify immutable updates, stable tracking, draft preservation, and readback reconciliation.
+- Test typed HTTP mapping and exact error/status behavior when API binding changes.
+- Confirm no sensitive configuration or unsafe HTML path was introduced.
+
+## Delivery Evidence
+
+Identify the Angular composition, state, HTTP, form, or rendering decision and the public behavior/assertion proving it. Compilation or a screenshot alone does not prove API mapping, failure recovery, state ownership, or form semantics.
+
+## Unsafe Defaults
+
+- Standalone/NgModule migration mixed into unrelated feature work.
+- Root-scoped mutable feature state by convenience.
+- Effects used to mirror derived signal state.
+- API calls and business error handling inside components.
+- Array index used to track mutable business rows.
+- Manual change detection used to compensate for unclear ownership.
+- Browser environment files treated as secret storage.

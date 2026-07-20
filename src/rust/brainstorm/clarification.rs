@@ -91,11 +91,77 @@ pub fn confirm_block(input: BrainstormConfirmBlockInput) -> LoomMcpActionResult 
     let original_input = input.clone();
     match confirm_block_inner(input) {
         Ok(result) => result,
+        Err(error) if error.code == "BRAINSTORM_REQUEST_READ_REQUIRED" => {
+            missing_request_read_next(&original_input, error)
+        }
         Err(error) if error.code == "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED" => {
             missing_knowledge_context_next(&original_input, error)
         }
         Err(error) => confirmation_failed(error, Some("loom.continue".to_string())),
     }
+}
+
+fn missing_request_read_next(
+    input: &BrainstormConfirmBlockInput,
+    error: ConfirmError,
+) -> LoomMcpActionResult {
+    let inspected = match state::inspect_request_unrecorded(delivery_core::InspectRequestInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+    }) {
+        Ok(inspected) => inspected,
+        Err(inspect_error) => {
+            return confirmation_failed(
+                ConfirmError {
+                    project_root: error.project_root,
+                    code: "BRAINSTORM_REQUEST_READ_CHECK_FAILED".to_string(),
+                    message: inspect_error.to_string(),
+                },
+                Some("loom.continue".to_string()),
+            );
+        }
+    };
+    let required_group_ids = inspected
+        .read_groups
+        .iter()
+        .filter(|group| group.required)
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    let missing_group_ids = state::read_audit::required_groups_not_read(
+        &input.project_root,
+        &input.request_ref,
+        &required_group_ids,
+    );
+    let read_groups = inspected
+        .read_groups
+        .into_iter()
+        .filter(|group| missing_group_ids.contains(&group.group_id))
+        .collect::<Vec<ReadGroupRef>>();
+    let (tool_name, instruction) = if !state::read_audit::request_was_inspected(
+        &input.project_root,
+        &input.request_ref,
+    ) {
+        (
+            "loom.inspectRequest",
+            "Call loom.inspectRequest first, then retry loom.brainstormConfirmBlock with the same requestRef, block, summary, and confirmedData. Do not ask the user to reconfirm.",
+        )
+    } else {
+        (
+            "loom.readFieldGroup",
+            "Read every missing required group, then retry loom.brainstormConfirmBlock with the same requestRef, block, summary, and confirmedData. Do not ask the user to reconfirm.",
+        )
+    };
+    LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult {
+        project_root: error.project_root,
+        stop_allowed: false,
+        agent_instruction: format!("{} {}", error.message, instruction),
+        next: LoomMcpNextAction::RunLoomTool(RunLoomToolNext {
+            tool_name: tool_name.to_string(),
+            request_ref: input.request_ref.clone(),
+            read_groups,
+            retry_tool: "loom.brainstormConfirmBlock".to_string(),
+        }),
+    })
 }
 
 fn missing_knowledge_context_next(
@@ -194,6 +260,44 @@ fn confirm_block_inner(
             project_root,
             code: "BRAINSTORM_CONFIRM_REQUEST_KIND_INVALID".to_string(),
             message: "loom.brainstormConfirmBlock only accepts a Brainstorm clarification block requestRef.".to_string(),
+        });
+    }
+    let inspected_request = state::inspect_request_unrecorded(delivery_core::InspectRequestInput {
+        project_root: project_root.clone(),
+        request_ref: input.request_ref.clone(),
+    })
+    .map_err(|error| ConfirmError {
+        project_root: project_root.clone(),
+        code: "BRAINSTORM_REQUEST_READ_CHECK_FAILED".to_string(),
+        message: error.to_string(),
+    })?;
+    let required_group_ids = inspected_request
+        .read_groups
+        .iter()
+        .filter(|group| group.required)
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    let missing_group_ids = state::read_audit::required_groups_not_read(
+        &project_root,
+        &input.request_ref,
+        &required_group_ids,
+    );
+    if !state::read_audit::request_was_inspected(&project_root, &input.request_ref)
+        || !missing_group_ids.is_empty()
+    {
+        return Err(ConfirmError {
+            project_root,
+            code: "BRAINSTORM_REQUEST_READ_REQUIRED".to_string(),
+            message: format!(
+                "Before confirming {}, the agent must inspect requestRef {} and read every required requestReadPlan group. Missing groups: {}.",
+                block_id(&input.block),
+                input.request_ref,
+                if missing_group_ids.is_empty() {
+                    "none (inspectRequest is missing)".to_string()
+                } else {
+                    missing_group_ids.join(", ")
+                }
+            ),
         });
     }
     let delivery_id = request_index
@@ -477,15 +581,18 @@ fn confirm_block_inner(
             target_phase_id: None,
         });
         let gate_value = to_value(&gate);
-        LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: project_root.clone(),
-            prompt: gate.user_message.clone(),
-            accepted_responses: vec!["reply_in_chat".to_string()],
-            request_ref: Some(stored.request_ref),
-            delivery_id: Some(delivery_id.clone()),
-            phase_id: Some(phase_id.clone()),
-            gate: Some(gate_value),
-        })
+        LoomMcpActionResult::UserGate(
+            LoomMcpUserGateResult::new(
+                project_root.clone(),
+                gate.user_message.clone(),
+                vec!["reply_in_chat".to_string()],
+                Some(stored.request_ref),
+                Some(delivery_id.clone()),
+                Some(phase_id.clone()),
+                Some(gate_value),
+            )
+            .with_brainstorm_knowledge(block_id(&gate.current_block)),
+        )
     };
 
     delivery.updated_at = state::store::now_string();

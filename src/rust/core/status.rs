@@ -4,7 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{OperationLease, RouteAction};
+use crate::{
+    LoomMcpActionResult, LoomMcpRepairableErrorResult, OperationLease, ReadGroupRef, RepairIssue,
+    RouteAction,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -14,6 +17,7 @@ pub enum DeliveryLifecycleStatus {
     Reviewing,
     Repairing,
     Completed,
+    CompletedWithOverride,
     Blocked,
 }
 
@@ -25,6 +29,54 @@ pub struct DeliveryPhaseState {
     pub latest_refs: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_action: Option<RouteAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_repair: Option<PendingRepair>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRepair {
+    pub request_ref: String,
+    pub target_file: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_ids: Vec<String>,
+    pub issues: Vec<RepairIssue>,
+    pub resubmit_tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_groups: Vec<ReadGroupRef>,
+}
+
+impl PendingRepair {
+    pub fn from_result(
+        request_ref: impl Into<String>,
+        result: &LoomMcpRepairableErrorResult,
+    ) -> Self {
+        Self {
+            request_ref: request_ref.into(),
+            target_file: result.target_file.clone(),
+            target_ids: result.target_ids.clone(),
+            issues: result.issues.clone(),
+            resubmit_tool: result.resubmit_tool.clone(),
+            fix_scope: result.fix_scope.clone(),
+            read_groups: result.read_groups.clone(),
+        }
+    }
+
+    pub fn to_result(&self, project_root: impl Into<String>) -> LoomMcpActionResult {
+        LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+            project_root: project_root.into(),
+            stop_allowed: false,
+            target_file: self.target_file.clone(),
+            target_ids: self.target_ids.clone(),
+            issues: self.issues.clone(),
+            resubmit_tool: self.resubmit_tool.clone(),
+            fix_scope: self.fix_scope.clone(),
+            read_groups: self.read_groups.clone(),
+            agent_instruction: crate::repairable_error_agent_instruction(&self.resubmit_tool),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -86,7 +138,7 @@ pub fn apply_delivery_index(status: &mut ProjectStatus, delivery: &DeliveryIndex
         status.deliveries.push(entry);
     }
     match delivery.status {
-        DeliveryLifecycleStatus::Completed => {
+        DeliveryLifecycleStatus::Completed | DeliveryLifecycleStatus::CompletedWithOverride => {
             status.active_delivery_id = None;
             status.last_completed_delivery_id = Some(delivery.delivery_id.clone());
         }

@@ -19,6 +19,15 @@
 - Keep serialization/deserialization types separate from domain types when validation, defaults, versioning, or visibility differ.
 - Let `cargo fmt` and clippy shape code, but do not make broad mechanical rewrites unrelated to the task.
 
+## Boundary Decisions
+
+- Decide ownership and borrowing at the API boundary before using `clone`, `Arc`, or interior mutability. A clone that only satisfies the borrow checker is not an ownership design.
+- Model domain states, identifiers, and constrained values with enums/newtypes. Keep deserialization types separate when external defaults, validation, versioning, or visibility differ from domain invariants.
+- Keep `pub` surface minimal and use `pub(crate)` for intra-crate contracts. Do not widen visibility only to make a private implementation easy to test.
+- Treat `unsafe` as an isolated proof obligation: state the safety invariants, keep the block small, and add the strongest available test or sanitizer/Miri evidence for the risk.
+- Use `unwrap` only in tests or impossible internal invariants with a specific `expect` message. Recoverable input, I/O, parsing, configuration, and task failures belong in typed results.
+- Prefer a straightforward loop when iterator combinators obscure ownership, early returns, mutation, or error context. Idiomatic Rust is clarity plus explicit resource ownership, not maximal chaining.
+
 ## Verification Focus
 
 - Run `cargo test` for the changed crate/workspace or the repository's narrower configured command.

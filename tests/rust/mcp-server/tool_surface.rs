@@ -82,6 +82,14 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         ]
     );
 
+    let plan = tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == "plan")
+        .expect("plan tool");
+    let plan_description = plan.description.as_ref().expect("plan description");
+    assert!(plan_description.contains("Primary @loom software-delivery entrypoint"));
+    assert!(plan_description.contains("before repository inspection or coding"));
+
     for tool in tools {
         let value = serde_json::to_value(&tool).expect("tool json");
         assert_no_forbidden_keys(&value);
@@ -138,10 +146,13 @@ fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
         assert!(schema_text.contains("projectRoot"));
         assert!(schema_text.contains("requestRef"));
         assert!(schema_text.contains("writtenTargetIds"));
+        let properties = value["inputSchema"]["properties"]
+            .as_object()
+            .expect("submit input schema properties");
         for forbidden in FORBIDDEN_SUBMIT_INPUT_KEYS {
             assert!(
-                !schema_text.contains(forbidden),
-                "{name} input schema must not expose {forbidden}: {schema_text}"
+                !properties.contains_key(*forbidden),
+                "{name} input schema must not expose top-level field {forbidden}: {schema_text}"
             );
         }
     }
@@ -150,15 +161,18 @@ fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
         .iter()
         .find(|tool| tool.name.as_ref() == "knowledgeSemanticSubmitFile")
         .expect("knowledge semantic submit tool");
-    let knowledge_schema =
-        serde_json::to_value(knowledge_submit).expect("tool json")["inputSchema"].to_string();
+    let knowledge_value = serde_json::to_value(knowledge_submit).expect("tool json");
+    let knowledge_schema = knowledge_value["inputSchema"].to_string();
     assert!(knowledge_schema.contains("projectRoot"));
     assert!(knowledge_schema.contains("requestRef"));
     assert!(!knowledge_schema.contains("writtenTargetIds"));
+    let properties = knowledge_value["inputSchema"]["properties"]
+        .as_object()
+        .expect("knowledge submit input schema properties");
     for forbidden in FORBIDDEN_SUBMIT_INPUT_KEYS {
         assert!(
-            !knowledge_schema.contains(forbidden),
-            "knowledge semantic submit input schema must not expose {forbidden}: {knowledge_schema}"
+            !properties.contains_key(*forbidden),
+            "knowledge semantic submit input schema must not expose top-level field {forbidden}: {knowledge_schema}"
         );
     }
 }

@@ -625,14 +625,11 @@ fn derive_profile(
         return None;
     }
     let requirement = task.frontend_experience_requirement.as_ref()?;
-    let ownership = requirement
-        .get("uiSurfaceOwnership")
-        .unwrap_or(&Value::Null);
     let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
-    let region_refs = string_array(ownership, "regionIdsInScope");
-    let action_refs = string_array(ownership, "actionIdsInScope");
-    let state_refs = string_array(ownership, "stateKindsInScope");
-    let quality_rule_refs = string_array(ownership, "qualityRuleIdsInScope");
+    let region_refs = object_id_array(scope, "regionsInScope", "regionId");
+    let action_refs = object_id_array(scope, "actionsInContract", "actionId");
+    let state_refs = object_id_array(scope, "statesInContract", "state");
+    let quality_rule_refs = object_id_array(scope, "qualityRulesInScope", "ruleId");
     let surface_refs = string_array(scope, "surfacesInScope");
     let workflow_refs = string_array(scope, "workflowsInScope");
     let owns_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
@@ -660,7 +657,7 @@ fn derive_profile(
         BrowserVerificationMode::RenderedInspection
     };
     let (runner_source, installation_id) = select_runner(facts);
-    let responsive = ownership
+    let responsive = scope
         .get("responsiveCoverageRequired")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -674,7 +671,7 @@ fn derive_profile(
     } else {
         BrowserBackendMode::NotApplicable
     };
-    let verification_ids = task
+    let explicit_verification_ids = task
         .verification_intents
         .iter()
         .filter(|intent| {
@@ -688,6 +685,23 @@ fn derive_profile(
         })
         .map(|intent| intent.verification_id.clone())
         .collect::<Vec<_>>();
+    let verification_ids = if !explicit_verification_ids.is_empty() {
+        explicit_verification_ids
+    } else if quality_rule_refs
+        .iter()
+        .any(|rule| rule == "verify.rendered_viewports")
+    {
+        // Rendered quality is an MCP-owned closure obligation. When the
+        // agent has supplied ordinary verification intents but did not pick
+        // a browser owner, the closure preserves those behaviors and owns the
+        // browser evidence itself.
+        task.verification_intents
+            .iter()
+            .map(|intent| intent.verification_id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     if verification_ids.is_empty() {
         return None;
     }
@@ -770,9 +784,9 @@ pub(crate) fn task_requires_browser_verification(task: &TaskDefinition) -> bool 
     let owns_rendered_quality_rule = task
         .frontend_experience_requirement
         .as_ref()
-        .and_then(|requirement| requirement.get("uiSurfaceOwnership"))
-        .is_some_and(|ownership| {
-            string_array(ownership, "qualityRuleIdsInScope")
+        .and_then(|requirement| requirement.get("uiTaskScope"))
+        .is_some_and(|scope| {
+            object_id_array(scope, "qualityRulesInScope", "ruleId")
                 .iter()
                 .any(|rule| rule == "verify.rendered_viewports")
         });
@@ -785,9 +799,6 @@ pub(crate) fn task_requires_browser_verification(task: &TaskDefinition) -> bool 
     let Some(requirement) = task.frontend_experience_requirement.as_ref() else {
         return false;
     };
-    let ownership = requirement
-        .get("uiSurfaceOwnership")
-        .unwrap_or(&Value::Null);
     let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
     let owns_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
         && task.implementation_actions.iter().any(|action| {
@@ -797,14 +808,24 @@ pub(crate) fn task_requires_browser_verification(task: &TaskDefinition) -> bool 
             )
         });
     owns_suite_setup
-        || !string_array(ownership, "regionIdsInScope").is_empty()
-        || !string_array(ownership, "actionIdsInScope").is_empty()
-        || !string_array(ownership, "stateKindsInScope").is_empty()
+        || !object_id_array(scope, "regionsInScope", "regionId").is_empty()
+        || !object_id_array(scope, "actionsInContract", "actionId").is_empty()
+        || !object_id_array(scope, "statesInContract", "state").is_empty()
         || !string_array(scope, "surfacesInScope").is_empty()
         || !string_array(scope, "workflowsInScope").is_empty()
-        || string_array(ownership, "qualityRuleIdsInScope")
+        || object_id_array(scope, "qualityRulesInScope", "ruleId")
             .iter()
             .any(|rule| rule == "verify.rendered_viewports")
+}
+
+fn object_id_array(value: &Value, key: &str, id_key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_key).and_then(Value::as_str).map(str::to_string))
+        .collect()
 }
 
 fn select_runner(facts: &BrowserAutomationFacts) -> (BrowserRunnerSource, Option<String>) {
@@ -1098,11 +1119,11 @@ importers:
                 "workflowsInScope": ["flow-create"],
                 "frontendBackendBindings": [{"interfaceRef": "api.create"}]
             },
-            "uiSurfaceOwnership": {
-                "regionIdsInScope": ["region-main"],
-                "actionIdsInScope": ["action-create"],
-                "stateKindsInScope": ["submitting", "success"],
-                "qualityRuleIdsInScope": ["verify.rendered_viewports"],
+            "uiTaskScope": {
+                "regionsInScope": [{"regionId": "region-main"}],
+                "actionsInContract": [{"actionId": "action-create"}],
+                "statesInContract": [{"state": "submitting"}, {"state": "success"}],
+                "qualityRulesInScope": [{"ruleId": "verify.rendered_viewports"}],
                 "responsiveCoverageRequired": true
             }
         }));
@@ -1162,8 +1183,7 @@ importers:
     fn ui_scope_without_test_or_browser_evidence_does_not_select_playwright() {
         let mut task = task();
         task.frontend_experience_requirement = Some(json!({
-            "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
-            "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
+            "uiTaskScope": {"surfacesInScope": ["surface-workbench"], "regionsInScope": [{"regionId": "region-main"}]}
         }));
         task.verification_intents[0].acceptable_evidence =
             vec![contracts::VerificationEvidence::AutomatedTest];
@@ -1179,8 +1199,7 @@ importers:
     fn generic_test_implementation_does_not_imply_browser_ownership() {
         let mut task = task();
         task.frontend_experience_requirement = Some(json!({
-            "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
-            "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
+            "uiTaskScope": {"surfacesInScope": ["surface-workbench"], "regionsInScope": [{"regionId": "region-main"}]}
         }));
         task.implementation_actions
             .push(ImplementationAction::AddOrUpdateTests);
@@ -1206,8 +1225,7 @@ importers:
         );
         let mut task = task();
         task.frontend_experience_requirement = Some(json!({
-            "uiTaskScope": {"surfacesInScope": ["surface-storefront"]},
-            "uiSurfaceOwnership": {"regionIdsInScope": ["region-catalog"]}
+            "uiTaskScope": {"surfacesInScope": ["surface-storefront"], "regionsInScope": [{"regionId": "region-catalog"}]}
         }));
 
         assert_eq!(facts.baseline_selection.as_deref(), Some("Cypress"));
@@ -1230,8 +1248,7 @@ importers:
         );
         let mut task = task();
         task.frontend_experience_requirement = Some(json!({
-            "uiTaskScope": {"surfacesInScope": ["surface-mobile-home"]},
-            "uiSurfaceOwnership": {"regionIdsInScope": ["region-mobile-primary"]}
+            "uiTaskScope": {"surfacesInScope": ["surface-mobile-home"], "regionsInScope": [{"regionId": "region-mobile-primary"}]}
         }));
 
         assert_eq!(

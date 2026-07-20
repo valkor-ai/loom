@@ -197,10 +197,9 @@ fn native_request_read_protocol_resolves_declared_fields() {
     assert!(refs.contains_key("rules"));
     assert!(refs.contains_key("outputContract"));
     assert!(!refs.contains_key("agentAction"));
-    assert_eq!(
-        storage_manifest["refs"]["task"]["ref"],
-        json!(".loom/requests/req_native_1.refs/task.json")
-    );
+    assert!(storage_manifest["refs"]["task"]["ref"]
+        .as_str()
+        .is_some_and(|path| path.starts_with(".loom/refs/requests/sha256-")));
 
     let inspected = state::inspect_request(delivery_core::InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -326,27 +325,230 @@ fn native_request_read_protocol_resolves_declared_fields() {
 }
 
 #[test]
-fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
-    let fixture = Fixture::new("native-size-warning");
-    let large_text = "证券账户开户规则。".repeat(5000);
-
+fn repeated_field_reads_reuse_the_request_fingerprint_cache() {
+    let fixture = Fixture::new("native-field-cache");
+    let reference_path = ".loom/refs/requests/field-cache.json";
+    write_json_atomic(
+        &fixture.root.join(reference_path),
+        &json!({"value": "first"}),
+    )
+    .expect("write request reference");
     let stored = write_native_request(
         fixture.root_str(),
         NativeRequestInput {
-            request_id: "req_size_warning_1".to_string(),
+            request_id: "req_field_cache_1".to_string(),
             request_kind: "technical_baseline".to_string(),
             request_file: None,
             delivery_id: Some("delivery_1".to_string()),
             phase_id: Some("phase_1".to_string()),
             root: json!({
-                "context": {
-                    "largeField": large_text
+                "task": {"value": "first"},
+                "requestReadPlan": {"groups": [{
+                    "groupId": "cached_context",
+                    "required": true,
+                    "purpose": "Read the context once.",
+                    "whenToRead": "Before acting.",
+                    "selectors": selectors(["task.value"])
+                }]}
+            }),
+        },
+    )
+    .expect("write request");
+
+    let input = delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        group_id: "cached_context".to_string(),
+    };
+    let first = state::read_field_group(input.clone()).expect("first read");
+    assert_eq!(field(&first.fields, "task.value"), &json!("first"));
+
+    let manifest = read_json_value(
+        &fixture
+            .root
+            .join(".loom/requests/req_field_cache_1.manifest.json"),
+    )
+    .expect("read storage manifest");
+    let reference = manifest["refs"]["task"]["ref"]
+        .as_str()
+        .expect("task reference");
+    let reference_file = fixture.root.join(reference);
+    write_json_atomic(&reference_file, &json!({"value": "second"}))
+        .expect("rewrite request reference");
+
+    let second = state::read_field_group(input).expect("second read");
+    assert_eq!(
+        field(&second.fields, "task.value"),
+        &json!("first"),
+        "a repeated read must use the same request fingerprint cache entry"
+    );
+}
+
+#[test]
+fn write_groups_receive_shared_contract_metadata_without_reading_private_schema() {
+    let fixture = Fixture::new("shared-write-contract");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_shared_contract_1".to_string(),
+            request_kind: "technical_baseline_request".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "outputContract": {
+                    "artifactKind": "technical_baseline_candidate",
+                    "writeMode": "single_json",
+                    "submitTool": "loom.technicalBaselineAcceptFile",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/candidate.json",
+                        "required": true
+                    }],
+                    "schemaShape": {
+                        "type": "object",
+                        "properties": {
+                            "reasoningSummary": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            }
+                        },
+                        "required": ["reasoningSummary"]
+                    },
+                    "schemaProjection": {
+                        "requiredTopLevelFields": ["reasoningSummary"]
+                    }
                 },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "write_contract",
+                        "required": true,
+                        "purpose": "Read the write contract.",
+                        "whenToRead": "Before writing.",
+                        "selectors": selectors(["outputContract.writeTargets"])
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write request");
+
+    let fields = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref,
+        group_id: "write_contract".to_string(),
+    })
+    .expect("read write group")
+    .fields;
+    assert_eq!(
+        field(&fields, "outputContract.contractVersion"),
+        &json!("1.0")
+    );
+    assert!(field(&fields, "outputContract.contractFingerprint")
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_eq!(
+        field(
+            &fields,
+            "outputContract.schemaProjection.fieldContract.properties.reasoningSummary.type"
+        ),
+        &json!("array")
+    );
+    assert_eq!(
+        field(
+            &fields,
+            "outputContract.schemaProjection.fieldContract.properties.reasoningSummary.items.type"
+        ),
+        &json!("string")
+    );
+}
+
+#[test]
+fn native_request_projection_splits_large_objects_without_warnings() {
+    let fixture = Fixture::new("native-size-projection");
+    let mut large_object = serde_json::Map::new();
+    for index in 0..240 {
+        large_object.insert(
+            format!("field_{index}"),
+            json!("field value with enough semantic content ".repeat(400)),
+        );
+    }
+
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_size_projection_1".to_string(),
+            request_kind: "technical_baseline".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "context": { "largeObject": large_object },
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "large_context",
                         "required": true,
-                        "purpose": "Read a large but valid field.",
+                        "purpose": "Read the complete projected context.",
+                        "whenToRead": "Before writing.",
+                        "selectors": selectors(["context.largeObject"])
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("large objects should be split into lossless projection batches");
+
+    assert!(stored.read_groups.len() > 1);
+    assert_eq!(stored.read_groups[0].projection_mode, "batch");
+    assert!(stored.read_groups[0].required);
+    assert!(stored.read_groups[1..].iter().all(|group| group.required));
+
+    let mut observed = std::collections::BTreeSet::new();
+    for group_ref in &stored.read_groups {
+        let group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: stored.request_ref.clone(),
+            group_id: group_ref.group_id.clone(),
+        })
+        .expect("read projection batch");
+        observed.extend(
+            group
+                .fields
+                .keys()
+                .filter(|field| field.starts_with("context.largeObject.field_"))
+                .cloned(),
+        );
+    }
+    assert_eq!(observed.len(), 240);
+
+    let audit = read_to_string(fixture.root.join(".loom/metrics/request-size-audit.jsonl"))
+        .expect("read request size audit");
+    let last_line = audit.lines().last().expect("audit line");
+    let audit_value: serde_json::Value = serde_json::from_str(last_line).expect("audit json");
+    assert!(audit_value
+        .get("readPlanWarnings")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty));
+}
+
+#[test]
+fn native_request_persists_unsplittable_large_scalar_and_audits_warning() {
+    let fixture = Fixture::new("native-size-scalar");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_size_scalar_1".to_string(),
+            request_kind: "technical_baseline".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "context": { "largeField": "x".repeat(40 * 1024) },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "large_context",
+                        "required": true,
+                        "purpose": "Read an unsplittable scalar.",
                         "whenToRead": "Before writing.",
                         "selectors": selectors(["context.largeField"])
                     }]
@@ -354,31 +556,17 @@ fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
             }),
         },
     )
-    .expect("large fields should warn without blocking native request creation");
-
-    let group = state::read_field_group(delivery_core::ReadFieldGroupInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: stored.request_ref,
-        group_id: "large_context".to_string(),
-    })
-    .expect("read large field group");
-    assert!(field(&group.fields, "context.largeField")
-        .as_str()
-        .expect("large field text")
-        .contains("证券账户开户规则"));
-
+    .expect("request size audit must not block request generation");
+    assert_eq!(stored.read_groups.len(), 1);
     let audit = read_to_string(fixture.root.join(".loom/metrics/request-size-audit.jsonl"))
         .expect("read request size audit");
-    let last_line = audit.lines().last().expect("audit line");
-    let audit_value: serde_json::Value = serde_json::from_str(last_line).expect("audit json");
-    let warnings = audit_value["readPlanWarnings"]
-        .as_array()
-        .expect("read plan warnings");
-    assert!(warnings.iter().any(|warning| {
-        warning["level"] == "warn"
-            && warning["groupId"] == "large_context"
-            && warning["field"] == "context.largeField"
-    }));
+    let entry: serde_json::Value =
+        serde_json::from_str(audit.lines().last().unwrap()).expect("parse audit entry");
+    assert_eq!(entry["readPlanWarnings"][0]["level"], json!("warn"));
+    assert_eq!(
+        entry["readPlanWarnings"][0]["field"],
+        json!("context.largeField")
+    );
 }
 
 #[test]
@@ -751,6 +939,13 @@ fn native_submit_authorizes_declared_write_targets() {
     .expect("read submit private manifest");
     assert!(storage_manifest["refs"]["outputContract"].is_object());
 
+    state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        group_id: "core".to_string(),
+    })
+    .expect("read submit write contract");
+
     let authorized = state::authorize_write_targets(
         &delivery_core::FileSubmitInput {
             project_root: fixture.root_str().to_string(),
@@ -769,6 +964,90 @@ fn native_submit_authorizes_declared_write_targets() {
     assert_eq!(authorized.submit_tool, "loom.brainstormAcceptFile");
 }
 
+#[test]
+fn native_submit_rejects_a_read_from_an_older_contract_fingerprint() {
+    let fixture = Fixture::new("submit-stale-contract");
+    write_json_atomic(
+        &fixture.root.join(".loom/agent-writable/candidate.json"),
+        &json!({ "summary": "ok" }),
+    )
+    .expect("write target");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_submit_stale_contract".to_string(),
+            request_kind: "brainstorm_candidate".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "outputContract": {
+                    "artifactKind": "brainstorm_candidate",
+                    "submitTool": "loom.brainstormAcceptFile",
+                    "writeMode": "single_json",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/candidate.json",
+                        "required": true,
+                        "description": "Brainstorm candidate JSON."
+                    }]
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "core",
+                        "required": true,
+                        "purpose": "Read core fields.",
+                        "whenToRead": "Before writing.",
+                        "selectors": selectors(["outputContract.writeTargets"])
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write request");
+
+    state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        group_id: "core".to_string(),
+    })
+    .expect("read initial write contract");
+
+    let manifest = read_json_value(
+        &fixture
+            .root
+            .join(".loom/requests/req_submit_stale_contract.manifest.json"),
+    )
+    .expect("read request manifest");
+    let output_contract_ref = manifest["refs"]["outputContract"]["ref"]
+        .as_str()
+        .expect("output contract ref");
+    let output_contract_file = fixture.root.join(output_contract_ref);
+    let mut output_contract = read_json_value(&output_contract_file).expect("read output contract");
+    output_contract["schemaProjection"]["requiredTopLevelFields"] = json!(["summary"]);
+    delivery_core::finalize_output_contract(
+        &mut output_contract,
+        &std::collections::BTreeMap::new(),
+    );
+    write_json_atomic(&output_contract_file, &output_contract).expect("rewrite output contract");
+
+    let error = state::authorize_write_targets(
+        &delivery_core::FileSubmitInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: stored.request_ref,
+            written_target_ids: Some(vec!["candidate".to_string()]),
+        },
+        "loom.brainstormAcceptFile",
+    )
+    .expect_err("stale contract read must not authorize submit");
+    match error {
+        state::WriteTargetAuthorizationError::Repairable { issues, .. } => assert!(issues
+            .iter()
+            .any(|issue| issue.code == "WRITE_CONTRACT_NOT_READ")),
+        other => panic!("expected repairable stale-contract error, got {other:?}"),
+    }
+}
+
 struct Fixture {
     root: std::path::PathBuf,
     _guard: MutexGuard<'static, ()>,
@@ -777,7 +1056,7 @@ struct Fixture {
 impl Fixture {
     fn new(name: &str) -> Self {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let guard = ENV_LOCK.lock().expect("env lock");
+        let guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let root = std::env::temp_dir().join(format!(
             "loom-mcp-state-{name}-{}-{}",
             std::process::id(),

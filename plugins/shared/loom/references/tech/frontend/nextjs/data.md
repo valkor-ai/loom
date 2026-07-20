@@ -1,31 +1,92 @@
-# Next.js Data Fetching Quality
+# Next.js Data Fetching And Freshness
 
-This file applies Next.js data-fetching and caching rules to task-owned pages, server components, route handlers, and data helper modules.
+Apply data guidance when the task owns an API/server data binding, client reactive flow, or accepted full-stack persistence read. Choose freshness, cache, streaming, and client ownership from business lifecycle rather than Next.js defaults or external examples.
 
-## When To Use
+## Data Ownership
 
-- The task changes `fetch` behavior, cache mode, ISR, revalidation, tags, server-side data helpers, database reads from Server Components, loading/error behavior, or client-side data refresh.
-- Use this when freshness, caching, streaming, deduplication, or server/client data ownership affects correctness.
-- If the task only changes static markup or local component state, do not introduce new caching or data helpers just because this file exists.
+Preserve the accepted boundary:
 
-## Implementation Focus
+- call the authoritative backend interface when architecture separates frontend/backend
+- use server-only repository/data helpers only when full-stack Next owns persistence
+- use client data libraries only for browser-owned refresh/polling/optimistic workflows
+- never duplicate the same source of truth across server fetch, client effect, and store without reconciliation
 
-- Make freshness explicit. Choose `cache: 'force-cache'`, `cache: 'no-store'`, `next.revalidate`, segment `revalidate`, or tags according to the business data lifecycle.
-- Use tag/path revalidation when a mutation must update already rendered data. Keep tag names stable and domain-owned.
-- Fetch independent server data in parallel; keep sequential fetches only when later work depends on earlier results.
-- Use React `cache()` or an existing repository helper for repeated server reads during one render pass. Do not create global mutable caches for request-owned data.
-- Keep database clients and secrets in Server Components, server helpers, route handlers, or server actions only.
-- Use Suspense, `loading.tsx`, or existing skeleton patterns for slow independent regions. Avoid blank screens for async route data.
-- Let `error.tsx` or route-level error handling own unexpected fetch failures. Map expected business failures to user-actionable UI states instead of generic exceptions.
-- Use client-side data libraries only when the interaction genuinely needs browser-owned refresh, polling, optimistic UI, or stale-while-revalidate behavior.
+Enforce auth/tenant/ownership at the server/data boundary. Do not pass database clients/secrets/entities into Client Components.
 
-## Verification Focus
+## Freshness And Cache Policy
 
-- Run build/typecheck and focused tests for changed data helpers, route handlers, or server components.
-- Probe stale/fresh behavior after mutation when revalidation is part of the change.
-- Verify loading, empty, success, expected business failure, and unexpected fetch failure states when touched.
-- For database reads, verify query shape, auth/tenant scoping, and no accidental client bundle import.
+Make each read's policy explicit: dynamic/no-store, cached/static, time revalidation, tag/path invalidation, or client stale-while-revalidate.
 
-## Evidence Focus
+Use the selected Next version's fetch/cache APIs; semantics changed across versions. Do not assume implicit fetch caching. Define cache key dimensions, user/tenant variation, invalidation triggers, stale tolerance, and failure behavior.
 
-- In the evidence summary, name the data decision: cache mode, ISR interval, tag/path revalidation, parallel fetch, server helper, Suspense boundary, client refresh, or freshness proof.
+Never share personalized/authorized data through a cache key that omits identity/tenant/permissions. `revalidateTag`/path invalidation should be domain-owned and scoped.
+
+React `cache()`/request memoization can deduplicate server work in a render/request boundary; it is not a durable cross-request cache unless the selected framework API explicitly provides that.
+
+## Parallel, Sequential, And Preloaded Reads
+
+Start independent reads before awaiting to avoid server waterfalls:
+
+```tsx
+const orderPromise = loadOrder(orderId)
+const historyPromise = loadHistory(orderId)
+const [order, history] = await Promise.all([orderPromise, historyPromise])
+```
+
+Keep sequential calls only when later inputs/security depend on earlier results. Bound fan-out and handle partial failure when one region may remain useful.
+
+Preload/deduplicate only when the user flow is likely and cache/scoping is safe. Do not fire duplicate page/layout/metadata/client requests for the same record.
+
+## Streaming And Loading
+
+Use route loading or Suspense around independently useful slow regions with stable fallback layout. Keep page shell/context/actions visible and avoid a blank full-page wait.
+
+Expected empty/not-found/forbidden/unavailable outcomes should map to product states rather than generic exceptions. Unexpected failures reach the owning error boundary.
+
+Do not stream protected record details before authorization resolves.
+
+## Direct Database Reads
+
+Only server modules may use accepted database/ORM clients. Reuse connection pools safely for the runtime (Node server, serverless, edge limitations) and project directly to serializable read models.
+
+Avoid N+1/unbounded queries, full entity graphs, and database calls from Client Components. Provider mapping/query/transaction quality remains owned by the selected backend/persistence references.
+
+## Client-Side Data
+
+Use client fetching when interactions require live browser refresh, polling, infinite scroll, optimistic state, or browser-only context. Seed with safe server data when it improves initial render and define hydration/freshness reconciliation.
+
+Cancel/ignore stale requests, bound polling/concurrency, preserve typed errors, and invalidate after mutation/user/tenant changes. A `useEffect(fetch)` without race/error/loading cleanup is not a complete data boundary.
+
+## Pagination, Filtering, And Serialization
+
+Forward accepted query parameters and bound page size/sort/filter allowlists. Preserve deterministic order and stable response metadata.
+
+Normalize dates, decimal/bigint, enums, nullable fields, and errors before client handoff. Do not leak internal/provider fields in serialized props or route responses.
+
+## Revalidation After Mutation
+
+Mutations must invalidate all and only affected server/client cache entries and reconcile visible list/detail/count/state. Readback evidence should prove new identity/version/status rather than assuming invalidation worked.
+
+Avoid invalidating the whole site or using tags that collide across tenants/resources. Define behavior when revalidation succeeds but client state still contains optimistic/stale data.
+
+## Verification
+
+- Test exact authoritative API/repository binding and auth/tenant scoping.
+- Prove cache hit/freshness/stale behavior and no cross-user/tenant leakage where caching is owned.
+- Verify mutation invalidation and visible readback for list/detail/count.
+- Exercise parallel/sequential/partial failure, loading/empty/forbidden/unavailable states.
+- Test client race/cancellation/polling/infinite-scroll behavior when owned.
+- Run production build for server/client and runtime compatibility.
+
+## Delivery Evidence
+
+Identify source of truth, freshness policy, cache key/invalidation, and route/component assertion proving it. A fetch call, Suspense fallback, or revalidation invocation alone cannot prove scoping, freshness, race handling, serialization, or visible coherence.
+
+## Unsafe Defaults
+
+- Data reference selected from prose/performance without data-binding ownership.
+- Implicit cache behavior assumed across Next versions.
+- Personalized data cached without identity/tenant keying.
+- Same read duplicated in layout/page/metadata/client effect.
+- Client effect fetches without cancellation/error/reconciliation.
+- Whole-site invalidation or direct DB access from client modules.

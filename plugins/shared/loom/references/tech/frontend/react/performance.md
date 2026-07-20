@@ -1,34 +1,75 @@
-# React Performance Quality
+# React Performance
 
-This file applies React performance discipline when the task changes render cost, bundle cost, large collections, expensive calculations, or responsiveness.
+Optimize only a task-owned, measurable rendering, interaction, startup, bundle, or memory risk. Begin with state ownership and component boundaries; memoization is a later tool, not the definition of performance work.
 
-## When To Use
+## Establish The Constraint
 
-- The task changes large lists, tables, dashboards, charts, expensive filtering/sorting, lazy-loaded areas, bundle-heavy dependencies, or responsiveness under frequent input.
-- Use this when performance is a stated requirement, a known risk, or likely to regress because of the changed UI structure.
-- Do not optimize purely for style. Keep performance changes tied to current task behavior, measured risk, or visible user impact.
+Name the affected interaction and the representative workload: row count, update frequency, route chunk, image set, chart size, input latency, or retained resource. Reproduce with production-like data and a production build when development Strict Mode or source transforms distort measurements.
 
-## Implementation Focus
+Use the repository's existing profiler, bundle analyzer, performance test, or browser tooling. Do not add a permanent dependency solely to produce one measurement when built-in timing and React DevTools answer the question.
 
-- Start with component structure and state ownership. Avoid re-rendering a whole page when a row, filter, drawer, or small control changes.
-- Use `memo` for child components only when parent churn and prop stability make it useful. Do not memoize every component by default.
-- Use `useMemo` for expensive derived values such as large filtering, sorting, grouping, totals, or chart data. Keep dependencies complete and easy to inspect.
-- Use `useCallback` for callbacks passed to memoized children, subscription APIs, or custom hooks that require stable identity.
-- Virtualize large lists or tables when the row count can become large enough to affect rendering. Do not virtualize small lists merely because a table exists.
-- Code split heavy routes, admin panels, charts, editors, maps, or optional integrations with `lazy` and `Suspense` when the framework and repository convention support it.
-- Use `useTransition` or deferred updates for non-urgent filtering/search updates that can lag behind input.
-- Keep inline object/function churn out of hot row renderers and memoized child props.
-- Avoid importing large utility libraries or chart packages into the main bundle when only one feature needs them.
-- Preserve accessibility and business states when optimizing. Do not remove labels, focus behavior, loading states, or error feedback for speed.
+Define a comparison that can be repeated. A lower render count is not useful if the visible workflow becomes stale or inaccessible.
 
-## Verification Focus
+## State Locality And Render Boundaries
 
-- Run focused build/type/lint/test commands and inspect bundle or performance tooling only when the repo already provides it or the task explicitly owns performance.
-- Test large-list behavior with enough rows to prove stable keys, action targeting, and virtualization or pagination behavior.
-- Verify that memoization does not freeze stale props, stale callbacks, or stale validation state.
-- For code splitting, verify the lazy path renders loading and error states and that the route still works after build.
+Place transient state at the smallest owner that needs it. Typing in a filter, opening a row menu, or editing one form should not require unrelated page regions to subscribe to every update.
 
-## Evidence Focus
+Select narrow store/query slices and preserve referential stability where consumers rely on it. Avoid one context value containing frequently changing data plus unrelated actions; split by lifetime or concern when profiling shows broad invalidation.
 
-- In the evidence summary, name the performance decision: state locality, memo boundary, expensive derived data, virtualization, code splitting, transition/deferred update, bundle containment, or measured non-regression.
+Use stable domain keys. Index keys and remounting component definitions can turn updates into teardown/recreation, lose focus, and invalidate local state.
 
+## Memoization Decisions
+
+Use `memo` when a meaningful child is repeatedly rendered with equivalent props. Keep comparison functions complete and cheaper than rendering; compare all behavior-affecting props rather than only an ID.
+
+Use `useMemo` for expensive derivation or an identity required by a memoized/subscription consumer. Use `useCallback` when callback identity is part of a proven boundary. Inline closures are acceptable outside measured hot paths.
+
+Memoization does not repair incorrect dependencies. Stale callbacks, validators, permissions, locale, or selected targets are correctness defects even when a profile is faster.
+
+## Collections And Expensive Work
+
+Filter, sort, group, and aggregate once at the owning boundary. Keep source collections immutable and avoid repeating equivalent work in each row.
+
+For large collections, choose pagination, incremental rendering, or virtualization according to product behavior. Virtualized rows require stable item identity, measured/estimated size handling, keyboard/focus behavior, accessible collection semantics, and correct scroll restoration.
+
+Move CPU-heavy pure work off the urgent interaction path only when measurement justifies worker/chunking complexity. Preserve cancellation and stale-result ordering.
+
+## Responsiveness And Scheduling
+
+Use `useTransition` or deferred values for non-urgent rendering while urgent input remains responsive. Pending UI must still expose the committed versus requested state and must not submit stale filters or targets.
+
+Debounce network or expensive query work according to business behavior, not render updates indiscriminately. Cancel pending work and define what happens when input changes rapidly.
+
+## Bundle And Asset Cost
+
+Split route-level or genuinely heavy optional capabilities with the repository's router/framework mechanism. Give lazy boundaries stable loading and error behavior; avoid a spinner flash for tiny local components.
+
+Import library subpaths only when supported, remove duplicate dependencies, and keep server-only or optional packages out of the client bundle. Check generated chunks rather than assuming a dynamic import guarantees useful separation.
+
+Optimize images through the established asset pipeline with dimensions, responsive sources, lazy/eager priority, and layout stability appropriate to the surface.
+
+## Resource Lifetime
+
+Dispose observers, subscriptions, workers, object URLs, timers, and third-party widgets. Bound caches and retained histories. Performance work that only reduces renders while leaking browser resources is incomplete.
+
+## Verification
+
+- Capture before/after measurements for the named workload and interaction.
+- Prove memoized paths update when every behavior-affecting prop changes.
+- Exercise large collection identity, action targeting, focus, scrolling, empty/loading/error states, and responsive layout.
+- Verify lazy chunks through the production build and exercise loading/error recovery.
+- Test rapid input, interruption, cancellation, and stale-result prevention for scheduled work.
+- Re-run accessibility and business-state checks after virtualization or rendering changes.
+
+## Delivery Evidence
+
+Report the bottleneck, representative workload, selected intervention, repeatable measurement, and visible correctness assertions. A bundle build, profiler screenshot without context, or blanket memoization count does not establish improvement.
+
+## Unsafe Defaults
+
+- `memo`, `useMemo`, or `useCallback` applied to every component/value.
+- Custom comparators that ignore callbacks, permissions, locale, or mutable objects.
+- Virtualization introduced without focus, semantics, or dynamic-size behavior.
+- Development-only timing presented as production evidence.
+- Code splitting without testing chunk loading and failure behavior.
+- Transition/debounce logic allowed to submit stale targets or hide pending state.

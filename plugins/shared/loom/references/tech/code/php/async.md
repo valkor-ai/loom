@@ -20,6 +20,13 @@ This file applies only to PHP async runtimes and async I/O boundaries.
 - Keep shared mutable state out of callbacks where possible. When shared state is unavoidable, isolate mutation to one coroutine/task or use the runtime's concurrency-safe primitive.
 - Long-running workers need graceful shutdown: signal handling, loop stop, in-flight request handling, connection close, and idempotent cleanup.
 
+## Runtime Selection
+
+- Select the async runtime from the accepted stack and the task-owned execution boundary. Swoole, ReactPHP, Amphp, and native Fibers have different loop, client, cancellation, and deployment assumptions; do not substitute one for another by syntax similarity.
+- Treat a Fiber as a cooperative control-flow primitive. It does not provide an event loop, non-blocking I/O, scheduling, or cancellation by itself.
+- Keep framework queues and async HTTP/event-loop work separate unless the repository explicitly owns the bridge. A queue worker's retry lifecycle is not equivalent to an event-loop promise or coroutine.
+- Make blocking boundaries explicit in evidence: identify the client/driver, the offload mechanism, and the shutdown owner. A method named `async` is not proof that its PDO, filesystem, or HTTP calls are non-blocking.
+
 ## Verification Focus
 
 - Run the existing async/server smoke command when runtime code changes, and prove the process can start and stop cleanly.
@@ -27,6 +34,7 @@ This file applies only to PHP async runtimes and async I/O boundaries.
 - For concurrent fan-out, verify all tasks are joined or cancelled and that partial failure returns the intended result.
 - For server/request handlers, exercise at least one real request path and one invalid/error request path.
 - Check that the changed async path does not contain obvious blocking calls such as `sleep`, synchronous HTTP clients, blocking PDO calls, or file I/O in an event-loop callback unless explicitly offloaded.
+- Verify the selected runtime's actual startup command and one lifecycle teardown path; do not claim portability across Swoole, ReactPHP, Amphp, and Fibers from a unit test alone.
 
 ## Evidence Focus
 

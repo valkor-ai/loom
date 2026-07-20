@@ -80,3 +80,27 @@ Use for landing pages, product marketing, campaigns, pricing, launches, and conv
 - Gradient-only hero backgrounds when relevant media/product view is needed.
 - Decorative screenshots that are too small, blurred, or cropped to inspect.
 - Marketing sections inside an operational product first screen.
+
+## Scroll Rhythm And Proof
+
+Marketing pages need a readable sequence from offer to evidence to action. Each
+section should earn its space by answering a buyer question or enabling the
+next decision.
+
+```text
+offer/object -> problem or outcome -> concrete proof -> comparison/details
+-> objection handling -> primary conversion action
+```
+
+- Put the literal product, place, object, or offer in the first viewport; descriptive value propositions support it.
+- Pair claims with inspectable media, product states, customer evidence, comparison facts, or a concrete demonstration.
+- Keep one primary conversion action per section and preserve a clear route to it after media or interaction.
+- Use section transitions to establish hierarchy, not to create decorative whitespace that hides the next useful content.
+- Repeat the essential action only when the page is long enough to justify it, and keep its label consistent.
+
+## Media And Interaction
+
+- Images and video reveal the actual offering and remain readable on mobile; do not use dark or blurred media where inspection matters.
+- Interactive demos expose a stable fallback, keyboard alternative, reduced-motion behavior, and a clear reset path.
+- Carousels expose slide identity, controls, pause behavior, and a non-animated way to inspect every item.
+- Forms show field-level errors, preserve input, prevent duplicate submission, and confirm the submitted destination or next step.

@@ -12,7 +12,7 @@ Every Architecture artifact should make the current phase boundary explicit:
 | Module boundary | Which modules own which responsibilities. |
 | Data boundary | Which module owns each entity and invariant. |
 | Interface boundary | Which APIs, service methods, jobs, or adapters are current-phase contracts. |
-| Runtime boundary | Which build/start/probe/environment facts must later tasks preserve. |
+| Runtime boundary | Which build/start/probe/environment facts the implementation must preserve. |
 | Deferred boundary | Which tempting future capabilities are deliberately not current tasks. |
 
 ## Component Shape
@@ -28,7 +28,19 @@ For each current-phase module, capture:
 - acceptance refs and requirement detail refs
 - risks or decisions that apply
 
-Module descriptions should be implementation-facing. A task agent should know where code belongs and what not to mix together.
+Module descriptions should be implementation-facing. A reader should know where code belongs and what must not be mixed together.
+
+## Context And Trust Boundaries
+
+Identify every current-phase caller, operator, external system, and durable store that crosses the product boundary. For each crossing, define:
+
+- who initiates it and which component owns the receiving boundary
+- whether communication is synchronous, asynchronous, scheduled, or file-based
+- authentication, authorization, or data-sensitivity implications when applicable
+- accepted input/output ownership and failure visibility
+- whether the dependency is required for startup, required for one capability, or optional
+
+Do not draw an external box without defining the interaction contract and trust assumptions that make it relevant.
 
 ## Interaction Design
 
@@ -38,6 +50,19 @@ For user or system flows:
 - Connect each step to interface refs and state machine refs when available.
 - Include state or persistence changes for actions that mutate data.
 - Define success and business-blocking feedback for user-visible operations.
+- For external dependencies, define timeout ownership, retry or no-retry rationale, duplicate protection, fallback/degraded behavior, and the observable signal when recovery is needed.
+- For asynchronous interactions, define delivery guarantee, ordering boundary, idempotency owner, replay behavior, and how completion or terminal failure becomes visible.
+
+## Capacity And Growth Triggers
+
+Describe capacity only where a current requirement or a bounded product-quality minimum makes it relevant:
+
+- workload or data condition that changes the architecture behavior
+- bounded query, batch, queue, payload, or concurrency rule
+- scale unit, such as application instance, worker, partition, or read model
+- trigger that would justify a later structural change
+
+Do not invent traffic numbers, multi-region topology, or horizontal scaling machinery without an accepted target. “Scalable” is not a design until the workload, boundary, and trigger are stated.
 
 ## Runtime Design
 

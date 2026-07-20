@@ -69,6 +69,31 @@ Use this structure for mobile forms, record details, checkout/review flows, and 
 - Place validation next to the field.
 - Preserve values when the keyboard opens/closes or validation fails.
 
+## Viewport And Platform Behavior
+
+- Use `100dvh` for full-height web surfaces and keep a fallback for environments
+  that do not support dynamic viewport units.
+- Put safe-area padding on the inside of fixed headers, bottom actions, and bottom
+  navigation. The content scroll region must remain reachable above the action bar.
+- When the keyboard opens, scroll the focused field into view and keep its label,
+  error, and submit action discoverable. Do not rely on a fixed viewport height.
+- Use a bottom sheet for a short mobile choice or confirmation when it preserves
+  the current context; use a full-screen route for a deep form or detail workflow.
+- Native and cross-platform surfaces must follow the platform navigation, back,
+  dynamic type, permission, and safe-area conventions of the selected target.
+
+## Touch And Gesture Rules
+
+- Keep primary targets at least 44px on web and use the selected platform minimum
+  for native surfaces. Separate adjacent destructive and safe actions.
+- Provide a visible pressed/focus state without requiring hover.
+- Do not use horizontal page scrolling for normal task flow. Restrict horizontal
+  scrolling to labeled data/code regions where comparison requires it.
+- Keep swipe, drag, and long-press actions optional when the same operation needs a
+  keyboard, pointer, or accessible command path.
+- Check orientation changes, text scaling, long labels, and a failed submit while
+  the keyboard or a sheet is open when those states are in scope.
+
 ## Verification
 
 - Check narrow viewport, keyboard behavior, scroll, touch targets, and sticky bars.
@@ -76,6 +101,8 @@ Use this structure for mobile forms, record details, checkout/review flows, and 
 - Check that error and success feedback remain visible after submit.
 - Check that drawers/sheets close without losing form or selection context.
 - Check 200% zoom or system text scaling when the environment allows it.
+- Record the target posture, viewport width, safe-area behavior, keyboard case, and
+  responsive fallback in evidence when mobile behavior is owned.
 
 ## Quality Gate Index
 

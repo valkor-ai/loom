@@ -1,33 +1,91 @@
-# Flutter Structure Quality
+# Flutter Project And Feature Structure
 
-This file applies Flutter project-structure discipline to task-owned `lib/`, feature modules, shared widgets, services, repositories, route configuration, themes, assets, and generated code boundaries.
+Apply structure guidance only when the task owns application setup, frontend architecture, dependency/config/assets/code generation, or a framework migration. Ordinary widget tasks should preserve existing placement without loading a full project-layout reference.
 
-## When To Use
+## Preserve The Repository Shape
 
-- The task creates or changes Flutter project layout, feature folders, app entry points, `pubspec.yaml`, themes, constants, shared widgets, repositories, storage/API services, route setup, or code generation.
-- Use this when file placement and module boundaries affect maintainability, route ownership, testability, or repeated feature delivery.
-- Keep widget implementation details in the widget reference and state-management details in the Riverpod or Bloc reference.
+Identify whether the project is feature-first, layer-first, package-based, or a hybrid before creating directories. Extend the selected ownership boundaries; do not copy a reference tree over an established application.
 
-## Implementation Focus
+A feature-first structure can separate presentation/state/domain/data only when those layers exist meaningfully:
 
-- Preserve the repository's structure. If it already uses feature-first folders, keep new feature code under the matching feature. If it uses layer-first or package/module boundaries, follow that convention.
-- Keep app bootstrapping small: `main.dart` should initialize bindings, environment/config, storage, generated dependencies, and then run the root app/provider scope.
-- Separate `core/` concerns such as theme, constants, errors, extensions, validators, logging, and reusable infrastructure from feature-specific workflow code.
-- Keep feature folders cohesive. A feature that owns domain behavior should separate data/repository, domain/use-case, presentation/screens/widgets, and state providers/blocs according to existing style.
-- Keep shared widgets truly reusable. Shared buttons, inputs, cards, list cells, and dialogs should not import feature repositories or domain-specific services.
-- Treat `pubspec.yaml` changes as product-impacting. New dependencies, assets, fonts, platform permissions, and code-generation packages need matching usage and verification.
-- Keep route config close to app/navigation ownership. Feature screens should not independently create competing router instances.
-- Keep generated files and annotations consistent. If the repository uses `build_runner`, update generated outputs or note why generation is not required.
-- Keep asset paths, localization files, theme files, and platform config references valid across all target platforms.
+```text
+lib/
+  app/                 # bootstrap, router, theme, global composition
+  core/                # stable cross-feature platform/infrastructure primitives
+  features/
+    orders/
+      presentation/    # screens and feature widgets
+      state/           # selected providers/blocs
+      domain/          # accepted entities/use cases/ports
+      data/            # DTOs, repositories, adapters
+```
 
-## Verification Focus
+Do not create empty ceremonial layers or place feature-specific rules in `core`, `shared`, or `utils`. Shared widgets/utilities must be genuinely reusable and must not import feature repositories/state.
 
-- Run Flutter analysis/tests after structure changes; run dependency resolution when `pubspec.yaml` changes.
-- Verify new imports do not create circular dependencies between core, shared, feature data, feature domain, feature presentation, and state layers.
-- Verify assets, fonts, localization, generated code, and route files resolve from the changed structure.
-- Verify feature code can be tested without booting unrelated app routes or native services.
-- Verify dependency additions are used intentionally and do not duplicate an existing repository library.
+## Bootstrap And Environment
 
-## Evidence Focus
+Keep `main.dart` small and deterministic: initialize required framework/plugins/config, install root provider/router/theme/localization, then run the app. Separate flavors/entry points only when the product/runtime contract selects them.
 
-- In the evidence summary, name the structure decision: feature boundary, app bootstrap change, shared widget boundary, repository/service placement, route config placement, dependency addition, generated output, or asset/config proof.
+Treat browser/mobile configuration as public. Keep API binding/environment values in the repository's runtime/build mechanism and validate them; never embed service credentials.
+
+Initialization that can fail needs loading/failure/recovery behavior or clear startup failure. Do not perform database migrations, unbounded network calls, or seed business data during every app startup without an accepted lifecycle.
+
+## Dependencies And pubspec
+
+Before adding a package, check existing capabilities, target-platform support, SDK constraints, maintenance, transitive/native requirements, license, and bundle/build impact. Do not add Riverpod, Bloc, GoRouter, Dio, Freezed, or storage libraries because a template uses them.
+
+Keep dependency versions compatible with the selected Flutter/Dart SDK and lockfile policy. Avoid broad `dependency_overrides` as a routine resolution.
+
+Declare fonts/assets accurately, including case-sensitive paths and directory semantics. Verify every target used by the feature.
+
+## Generated Code
+
+Use the repository's `build_runner`, Riverpod generator, Freezed, JSON serialization, localization, or asset-generation commands and committed-output policy. Source annotations and generated output must agree.
+
+Never hand-edit generated files. Watch for stale generated code, duplicate part names, conflicting builders, and missing outputs after model/provider changes.
+
+Generated persistence/JSON models are transport/storage representations; keep domain/UI semantics separate where the accepted architecture does.
+
+## Platform Boundaries
+
+Place platform plugins behind narrow adapters and keep Android/iOS/web/desktop configuration synchronized: permissions, manifests/plists, URL schemes, entitlements, minimum versions, signing capabilities, and plugin initialization.
+
+Use conditional imports/implementations that compile for every selected target. Avoid importing `dart:io` in web code or scattering platform checks through feature widgets.
+
+Add platform permission copy and denied/restricted behavior according to product requirements, not plugin defaults.
+
+## Routes, Theme, Localization, And Assets
+
+Keep one router composition owner and feature-owned route fragments where supported. Screens must not create competing router instances.
+
+Centralize theme/color/text/spacing/component extensions and localization delegates/generated strings. Feature code consumes semantic tokens/strings rather than hardcoded visual or language values.
+
+Assets and localization keys need deterministic naming, ownership, removal, and tests/build verification to prevent stale bundle content.
+
+## Dependency Direction
+
+Enforce the accepted direction through imports/packages and avoid feature cycles. Data adapters may implement domain/application ports; domain code should not depend on Flutter widgets, BuildContext, state libraries, or platform plugins when those layers are separated.
+
+State/navigation should depend on feature operations, not make repositories depend on UI. Do not use global service locators to erase project boundaries.
+
+## Verification
+
+- Run dependency resolution/analyze after `pubspec.yaml`, SDK, lint, or generator changes.
+- Build/test selected targets after platform plugin/config/conditional import changes.
+- Regenerate outputs and verify no stale/hand-edited generated files.
+- Verify assets/fonts/localization/theme/router composition from the new paths.
+- Inspect imports/package dependencies for cycles and feature leakage.
+- Confirm feature code can be tested without booting unrelated native services/routes.
+
+## Delivery Evidence
+
+Identify the structure/dependency/config/generated/platform decision and the resolve/analyze/build/import assertion proving it. A directory tree or successful editor import cannot prove target builds, plugin setup, generator freshness, or dependency direction.
+
+## Unsafe Defaults
+
+- Reference folder tree imposed on an established project.
+- Empty clean-architecture layers and feature logic placed in `core/shared/utils`.
+- Packages added from examples without stack/platform/license checks.
+- Generated files edited manually or left stale.
+- Platform permission/config changed for only one selected target.
+- Global service locator used to bypass dependency boundaries.

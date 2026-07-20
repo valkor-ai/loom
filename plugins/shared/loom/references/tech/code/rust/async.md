@@ -19,6 +19,15 @@
 - Use timeouts for external I/O and long waits where callers need bounded behavior.
 - Use `async-trait` only when trait-based async dispatch is needed and the allocation/object-safety tradeoff is acceptable.
 
+## Decision Rules
+
+- Select the runtime from repository facts and keep one runtime owner. A Tokio dependency in the baseline does not make every Rust task asynchronous.
+- Use `join!` when all independent results are required, `try_join!` when the first error should cancel the group, and `select!` when one event wins and the other branches need cancellation cleanup.
+- Give every spawned task an owner, a `JoinHandle`/error observation path, and a shutdown signal. Fire-and-forget work is acceptable only when the owner records failures and cancels it during teardown.
+- Bound channels and fan-out. State queue capacity, backpressure, closed sender/receiver behavior, and whether ordering or partial success is part of the contract.
+- Keep locks out of `.await` regions unless the lock and runtime explicitly support that boundary. Prefer message passing when it makes task ownership clearer.
+- Use timeout and cancellation tokens around external I/O and long waits, and verify that all resources close when the cancellation branch wins.
+
 ## Verification Focus
 
 - Run async tests using the repository runtime macro or test harness.

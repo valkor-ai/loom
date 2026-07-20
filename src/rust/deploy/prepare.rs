@@ -7,6 +7,7 @@ use std::{
 use contracts::{
     DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
     DeploymentProviderPolicy, DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSpec,
+    DeploymentStorageFact,
 };
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
@@ -183,6 +184,8 @@ pub fn deploy_prepare_inner(
         &deployment_root,
     );
     let environment = env_diagnostics(&runtime_contract, &code_probe);
+    let storage_facts =
+        derive_storage_facts(&source_model, &runtime_contract, &environment, &code_probe);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
     let runtime = build_deployment_runtime(
         &runtime_contract,
@@ -232,6 +235,7 @@ pub fn deploy_prepare_inner(
         source_model,
         topology,
         facts,
+        storage_facts,
         frontend_api_binding,
         environment,
         bootstrap,
@@ -725,8 +729,141 @@ fn env_diagnostics(
     }
 }
 
+const FILE_STORAGE_CONTAINER_ROOT: &str = "/var/lib/loom";
+
+fn derive_storage_facts(
+    source_model: &DeploymentSourceModel,
+    runtime: &DeploymentRuntimeContract,
+    environment: &DeploymentEnvDiagnostics,
+    code_probe: &DeploymentCodeProbe,
+) -> Vec<DeploymentStorageFact> {
+    let mut facts = runtime
+        .dependency_services
+        .iter()
+        .filter_map(|dependency| {
+            let volume_name = dependency.volume_name.clone()?;
+            Some(DeploymentStorageFact {
+                service_id: dependency.service_name.clone(),
+                provider: "dependency_volume".to_string(),
+                env_key: None,
+                volume_name: Some(volume_name),
+                container_path: dependency
+                    .volume_target
+                    .clone()
+                    .unwrap_or_else(|| "/var/lib/loom/dependency".to_string()),
+                source_path: None,
+                persistent: true,
+                reason: dependency.reason.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let app_service = source_model
+        .services
+        .iter()
+        .find(|service| service.role != contracts::SourceServiceRole::Frontend)
+        .or_else(|| source_model.services.first());
+    if let Some(service) = app_service {
+        for (name, source_value) in &code_probe.env_defaults {
+            let Some(container_value) = container_env_default(name, source_value) else {
+                continue;
+            };
+            let Some(path) = file_database_path(&container_value) else {
+                continue;
+            };
+            facts.push(DeploymentStorageFact {
+                service_id: service.service_id.clone(),
+                provider: "file_database".to_string(),
+                env_key: Some(name.clone()),
+                volume_name: Some(format!("{}-file-data", service.service_id)),
+                container_path: path,
+                source_path: source_file_database_path(source_value),
+                persistent: true,
+                reason: "A repository file-database setting was containerized and requires a persistent volume.".to_string(),
+            });
+        }
+        for (name, value) in &environment.generated {
+            if code_probe.env_defaults.contains_key(name) {
+                continue;
+            }
+            let Some(path) = file_database_path(value) else {
+                continue;
+            };
+            facts.push(DeploymentStorageFact {
+                service_id: service.service_id.clone(),
+                provider: "file_database".to_string(),
+                env_key: Some(name.clone()),
+                volume_name: Some(format!("{}-file-data", service.service_id)),
+                container_path: path,
+                source_path: None,
+                persistent: true,
+                reason: "A generated file-database setting requires a persistent volume."
+                    .to_string(),
+            });
+        }
+    }
+    facts.sort_by(|left, right| {
+        left.service_id
+            .cmp(&right.service_id)
+            .then(left.container_path.cmp(&right.container_path))
+    });
+    facts.dedup_by(|left, right| {
+        left.service_id == right.service_id && left.container_path == right.container_path
+    });
+    facts
+}
+
+fn file_database_path(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if !lower.contains(FILE_STORAGE_CONTAINER_ROOT) {
+        return None;
+    }
+    let index = value.find(FILE_STORAGE_CONTAINER_ROOT)?;
+    let path = &value[index..];
+    let end = path.find(['?', ';']).unwrap_or(path.len());
+    Some(path[..end].to_string())
+}
+
+fn source_file_database_path(value: &str) -> Option<String> {
+    let (prefix, path) = [
+        "jdbc:sqlite:",
+        "sqlite:",
+        "jdbc:h2:file:",
+        "jdbc:hsqldb:file:",
+        "jdbc:derby:",
+    ]
+    .into_iter()
+    .find_map(|prefix| value.strip_prefix(prefix).map(|path| (prefix, path)))?;
+    let path = path.trim();
+    if path.is_empty()
+        || path == ":memory:"
+        || path.starts_with("mem:")
+        || path.starts_with("http:")
+        || path.starts_with("https:")
+        || (prefix == "jdbc:derby:" && path.starts_with("//"))
+    {
+        return None;
+    }
+    let (path, _) = split_database_url_suffix(path);
+    (!path.is_empty()).then_some(path.to_string())
+}
+
 fn container_env_default(name: &str, value: &str) -> Option<String> {
-    if !name.to_ascii_uppercase().contains("DATABASE") {
+    let upper_name = name.to_ascii_uppercase();
+    let file_database_value = [
+        "jdbc:sqlite:",
+        "sqlite:",
+        "jdbc:h2:file:",
+        "jdbc:hsqldb:file:",
+        "jdbc:derby:",
+    ]
+    .iter()
+    .any(|prefix| value.to_ascii_lowercase().starts_with(prefix));
+    if !file_database_value
+        && !upper_name.contains("DATABASE")
+        && !upper_name.contains("DATASOURCE")
+        && !upper_name.ends_with("_DB_URL")
+    {
         return None;
     }
     containerize_file_database_url(value)
@@ -754,7 +891,7 @@ fn containerize_file_database_url(value: &str) -> Option<String> {
 fn containerize_database_path(prefix: &str, path: &str) -> Option<String> {
     let path = path.trim();
     if path.is_empty()
-        || path.starts_with("/app/data/")
+        || path.starts_with(FILE_STORAGE_CONTAINER_ROOT)
         || path.starts_with("http:")
         || path.starts_with("https:")
         || path.starts_with("tcp:")
@@ -769,7 +906,9 @@ fn containerize_database_path(prefix: &str, path: &str) -> Option<String> {
         .next()
         .filter(|item| !item.is_empty())
         .unwrap_or("app.db");
-    Some(format!("{prefix}/app/data/{file_name}{suffix}"))
+    Some(format!(
+        "{prefix}{FILE_STORAGE_CONTAINER_ROOT}/{file_name}{suffix}"
+    ))
 }
 
 fn split_database_url_suffix(path: &str) -> (&str, &str) {
@@ -786,7 +925,7 @@ fn should_disable_spring_ddl_validation(
         && code_probe.spring_ddl_auto_validate
         && generated.values().any(|value| {
             let lower = value.to_ascii_lowercase();
-            containerize_file_database_url(&lower).is_some() || lower.contains("/app/data/")
+            containerize_file_database_url(&lower).is_some() || file_database_path(&lower).is_some()
         })
 }
 

@@ -18,6 +18,14 @@
 - Keep dispatchers, scopes, temp files, databases, servers, and background jobs cleaned up after tests.
 - Avoid snapshot-only UI tests for meaningful workflow behavior unless the repository already uses snapshots and targeted assertions also cover state.
 
+## Decision Rules
+
+- Choose the narrowest test layer that proves the changed contract: pure domain/state tests for business rules, `runTest` for coroutine scheduling, `testApplication` for Ktor wiring, Compose tests for visible state and interaction, and platform tests for `actual` implementations.
+- Keep test fixtures aligned with the repository's dependency boundary. Use fakes for owned ports and mocks only where an interaction with an external dependency is itself the contract.
+- Assert failure and recovery behavior, not only the happy path, whenever the implementation introduces validation, cancellation, retry, authentication, persistence, or disabled UI states.
+- Do not create a fixed coverage target solely to satisfy this reference. Report the changed branches and the evidence that covers them; add coverage thresholds only when the repository already enforces them.
+- Keep virtual time, dispatchers, application engines, databases, temporary files, and background jobs isolated and cleaned up so tests do not depend on execution order.
+
 ## Verification Focus
 
 - Run the configured Gradle test task for changed modules or the narrowest relevant target.

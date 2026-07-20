@@ -57,6 +57,7 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: String::new(),
                 target_ids: vec![],
                 issues: vec![delivery_core::RepairIssue {
@@ -68,6 +69,9 @@ where
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     };
@@ -99,25 +103,29 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: target.path.clone(),
                 target_ids: vec![target.target_id.clone()],
                 issues: gate_check.repair_issues,
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     }
     if let Some(gate) = gate_check.gate {
-        return Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: input.project_root.clone(),
-            prompt: gate.user_message.clone(),
-            accepted_responses: vec!["reply_in_chat".to_string()],
-            request_ref: Some(input.request_ref.clone()),
-            delivery_id: authorized.delivery_id.clone(),
-            phase_id: authorized.phase_id.clone(),
-            gate: Some(to_value(&gate)),
-        }));
+        return Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+            input.project_root.clone(),
+            gate.user_message.clone(),
+            vec!["reply_in_chat".to_string()],
+            Some(input.request_ref.clone()),
+            authorized.delivery_id.clone(),
+            authorized.phase_id.clone(),
+            Some(to_value(&gate)),
+        )));
     }
 
     let candidate: BrainstormCandidateAgentWritable = match serde_json::from_value(raw) {
@@ -126,6 +134,7 @@ where
             return Ok(LoomMcpActionResult::RepairableError(
                 LoomMcpRepairableErrorResult {
                     project_root: input.project_root.clone(),
+                    stop_allowed: false,
                     target_file: target.path.clone(),
                     target_ids: vec![target.target_id.clone()],
                     issues: vec![delivery_core::RepairIssue {
@@ -139,6 +148,9 @@ where
                     resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                     fix_scope: Some("brainstorm_candidate_only".to_string()),
                     read_groups: authorized.read_groups.clone(),
+                    agent_instruction: delivery_core::repairable_error_agent_instruction(
+                        "loom.brainstormAcceptFile",
+                    ),
                 },
             ));
         }
@@ -156,12 +168,16 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: target.path.clone(),
                 target_ids: vec![target.target_id.clone()],
                 issues,
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     }
@@ -198,6 +214,7 @@ where
             .map(|action| action.kind.clone()),
         &state::store::now_string(),
     )?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
 
     let store = FileTransitionStore;
     let mut delivery = store

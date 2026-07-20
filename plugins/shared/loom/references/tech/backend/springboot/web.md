@@ -1,34 +1,141 @@
-# Spring Boot Web Quality
+# Spring Boot Web Implementation
 
-This file applies Spring MVC/Spring Boot web-layer rules to task-owned HTTP behavior.
+Use the accepted HTTP interfaces as the authority for method, path, request shape, response shape, status codes, and error behavior. This reference owns their Spring MVC or WebFlux implementation, not API redesign.
 
-## When To Use
+## Web Stack Boundary
 
-- The task changes Spring Boot REST controllers, request/response DTOs, validation annotations, controller advice, CORS, WebClient calls, route mappings, or HTTP-facing service orchestration.
-- Use this when Spring MVC request lifecycle, validation, exception mapping, or external HTTP client behavior affects correctness.
-- If the task only changes internal service logic or persistence with no HTTP surface, do not load this web reference.
+Confirm which web stack the selected baseline and repository use before adding code:
 
-## Implementation Focus
+| Stack | Controller Shape | Client/Test Shape | Persistence Boundary |
+|---|---|---|---|
+| Spring MVC | Synchronous controller methods and servlet filters | `MockMvc`, `RestClient`, servlet security | Blocking repositories are allowed outside controllers |
+| Spring WebFlux | `Mono`/`Flux` controller methods and reactive filters | `WebTestClient`, `WebClient` | Blocking calls require an explicit bounded scheduler; R2DBC is preferred for reactive persistence |
 
-- Keep controllers thin: map request input, apply `@Valid`, call an application/service method, and return a response DTO. Do not put repository queries, state transitions, or cross-record business rules directly in controller methods.
-- Use request DTOs for external input and response DTOs/read models for output. Do not expose JPA entities or lazy associations through JSON serialization.
-- Put field-level syntax constraints in Jakarta Validation annotations, and keep business validation such as uniqueness, ownership, eligibility, and state transitions inside services.
-- Use `@RestControllerAdvice` or the repository's existing exception handler for validation, not-found, conflict, forbidden, and unexpected failures. Keep user-facing error payloads consistent with the API contract.
-- Keep route paths, status codes, pagination parameters, and response shapes aligned with the accepted API contract. Do not invent versioned paths, envelopes, or OpenAPI annotations unless the task owns that API concern.
-- Use `Pageable`, bounded filters, or explicit limits for list endpoints that can grow. Keep sorting deterministic.
-- For WebClient or downstream HTTP calls, centralize base URL/configuration, timeouts, error mapping, and retries according to existing project style. Do not call blocking clients from reactive paths.
-- Configure CORS only for the runtime/frontend boundary the task owns, and externalize origins when the project already uses configuration.
-- Keep web controllers, DTOs, advice, and application services under the project's real Spring Boot base package. Do not place production web code under tutorial roots such as `com.example` or `org.example`.
+Do not add WebFlux to a Spring MVC application for one endpoint. Do not call `.block()` inside a reactive request chain. Do not return `Mono` merely to wrap a blocking service call.
+
+## Controller Boundary
+
+Controllers own transport work:
+
+- bind path, query, header, and body input
+- trigger Jakarta Validation
+- resolve authenticated caller data through the established security mechanism
+- call one application/service operation
+- map the result to the accepted response and status
+
+Controllers do not own repository access, transaction boundaries, state-transition rules, cross-record validation, or downstream retry loops.
+
+```java
+@RestController
+@RequestMapping("/api/orders")
+final class OrderController {
+    private final OrderApplicationService orders;
+
+    OrderController(OrderApplicationService orders) {
+        this.orders = orders;
+    }
+
+    @PostMapping
+    ResponseEntity<OrderResponse> create(@Valid @RequestBody CreateOrderRequest request) {
+        OrderResponse created = orders.create(request);
+        URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+            .path("/{id}").buildAndExpand(created.id()).toUri();
+        return ResponseEntity.created(location).body(created);
+    }
+}
+```
+
+Preserve the real Spring Boot base package discovered from production source or build metadata. Keep controllers, advice, configuration, and application services under that package tree; never introduce tutorial roots such as `com.example` into production code.
+
+## DTO And Validation Boundary
+
+Use request DTOs for external input and response DTOs or read models for output. Do not serialize JPA entities, lazy proxies, internal version fields, credential fields, or bidirectional relationships.
+
+```java
+public record CreateOrderRequest(
+    @NotBlank String supplierName,
+    @NotEmpty List<@Valid OrderLineRequest> lines
+) {}
+```
+
+Apply annotations such as `@NotBlank`, `@Size`, `@Pattern`, and nested `@Valid` to transport-shape rules. Keep uniqueness, ownership, lifecycle eligibility, authorization, inventory, and cross-record rules in the owning application/domain service. A custom validator that queries a repository does not replace a database constraint and is vulnerable to races unless the write path also handles the constraint violation.
+
+Use validation groups only when create/update contracts truly differ and separate DTOs would create more ambiguity. Avoid annotations on JPA entities as the sole API validation contract.
+
+## Error Translation
+
+Use one `@RestControllerAdvice` aligned with the accepted API error contract. Spring Boot 3 supports `ProblemDetail`; preserve an existing project envelope when one already exists.
+
+```java
+@RestControllerAdvice
+final class ApiExceptionHandler {
+    @ExceptionHandler(OrderStateConflict.class)
+    ResponseEntity<ProblemDetail> handleConflict(OrderStateConflict error) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        problem.setTitle("Order cannot change state");
+        problem.setDetail(error.userMessage());
+        problem.setProperty("code", error.code());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+    }
+}
+```
+
+Translate validation, not-found, business conflict, authentication, authorization, temporary dependency failure, and unexpected failure separately when the accepted interface declares them. Never expose SQL text, persistence exception names, token parsing failures, class names, stack traces, or file paths.
+
+When the interface declares retryable availability responses, preserve its exact status set and emit `Retry-After` only when the application can provide a meaningful delay. This caller-visible policy does not authorize an internal retry loop; downstream retry behavior requires a separate resilience boundary.
+
+Do not log expected validation and not-found outcomes as server errors. Log unexpected failures once at the boundary that has request correlation data.
+
+## Collection Endpoints
+
+For unbounded collections, use the accepted pagination/filter contract with deterministic sorting. Keep the controller default and maximum page size aligned with service/query behavior. Avoid returning Spring `Page` internals when the API contract defines a stable response model; map page content and metadata explicitly.
+
+Validate sortable/filterable fields against an allowlist before constructing queries. Empty lists are successful collection responses unless the API contract states another behavior.
+
+## HTTP Caching And Conditional Requests
+
+Implement accepted HTTP cache behavior at the transport/read-model boundary. Use `Cache-Control`, `ETag`, and `Last-Modified` consistently with the interface contract, and evaluate conditional requests before serializing a full response.
+
+For a conditional read, return `304` without a response body only when the current validator matches. For concurrency-sensitive writes, keep `If-Match`/version checks aligned with the accepted stale-update status and the service or persistence version boundary. A weak timestamp or hash that can miss meaningful state changes is not a safe validator.
+
+HTTP validators and cache-control headers do not require Spring Cache, Redis, or an application object cache. Add `@Cacheable` only when a separate application-cache requirement owns source of truth, keys, freshness, invalidation, and failure behavior.
+
+## CORS And Browser Binding
+
+CORS belongs to the actual browser/runtime boundary. Use same-origin routing without CORS when frontend and API share an origin. For cross-origin clients:
+
+- externalize allowed origins
+- use explicit methods and headers
+- never combine credentialed requests with wildcard origins
+- keep Spring Security CORS configuration and MVC/WebFlux CORS configuration consistent
+- test preflight behavior for protected write operations
+
+Do not hardcode a single development origin as a production rule.
+
+## HTTP Client Separation
+
+Keep outbound HTTP clients outside controllers. `RestClient` and `WebClient` configuration, provider error translation, authentication propagation, and timeout ownership belong to the Spring Boot integration reference. WebFlux operator and backpressure behavior belongs to the Java reactive reference when selected.
 
 ## Verification Focus
 
-- Run `@WebMvcTest`, `MockMvc`, full integration tests, or the repository's chosen web-layer test for changed controllers and advice.
-- Prove at least one success response and one validation/business error response for new or changed endpoints.
-- For list endpoints, verify filtering, sorting, pagination, empty result, and stable response DTO shape when touched.
-- For external HTTP clients, test success, non-2xx/error mapping, timeout behavior when configured, and no hardcoded environment values.
-- For new controller packages, verify the application context or web-layer test discovers the controller and advice through the normal package tree.
+Useful web evidence includes:
 
-## Evidence Focus
+- a focused MVC or WebFlux test proving the accepted success status and response DTO
+- validation and business-blocking responses with stable error shape
+- controller discovery through the real component-scan root
+- list filtering, deterministic sorting, pagination, and empty results when owned
+- cache-control, validators, `304`, and stale-update behavior when declared by the interface
+- CORS preflight behavior when a cross-origin browser boundary exists
+- absence of entity/lazy-proxy serialization in the response path
 
-- In the evidence summary, name the Spring web decision: controller boundary, DTO mapping, validation split, exception advice, pagination, CORS, WebClient behavior, or web-layer proof.
-- When adding a new web package, mention the real base package used and why it matches the project namespace.
+## Unsafe Defaults
+
+- Adding `/v1` because a tutorial uses versioned paths.
+- Returning entities directly from controllers.
+- Catching every exception in each controller.
+- Performing repository writes or external calls in controller methods.
+- Retrying outbound requests inside a controller.
+- Treating HTTP validators as a reason to add an application cache.
+- Enabling permissive CORS globally.
+- Mixing servlet and reactive web stacks without an accepted boundary.
+- Creating production controllers under `com.example` or `org.example`.

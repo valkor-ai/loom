@@ -176,12 +176,19 @@ fn prepare_uses_root_frontend_and_python_backend_source_model() {
         "status": "modified",
         "runtimeKind": "web_frontend_plus_api_service",
         "deploymentShape": "frontend-and-backend",
-        "build": {
-            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
-        },
-        "start": {
-            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
-            "port": 8000
+        "commands": {
+            "development": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "verification": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "deployment": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            }
         },
         "httpProbes": {
             "previewPath": "/",
@@ -442,15 +449,18 @@ fn deploy_binds_integrated_frontend_source_without_assuming_a_framework_env_name
             "status": "modified",
             "runtimeKind": "spring-boot-served-static-frontend",
             "deploymentShape": "single-service",
-            "build": { "command": "./mvnw -DskipTests package" },
-            "start": { "command": "java -jar target/app.jar", "port": 8080 },
+            "commands": {
+                "development": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } },
+                "verification": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } },
+                "deployment": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } }
+            },
             "httpProbes": { "previewPath": "/", "expectedStatus": "2xx_or_3xx" },
             "frontend": {
                 "required": true,
                 "kind": "vite-react",
                 "sourceRoot": ".",
                 "outputDir": "dist",
-                "buildCommand": "npm run build",
+            "commands": { "build": { "command": "npm run build" } },
                 "servedBy": "springboot-static"
             },
         "api": {
@@ -525,12 +535,19 @@ fn deploy_validate_applies_controlled_model_repair_over_local_snapshot() {
         "status": "modified",
         "runtimeKind": "web_frontend_plus_api_service",
         "deploymentShape": "frontend-and-backend",
-        "build": {
-            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
-        },
-        "start": {
-            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
-            "port": 8000
+        "commands": {
+            "development": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "verification": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "deployment": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            }
         },
         "httpProbes": {
             "previewPath": "/",
@@ -719,8 +736,20 @@ fn source_model_matrix_handles_root_frontend_with_backend_stack_roots() {
             "status": "modified",
             "runtimeKind": "web_frontend_plus_api_service",
             "deploymentShape": "frontend-and-backend",
-            "build": { "command": format!("frontend: npm run build; backend: {}", case.build_command) },
-            "start": { "command": format!("frontend: npm run dev; backend: {}", case.start_command), "port": 8000 },
+            "commands": {
+                "development": {
+                    "build": { "command": format!("frontend: npm run build; backend: {}", case.build_command) },
+                    "start": { "command": format!("frontend: npm run dev; backend: {}", case.start_command), "port": 8000 }
+                },
+                "verification": {
+                    "build": { "command": format!("frontend: npm run build; backend: {}", case.build_command) },
+                    "start": { "command": format!("frontend: npm run dev; backend: {}", case.start_command), "port": 8000 }
+                },
+                "deployment": {
+                    "build": { "command": format!("frontend: npm run build; backend: {}", case.build_command) },
+                    "start": { "command": format!("frontend: npm run dev; backend: {}", case.start_command), "port": 8000 }
+                }
+            },
             "httpProbes": {
                 "previewPath": "/",
                 "apiPaths": ["/api/health"]
@@ -729,7 +758,7 @@ fn source_model_matrix_handles_root_frontend_with_backend_stack_roots() {
                 "required": true,
                 "kind": case.api_kind,
                 "entry": case.api_entry,
-                "buildCommand": case.build_command,
+                "commands": { "build": { "command": case.build_command } },
                 "basePath": "/api",
                 "probePaths": ["/api/health"]
             }
@@ -814,8 +843,11 @@ fn deploy_prepare_applies_healthcheck_input_to_single_service_spec_and_compose()
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -842,7 +874,11 @@ fn deploy_prepare_applies_healthcheck_input_to_single_service_spec_and_compose()
         .find(|service| service.service_id == "app")
         .expect("app service");
     assert_eq!(app.healthcheck_path.as_deref(), Some("/ready"));
-    assert_eq!(spec.topology.validation.preview_paths, vec!["/ready"]);
+    assert_eq!(
+        spec.topology.validation.preview_paths,
+        vec!["/"],
+        "healthcheck is a health probe, not a replacement for the public preview path"
+    );
 
     let compose = read_text(
         &fixture
@@ -912,8 +948,11 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         "status": "modified",
         "runtimeKind": "spring boot service with vite web",
         "deploymentShape": "single-service",
-        "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" },
-        "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" }, "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 } },
+            "verification": { "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" }, "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 } },
+            "deployment": { "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" }, "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -1112,7 +1151,21 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert_eq!(backend.healthcheck_path.as_deref(), Some("/api/health"));
     assert_eq!(
         spec.environment.generated["DATABASE_URL"],
-        "jdbc:sqlite:/app/data/purchase-approval.db"
+        "jdbc:sqlite:/var/lib/loom/purchase-approval.db"
+    );
+    let storage_fact = spec
+        .storage_facts
+        .iter()
+        .find(|fact| fact.env_key.as_deref() == Some("DATABASE_URL"))
+        .expect("file database storage fact");
+    assert_eq!(storage_fact.provider, "file_database");
+    assert_eq!(
+        storage_fact.source_path.as_deref(),
+        Some("purchase-approval.db")
+    );
+    assert_eq!(
+        storage_fact.container_path,
+        "/var/lib/loom/purchase-approval.db"
     );
     assert_eq!(
         spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
@@ -1152,7 +1205,7 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
         "{compose}"
     );
     assert!(
-        compose.contains("DATABASE_URL: jdbc:sqlite:/app/data/purchase-approval.db"),
+        compose.contains("DATABASE_URL: jdbc:sqlite:/var/lib/loom/purchase-approval.db"),
         "{compose}"
     );
     assert!(
@@ -1160,10 +1213,13 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
         "{compose}"
     );
     assert!(
-        compose.contains("      - backend-data:/app/data"),
+        compose.contains("      - backend-file-data:/var/lib/loom"),
         "{compose}"
     );
-    assert!(compose.contains("volumes:\n  backend-data:"), "{compose}");
+    assert!(
+        compose.contains("volumes:\n  backend-file-data:"),
+        "{compose}"
+    );
 
     let frontend_dockerfile = read_text(
         &fixture
@@ -1186,13 +1242,19 @@ fn prepare_promotes_single_service_frontend_api_contract_to_proxy_topology() {
             "status": "modified",
             "runtimeKind": "web_frontend_plus_api",
             "deploymentShape": "single-service",
-            "build": {
-                "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
-                "workingDirectory": "."
-            },
-            "start": {
-                "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
-                "workingDirectory": "."
+            "commands": {
+                "development": {
+                    "build": { "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package", "workingDirectory": "." },
+                    "start": { "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+                },
+                "verification": {
+                    "build": { "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package", "workingDirectory": "." },
+                    "start": { "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+                },
+                "deployment": {
+                    "build": { "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package", "workingDirectory": "." },
+                    "start": { "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+                }
             },
             "httpProbes": {
                 "previewPath": "/",
@@ -1361,8 +1423,11 @@ fn deploy_validate_allows_single_app_api_paths_without_proxy_topology() {
         "status": "modified",
         "runtimeKind": "spring boot api",
         "deploymentShape": "single-service",
-        "build": { "command": "./mvnw -DskipTests package" },
-        "start": { "command": "./mvnw spring-boot:run", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "./mvnw spring-boot:run", "port": 8080 } },
+            "verification": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "./mvnw spring-boot:run", "port": 8080 } },
+            "deployment": { "build": { "command": "./mvnw -DskipTests package" }, "start": { "command": "./mvnw spring-boot:run", "port": 8080 } }
+        },
         "httpProbes": {
             "previewPath": "/api/health",
             "apiPaths": ["/api/health"]
@@ -1498,8 +1563,11 @@ fn prepare_splits_cd_combined_commands_into_service_level_model() {
         "status": "modified",
         "runtimeKind": "react web plus spring boot api",
         "deploymentShape": "frontend-and-backend",
-        "build": { "command": "cd web && npm run build && cd ../server && ./mvnw -q package -DskipTests" },
-        "start": { "command": "cd server && ./mvnw spring-boot:run & cd ../web && npm run dev", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "cd web && npm run build && cd ../server && ./mvnw -q package -DskipTests" }, "start": { "command": "cd server && ./mvnw spring-boot:run & cd ../web && npm run dev", "port": 8080 } },
+            "verification": { "build": { "command": "cd web && npm run build && cd ../server && ./mvnw -q package -DskipTests" }, "start": { "command": "cd server && ./mvnw spring-boot:run & cd ../web && npm run dev", "port": 8080 } },
+            "deployment": { "build": { "command": "cd web && npm run build && cd ../server && ./mvnw -q package -DskipTests" }, "start": { "command": "cd server && ./mvnw spring-boot:run & cd ../web && npm run dev", "port": 8080 } }
+        },
         "httpProbes": {
             "previewPath": "/requests",
             "apiPaths": ["/api/health", "/api/replenishment-requests"]
@@ -1643,7 +1711,16 @@ fn prepare_generates_file_database_env_from_code_probe_when_contract_omits_it() 
     );
     assert_eq!(
         spec.environment.generated["DATABASE_URL"],
-        "jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"
+        "jdbc:h2:file:/var/lib/loom/purchase-approval;MODE=PostgreSQL"
+    );
+    let storage_fact = spec
+        .storage_facts
+        .iter()
+        .find(|fact| fact.env_key.as_deref() == Some("DATABASE_URL"))
+        .expect("file database storage fact");
+    assert_eq!(
+        storage_fact.source_path.as_deref(),
+        Some("./var/purchase-approval")
     );
     assert_eq!(
         spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
@@ -1657,7 +1734,8 @@ fn prepare_generates_file_database_env_from_code_probe_when_contract_omits_it() 
     )
     .expect("compose");
     assert!(
-        compose.contains("DATABASE_URL: jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"),
+        compose
+            .contains("DATABASE_URL: jdbc:h2:file:/var/lib/loom/purchase-approval;MODE=PostgreSQL"),
         "{compose}"
     );
     assert!(
@@ -1665,7 +1743,7 @@ fn prepare_generates_file_database_env_from_code_probe_when_contract_omits_it() 
         "{compose}"
     );
     assert!(
-        compose.contains("      - backend-data:/app/data"),
+        compose.contains("      - backend-file-data:/var/lib/loom"),
         "{compose}"
     );
 }
@@ -1725,8 +1803,11 @@ fn prepare_promotes_composite_runtime_above_preview_app_path() {
         "status": "modified",
         "runtimeKind": "spring boot service with vite web",
         "deploymentShape": "single-service",
-        "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" },
-        "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" }, "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 } },
+            "verification": { "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" }, "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 } },
+            "deployment": { "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" }, "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -1801,6 +1882,8 @@ fn prepare_promotes_composite_runtime_above_preview_app_path() {
         dockerfile.contains("COPY --from=service-builder /tmp/app.jar /app/app.jar"),
         "{dockerfile}"
     );
+    assert!(!dockerfile.contains("/tmp/data"), "{dockerfile}");
+    assert!(!dockerfile.contains("/app/data"), "{dockerfile}");
     assert!(!dockerfile.contains("FROM nginx"), "{dockerfile}");
 
     let evidence: Value = read_json(
@@ -1858,7 +1941,11 @@ fn deploy_prepare_auto_resolves_occupied_preferred_host_port() {
         "runtimeKind": "node",
         "deploymentShape": "single-service",
         "httpProbes": { "previewPath": "/" },
-        "start": { "command": "npm run start", "port": preferred_port }
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": preferred_port } },
+            "verification": { "start": { "command": "npm run start", "port": preferred_port } },
+            "deployment": { "start": { "command": "npm run start", "port": preferred_port } }
+        }
     }));
     fixture.write_text(
         "package.json",
@@ -1892,7 +1979,11 @@ fn deploy_prepare_prefers_existing_compose_without_inlining_or_editing_it() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -1947,7 +2038,11 @@ fn deploy_prepare_reuses_existing_dockerfile_and_generates_only_wrapper_assets()
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -2030,7 +2125,11 @@ fn deploy_prepare_uses_app_path_when_selecting_existing_assets() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text("apps/api/Dockerfile", "FROM node:22\n");
@@ -2066,7 +2165,11 @@ fn deploy_up_auto_falls_back_from_existing_provider_to_generated() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
@@ -2130,7 +2233,11 @@ fn deploy_up_respects_forced_existing_provider_without_fallback() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
@@ -2189,7 +2296,11 @@ fn deploy_up_updates_active_operation_phase_and_streams_docker_logs() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -2346,8 +2457,11 @@ fn deploy_up_prevalidates_generated_assets_before_docker_build() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run preview", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -2411,7 +2525,11 @@ fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
         "runtimeKind": "node",
         "deploymentShape": "single-service",
         "httpProbes": { "previewPath": "/" },
-        "start": { "port": preferred_port }
+        "commands": {
+            "development": { "start": { "port": preferred_port } },
+            "verification": { "start": { "port": preferred_port } },
+            "deployment": { "start": { "port": preferred_port } }
+        }
     }));
     fixture.write_text(
         "package.json",
@@ -2462,7 +2580,11 @@ fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
         "runtimeKind": "node",
         "deploymentShape": "single-service",
         "httpProbes": { "previewPath": "/" },
-        "start": { "port": 8080 }
+        "commands": {
+            "development": { "start": { "port": 8080 } },
+            "verification": { "start": { "port": 8080 } },
+            "deployment": { "start": { "port": 8080 } }
+        }
     }));
     fixture.write_text(
         "package.json",
@@ -2519,7 +2641,11 @@ fn deploy_validate_accepts_json_array_copy_sources_in_existing_dockerfile() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -2958,6 +3084,7 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3002,6 +3129,7 @@ fn deploy_execution_repair_invalid_result_returns_repairable_error() {
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3078,6 +3206,7 @@ fn deploy_execution_repair_rejects_invalid_status() {
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3155,6 +3284,7 @@ fn deploy_execution_repair_completed_result_requires_changed_files() {
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3233,6 +3363,7 @@ fn deploy_execution_repair_completed_result_rejects_failed_code_level_checks() {
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3260,8 +3391,11 @@ fn deploy_up_routes_runtime_build_failure_to_execution_repair_and_counts_retry_a
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3374,6 +3508,7 @@ exit 0
         request_ref,
         written_target_ids: None,
     };
+    read_required_request_groups(&fixture.root_str(), &submit_input.request_ref);
     let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
         .expect("authorized deploy repair result");
     let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
@@ -3400,8 +3535,11 @@ fn deploy_up_classifies_registry_network_without_source_repair() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3490,8 +3628,11 @@ fn deploy_up_classifies_docker_socket_failure_as_environment_blocker() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run start", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run start", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3559,8 +3700,11 @@ fn deploy_prepare_detects_bootstrap_tasks_without_executing_them() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run preview", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3600,8 +3744,11 @@ fn deploy_bootstrap_returns_confirmation_gate_with_declared_tasks() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run preview", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3644,8 +3791,11 @@ fn deploy_bootstrap_executes_confirmed_task_inside_compose_service() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run preview", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3717,8 +3867,11 @@ fn deploy_bootstrap_blocks_when_compose_service_is_not_running() {
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
-        "build": { "command": "npm run build" },
-        "start": { "command": "npm run preview", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "verification": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } },
+            "deployment": { "build": { "command": "npm run build" }, "start": { "command": "npm run preview", "port": 8080 } }
+        },
         "httpProbes": { "previewPath": "/" }
     }));
     fixture.write_text(
@@ -3822,8 +3975,11 @@ fn runtime_delivery() -> Value {
         "status": "modified",
         "runtimeKind": "vite react frontend plus spring boot postgres backend",
         "deploymentShape": "frontend-and-backend",
-        "build": { "command": "npm --prefix apps/frontend run build && mvn -f apps/backend/pom.xml package" },
-        "start": { "command": "java -jar target/app.jar", "port": 8080 },
+        "commands": {
+            "development": { "build": { "command": "npm --prefix apps/frontend run build && mvn -f apps/backend/pom.xml package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } },
+            "verification": { "build": { "command": "npm --prefix apps/frontend run build && mvn -f apps/backend/pom.xml package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } },
+            "deployment": { "build": { "command": "npm --prefix apps/frontend run build && mvn -f apps/backend/pom.xml package" }, "start": { "command": "java -jar target/app.jar", "port": 8080 } }
+        },
         "httpProbes": {
             "previewPath": "/",
             "healthPath": "/actuator/health",
@@ -3834,20 +3990,30 @@ fn runtime_delivery() -> Value {
             "kind": "vite-react",
             "sourceRoot": "apps/frontend",
             "outputDir": "apps/frontend/dist",
-            "buildCommand": "npm --prefix apps/frontend run build"
+            "commands": { "build": { "command": "npm --prefix apps/frontend run build" } }
         },
         "api": {
             "required": true,
             "kind": "spring-boot",
             "entry": "apps/backend/pom.xml",
-            "buildCommand": "mvn -f apps/backend/pom.xml package",
+            "commands": { "build": { "command": "mvn -f apps/backend/pom.xml package" } },
             "basePath": "/api",
             "probePaths": ["/api/accounts"]
         },
         "environment": {
             "required": ["SPRING_DATASOURCE_URL"],
             "optional": ["postgres"]
-        }
+        },
+        "runtimeDependencies": [{
+            "dependencyId": "runtime_persistence",
+            "kind": "storage",
+            "provider": "postgres",
+            "startupRequirement": "required",
+            "requiredFor": ["current_phase_persistent_capabilities"],
+            "failureBehavior": "Storage failure must prevent false success.",
+            "recoveryStrategy": "Restore storage and restart the runtime.",
+            "observability": ["Readiness exposes storage failure."]
+        }]
     })
 }
 
@@ -3856,14 +4022,19 @@ fn plugin_style_dual_service_runtime_delivery() -> Value {
         "status": "modified",
         "runtimeKind": "react_vite_plus_spring_boot",
         "deploymentShape": "dual-service",
-        "build": {
-            "command": "frontend: npm run build; backend: ./mvnw package",
-            "outputs": ["frontend/dist", "backend/target/*.jar"],
-            "workingDirectory": "."
-        },
-        "start": {
-            "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run",
-            "workingDirectory": "."
+        "commands": {
+            "development": {
+                "build": { "command": "frontend: npm run build; backend: ./mvnw package", "outputs": ["frontend/dist", "backend/target/*.jar"], "workingDirectory": "." },
+                "start": { "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+            },
+            "verification": {
+                "build": { "command": "frontend: npm run build; backend: ./mvnw package", "outputs": ["frontend/dist", "backend/target/*.jar"], "workingDirectory": "." },
+                "start": { "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+            },
+            "deployment": {
+                "build": { "command": "frontend: npm run build; backend: ./mvnw package", "outputs": ["frontend/dist", "backend/target/*.jar"], "workingDirectory": "." },
+                "start": { "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run", "workingDirectory": "." }
+            }
         },
         "httpProbes": {
             "previewPath": "/",
@@ -3886,12 +4057,19 @@ fn write_root_vite_fastapi_delivery(fixture: &Fixture) {
         "status": "modified",
         "runtimeKind": "web_frontend_plus_api_service",
         "deploymentShape": "frontend-and-backend",
-        "build": {
-            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
-        },
-        "start": {
-            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
-            "port": 8000
+        "commands": {
+            "development": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "verification": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            },
+            "deployment": {
+                "build": { "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000" },
+                "start": { "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000", "port": 8000 }
+            }
         },
         "httpProbes": {
             "previewPath": "/",
@@ -4007,7 +4185,7 @@ dependencies = ["fastapi", "uvicorn"]
             start_command: "dotnet Server.dll",
             expected_root: "server",
             expected_kind: RuntimeKind::Dotnet,
-            expected_manifest: "*.csproj",
+            expected_manifest: "Server.csproj",
             expected_build_command: "dotnet publish Server.csproj -c Release -o /app/publish",
             expected_start_command: "dotnet Server.dll",
             files: vec![(
@@ -4319,7 +4497,7 @@ impl Fixture {
             .expect("repair action")
     }
 
-    fn write_runtime_delivery(&self, runtime_delivery: Value) {
+    fn write_runtime_delivery(&self, mut runtime_delivery: Value) {
         let delivery_id = "delivery-1";
         let phase_id = "phase-1";
         let aac_ref = ".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json";
@@ -4344,6 +4522,12 @@ impl Fixture {
                 })
             })
             .collect::<Vec<_>>();
+        if let Some(http_probes) = runtime_delivery
+            .get_mut("httpProbes")
+            .and_then(Value::as_object_mut)
+        {
+            http_probes.remove("apiPaths");
+        }
         let mut aac = json!({
             "schemaVersion": "1.0",
             "architectureArtifactContractId": "aac-1",
@@ -4391,6 +4575,7 @@ impl Fixture {
                         .into_iter()
                         .collect(),
                     next_action: None,
+                    pending_repair: None,
                 }],
                 updated_at: now_string(),
             },
@@ -4569,6 +4754,26 @@ impl Fixture {
             },
         )
         .expect("write failure report");
+    }
+}
+
+fn read_required_request_groups(project_root: &str, request_ref: &str) {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect repair request before submit");
+    for group in inspected
+        .read_groups
+        .into_iter()
+        .filter(|group| group.required)
+    {
+        state::read_field_group(ReadFieldGroupInput {
+            project_root: project_root.to_string(),
+            request_ref: request_ref.to_string(),
+            group_id: group.group_id,
+        })
+        .expect("read required repair group before submit");
     }
 }
 

@@ -37,6 +37,25 @@ Use the repo's existing names when present. The important part is that component
 4. Convert page-local raw values into semantic aliases when the task creates shared or repeated UI. One-off raw values are acceptable only for asset dimensions or media crop details.
 5. Record token asset files and the UI files that consume them in implementation evidence.
 
+## Token Convergence
+
+When existing screens contain multiple token or raw-value variants:
+
+1. Inventory the existing theme, global CSS, Tailwind theme, component-library
+   variables, and page-local repeated values.
+2. Group values by semantic role and identify which variants are intentional for a
+   scenario, state, dark mode, or platform.
+3. Select one canonical role for each intentional meaning and record aliases that
+   must remain compatible.
+4. Replace only task-owned consumers. Do not rewrite unrelated screens as a style
+   cleanup unless the task owns the shared system.
+5. Verify that the canonical asset is registered once and that old duplicate roles
+   are removed or explicitly retained for a known compatibility boundary.
+
+The existence of a token template does not justify replacing an existing theme.
+The selected token asset plan and repository style evidence determine whether the
+implementation reuses, extends, or creates the asset.
+
 Useful alias groups for product UI:
 
 ```css
@@ -85,6 +104,8 @@ Required common states:
 - Tokens are reusable and documented through names, not comments only.
 - Components do not encode delivery process language.
 - New shared components must include the states their consumers need; do not make every feature recreate disabled/loading/error variants.
+- A token change must preserve the visual meaning of existing states, focus, density,
+  and platform behavior unless the task explicitly changes that contract.
 
 ## Shared Primitive Bar
 

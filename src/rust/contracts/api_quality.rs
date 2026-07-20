@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 
 pub fn build_api_quality_seed_from_foundation(
@@ -12,8 +14,10 @@ pub fn build_api_quality_seed_from_foundation(
         "core".to_string(),
         "resource".to_string(),
         "errors".to_string(),
-        "security".to_string(),
     ];
+    if signals.security_required {
+        api_groups.push("security".to_string());
+    }
     if signals.pagination_required {
         api_groups.push("pagination".to_string());
     }
@@ -77,7 +81,8 @@ pub fn build_api_quality_seed_from_foundation(
                 "conditionalRequestPolicy",
                 "rateLimitPolicy",
                 "retryPolicy",
-                "requestIdPolicy"
+                "requestIdPolicy",
+                "normalization"
             ]
         },
         "generationRules": [
@@ -88,6 +93,7 @@ pub fn build_api_quality_seed_from_foundation(
             "Read only files listed in techReferenceProfile.referenceLoadPlan; selected API groups are semantic evidence labels, not path maps.",
             "Do not add versioned paths or deprecation policy unless techReferenceProfile.referenceLoadPlan selects tech/api/evolution.md.",
             "Do not require OpenAPI files unless techReferenceProfile.referenceLoadPlan selects tech/api/contract.md or the repository already owns one.",
+            "Do not add authPolicy or authentication infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/security.md or the accepted interface already has an auth policy.",
             "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/operations.md or the repository already owns that convention."
         ]
     })
@@ -137,6 +143,7 @@ pub fn api_quality_enum_refs() -> Value {
 #[derive(Default)]
 struct ApiSeedSignals {
     http_interaction_ids: Vec<String>,
+    security_required: bool,
     pagination_required: bool,
     contract_artifact_required: bool,
     compatibility_required: bool,
@@ -153,25 +160,37 @@ fn collect_api_seed_signals(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let project_http_refs = project_api_contract
+    let mut project_http_refs = BTreeSet::<String>::new();
+    let mut project_secured_http_refs = BTreeSet::<String>::new();
+    for interface in project_api_contract
         .and_then(|contract| contract.get("interfaces"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"))
-        .filter_map(|interface| interface.get("interfaceId").and_then(Value::as_str))
-        .collect::<std::collections::BTreeSet<_>>();
+    {
+        let Some(interface_id) = interface.get("interfaceId").and_then(Value::as_str) else {
+            continue;
+        };
+        project_http_refs.insert(interface_id.to_string());
+        if interface_auth_policy_applies(interface) {
+            project_secured_http_refs.insert(interface_id.to_string());
+        }
+    }
 
     for (index, interaction) in interactions.iter().enumerate() {
         let direct_http =
             interaction.get("interactionType").and_then(Value::as_str) == Some("http_api");
-        let references_http = interaction
+        let interface_refs = interaction
             .get("interfaceRefs")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .any(|interface_ref| project_http_refs.contains(interface_ref));
+            .collect::<Vec<_>>();
+        let references_http = interface_refs
+            .iter()
+            .any(|interface_ref| project_http_refs.contains(*interface_ref));
         if !direct_http && !references_http {
             continue;
         }
@@ -183,6 +202,10 @@ fn collect_api_seed_signals(
                 .unwrap_or_else(|| format!("interaction-{index}")),
         );
         let traits = interaction.get("qualityTraits").unwrap_or(&Value::Null);
+        signals.security_required |= auth_requirement_selects_security(traits)
+            || interface_refs
+                .iter()
+                .any(|interface_ref| project_secured_http_refs.contains(*interface_ref));
         signals.pagination_required |= bool_at(traits, "paginationRequired");
         signals.contract_artifact_required |= bool_at(traits, "contractArtifactRequired");
         signals.compatibility_required |= bool_at(traits, "compatibilityRequired");
@@ -200,6 +223,38 @@ fn bool_at(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn auth_requirement_selects_security(quality_traits: &Value) -> bool {
+    matches!(
+        quality_traits
+            .get("authRequirement")
+            .and_then(Value::as_str),
+        Some("required" | "optional" | "deferred_with_risk")
+    )
+}
+
+fn interface_auth_policy_applies(interface: &Value) -> bool {
+    let Some(policy) = interface.get("authPolicy") else {
+        return false;
+    };
+    match policy {
+        Value::Null => false,
+        Value::Bool(required) => *required,
+        Value::String(requirement) => !matches!(
+            requirement.as_str(),
+            "" | "none" | "not_applicable" | "not_required"
+        ),
+        Value::Object(policy) => match policy.get("required") {
+            Some(Value::Bool(required)) => *required,
+            Some(Value::String(requirement)) => !matches!(
+                requirement.as_str(),
+                "" | "none" | "not_applicable" | "not_required"
+            ),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +267,7 @@ mod tests {
                     "interactionId": "interaction-reporting",
                     "interactionType": "http_api",
                     "qualityTraits": {
+                        "authRequirement": "not_applicable",
                         "paginationRequired": true,
                         "contractArtifactRequired": false,
                         "compatibilityRequired": false,
@@ -224,8 +280,73 @@ mod tests {
         assert_eq!(seed["required"], json!(true));
         assert_eq!(
             seed["techReferenceProfile"]["groups"]["api"],
-            json!(["core", "resource", "errors", "security", "pagination"])
+            json!(["core", "resource", "errors", "pagination"])
         );
+    }
+
+    #[test]
+    fn structured_quality_traits_select_every_conditional_api_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-public-orders",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "required",
+                        "paginationRequired": true,
+                        "contractArtifactRequired": true,
+                        "compatibilityRequired": true,
+                        "operationalPolicies": ["idempotency", "rate_limit", "request_id"]
+                    }
+                }]
+            }
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None);
+        assert_eq!(
+            seed["techReferenceProfile"]["groups"]["api"],
+            json!([
+                "core",
+                "resource",
+                "errors",
+                "security",
+                "pagination",
+                "contract",
+                "evolution",
+                "operations"
+            ])
+        );
+        let paths = seed["techReferenceProfile"]["referenceLoadPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.get("path").and_then(Value::as_str))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(paths.len(), 8);
+    }
+
+    #[test]
+    fn unauthenticated_http_interaction_does_not_select_security_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-public-health",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "not_applicable",
+                        "paginationRequired": false,
+                        "contractArtifactRequired": false,
+                        "compatibilityRequired": false,
+                        "operationalPolicies": []
+                    }
+                }]
+            }
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None);
+        assert!(!seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group == "security"));
     }
 
     #[test]
@@ -270,5 +391,60 @@ mod tests {
             }]
         });
         assert!(!build_api_quality_seed_from_foundation(&foundation, Some(&contract)).is_null());
+    }
+
+    #[test]
+    fn existing_secured_http_contract_ref_selects_security_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-existing-secured",
+                    "interactionType": "service_method",
+                    "interfaceRefs": ["interface-admin-list"]
+                }]
+            }
+        });
+        let contract = json!({
+            "interfaces": [{
+                "interfaceId": "interface-admin-list",
+                "type": "http_api",
+                "authPolicy": {
+                    "required": "required",
+                    "actorRefs": ["actor-admin"]
+                }
+            }]
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract));
+        assert!(seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group == "security"));
+    }
+
+    #[test]
+    fn existing_boolean_auth_policy_selects_security_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-existing-secured",
+                    "interactionType": "service_method",
+                    "interfaceRefs": ["interface-admin-list"]
+                }]
+            }
+        });
+        let contract = json!({
+            "interfaces": [{
+                "interfaceId": "interface-admin-list",
+                "type": "http_api",
+                "authPolicy": {"required": true}
+            }]
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract));
+        assert!(seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group == "security"));
     }
 }

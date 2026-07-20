@@ -6,7 +6,7 @@ use std::{
 };
 
 use contracts::{
-    DeployProvider, DeploymentRoute, DeploymentSourceService, DeploymentSpec,
+    DeployProvider, DeploymentRoute, DeploymentShape, DeploymentSourceService, DeploymentSpec,
     DeploymentTopologyClass, RuntimeKind, SourceServiceRole,
 };
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult};
@@ -149,6 +149,7 @@ pub fn validate_generated_assets(
     spec: &DeploymentSpec,
 ) -> StateResult<Vec<String>> {
     let mut issues = Vec::new();
+    validate_source_model_contract(&mut issues, spec);
     let compose_file = from_project_relative(project_root, &spec.files.compose_path)?;
     let compose = read_text(&compose_file)?;
     if !compose.contains("services:") {
@@ -271,6 +272,137 @@ pub fn validate_generated_assets(
     }
     validate_deployment_facts(&mut issues, spec);
     Ok(issues)
+}
+
+fn validate_source_model_contract(issues: &mut Vec<String>, spec: &DeploymentSpec) {
+    let model = &spec.source_model;
+    if model.services.is_empty() {
+        issues.push("sourceModel must declare at least one service.".to_string());
+        return;
+    }
+    let service_ids = model
+        .services
+        .iter()
+        .map(|service| service.service_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if !service_ids.contains(model.primary_service_id.as_str()) {
+        issues.push(format!(
+            "sourceModel primaryServiceId {} is not present in services.",
+            model.primary_service_id
+        ));
+    }
+    if !service_ids.contains(model.preview_service_id.as_str()) {
+        issues.push(format!(
+            "sourceModel previewServiceId {} is not present in services.",
+            model.preview_service_id
+        ));
+    }
+    match model.shape {
+        DeploymentShape::SingleService => {
+            if model.services.len() != 1 {
+                issues.push(
+                    "sourceModel shape single-service requires exactly one application service; dependencies belong in sourceModel.dependencies.".to_string(),
+                );
+            }
+        }
+        DeploymentShape::FrontendAndBackend => {
+            let has_frontend = model
+                .services
+                .iter()
+                .any(|service| service.role == SourceServiceRole::Frontend);
+            let has_backend = model
+                .services
+                .iter()
+                .any(|service| service.role == SourceServiceRole::Backend);
+            if !has_frontend || !has_backend {
+                issues.push(
+                    "sourceModel shape frontend-and-backend requires both frontend and backend services."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    for route in &spec.topology.routes {
+        match route {
+            DeploymentRoute::StaticSpa {
+                target_service_id, ..
+            } => {
+                if !model.services.iter().any(|service| {
+                    service.service_id == *target_service_id
+                        && service.role == SourceServiceRole::Frontend
+                }) {
+                    issues.push(format!(
+                        "topology static SPA route target {} must be a sourceModel frontend service.",
+                        target_service_id
+                    ));
+                }
+            }
+            DeploymentRoute::HttpProxy {
+                public_path: _,
+                target_service_id,
+                target_port,
+                ..
+            } => {
+                let Some(target) = model
+                    .services
+                    .iter()
+                    .find(|service| service.service_id == *target_service_id)
+                else {
+                    continue;
+                };
+                if target.role == SourceServiceRole::Frontend {
+                    issues.push(format!(
+                        "topology HTTP proxy target {} must not be a frontend service.",
+                        target_service_id
+                    ));
+                }
+                if target.port != *target_port {
+                    issues.push(format!(
+                        "topology HTTP proxy target {} port {} must match sourceModel port {}.",
+                        target_service_id, target_port, target.port
+                    ));
+                }
+            }
+        }
+    }
+    let proxy_paths = spec
+        .topology
+        .routes
+        .iter()
+        .filter_map(|route| match route {
+            DeploymentRoute::HttpProxy { public_path, .. } => {
+                Some(normalize_nginx_path(public_path))
+            }
+            DeploymentRoute::StaticSpa { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    for probe in &spec.topology.validation.api_probes {
+        let normalized_probe = normalize_nginx_path(&probe.path);
+        let covered = proxy_paths.iter().any(|public_path| {
+            let public_path_prefix = public_path.trim_end_matches('/');
+            normalized_probe == *public_path
+                || normalized_probe.starts_with(&format!("{public_path_prefix}/"))
+        });
+        if !covered {
+            issues.push(format!(
+                "topology API probe {} is outside every HTTP proxy route.",
+                probe.path
+            ));
+        }
+    }
+    if model.shape == DeploymentShape::FrontendAndBackend
+        && !spec.topology.validation.api_probes.is_empty()
+        && !spec
+            .topology
+            .routes
+            .iter()
+            .any(|route| matches!(route, DeploymentRoute::HttpProxy { .. }))
+    {
+        issues.push(
+            "frontend-and-backend sourceModel with API probes requires an HTTP proxy route."
+                .to_string(),
+        );
+    }
 }
 
 fn validate_deployment_facts(issues: &mut Vec<String>, spec: &DeploymentSpec) {

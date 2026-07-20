@@ -122,3 +122,52 @@ Use for documentation, knowledge bases, API references, guides, technical manual
 - Code blocks with poor contrast or no overflow behavior.
 - Hiding docs navigation behind multiple clicks on desktop.
 - Marketing hero sections that delay access to documentation.
+
+## Reading And Code Interaction
+
+Documentation pages have two simultaneous jobs: let readers understand the
+concept and let them use the example. Keep the explanation, code, and result
+connected.
+
+```html
+<article data-region="article">
+  <header data-region="article-heading"></header>
+  <nav data-region="on-this-page" aria-label="On this page"></nav>
+  <section data-region="article-body"></section>
+  <pre data-region="code-example"><code></code></pre>
+  <div data-region="example-feedback" aria-live="polite"></div>
+</article>
+```
+
+- Use headings that describe the task or concept, not only a product feature name.
+- Keep runnable examples close to prerequisites, expected output, and the next step.
+- Code blocks need readable wrapping or horizontal scrolling, a language label, and a copy action with feedback.
+- Do not put required instructions only in hover tooltips, collapsed panels, or images.
+- Mark external links and version-specific behavior clearly, while keeping setup details out of the product's primary success message when the reader is in an interactive example.
+
+## Responsive Reading
+
+At narrow widths, preserve the reading order and make code inspectable without
+shrinking it below a usable size.
+
+```css
+.docs-layout {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) 13rem;
+  gap: var(--space-8);
+}
+
+.docs-code {
+  max-width: 100%;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+@media (max-width: 900px) {
+  .docs-layout { grid-template-columns: minmax(0, 1fr); }
+  .docs-toc { order: -1; }
+}
+```
+
+Keep the article title, current section, code copy control, and navigation
+reachable after the sidebar and table of contents collapse.

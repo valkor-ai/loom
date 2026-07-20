@@ -85,6 +85,7 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         ],
     })
     .expect("semantic request fields");
+    read_semantic_pack_contract(&fixture, &semantic.request_ref);
     assert!(fields.fields["outputContract.resultTemplate"]
         .value
         .get("buildId")
@@ -1302,6 +1303,7 @@ fn publish_simple_source(fixture: &Fixture, name: &str) {
         },
         other => panic!("expected auto_runnable build result, got {other:?}"),
     };
+    read_semantic_pack_contract(fixture, &semantic.request_ref);
     let result = json!({
         "schemaVersion": 1,
         "buildId": semantic.build_id,
@@ -1333,6 +1335,26 @@ fn publish_simple_source(fixture: &Fixture, name: &str) {
         submit_semantic_pack(fixture.root_str(), &semantic.request_ref).expect("submit semantic"),
         LoomMcpActionResult::Done(_)
     ));
+}
+
+fn read_semantic_pack_contract(fixture: &Fixture, request_ref: &str) {
+    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect semantic request");
+    let group_id = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "semantic_pack_contract")
+        .map(|group| group.group_id.clone())
+        .expect("semantic pack contract group");
+    state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        group_id,
+    })
+    .expect("read semantic pack contract group");
 }
 
 struct Fixture {

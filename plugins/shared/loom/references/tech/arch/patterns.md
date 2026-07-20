@@ -98,6 +98,29 @@ Architecture obligations:
 - Keep durable state, secrets, and external calls explicit.
 - Do not introduce serverless solely to avoid designing a normal module or worker.
 
+### Hybrid Or Custom Structure
+
+Use when current-phase boundaries genuinely combine patterns or do not fit a named pattern.
+
+Architecture obligations:
+- Name every composed pattern or give the custom structure a stable descriptive name.
+- Define module, data, interaction, and runtime rules with the same precision required for known patterns.
+- Explain which current-phase force prevents a simpler known pattern from fitting.
+- Treat `custom` as an open classification, not as an exemption from ownership, failure, or verification rules.
+
+## Pattern Decision Evidence
+
+A defensible pattern decision states:
+
+- current consistency and transaction needs
+- module and data ownership boundaries
+- synchronous, asynchronous, and external interaction pressure
+- runtime surfaces that must start, scale, or fail independently
+- recovery behavior when a boundary is unavailable
+- concrete structural rules that implementation can preserve
+
+Pattern names alone are not architecture. A “modular monolith” with shared mutable ownership or a “service split” with one shared database and no failure boundary has not established the claimed structure.
+
 ## Anti-Patterns
 
 - Choosing microservices for prestige.
@@ -107,7 +130,3 @@ Architecture obligations:
 - Introducing serverless without an existing/runtime requirement.
 - Splitting modules while sharing all database tables and domain objects without ownership.
 - Writing "future scalable" as a reason without current verification impact.
-
-## Output Expectations
-
-Foundation should name the selected style and boundary rationale. Coverage should create an ADR decision for the selected pattern, including alternatives considered and consequences.

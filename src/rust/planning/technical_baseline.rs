@@ -977,6 +977,7 @@ where
     };
     let baseline_file = technical_baseline_file(project_root, &delivery_id);
     state::store::write_json_atomic(&baseline_file, &persisted)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
     let baseline_ref = to_project_relative(project_root, &baseline_file)?;
 
     let store = FileTransitionStore;
@@ -1539,18 +1540,18 @@ fn technical_baseline_user_gate(
     prompt: String,
     gate_id: String,
 ) -> LoomMcpActionResult {
-    LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
+    LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+        input.project_root.clone(),
         prompt,
-        accepted_responses: vec!["reply_in_chat".to_string()],
-        request_ref: Some(input.request_ref.clone()),
-        delivery_id: authorized.delivery_id.clone(),
-        phase_id: authorized.phase_id.clone(),
-        gate: Some(json!({
+        vec!["reply_in_chat".to_string()],
+        Some(input.request_ref.clone()),
+        authorized.delivery_id.clone(),
+        authorized.phase_id.clone(),
+        Some(json!({
             "gateId": gate_id,
             "kind": "technical_baseline_confirmation"
         })),
-    })
+    ))
 }
 
 fn repairable(
@@ -1561,6 +1562,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -1571,6 +1573,9 @@ fn repairable(
         resubmit_tool: "loom.technicalBaselineAcceptFile".to_string(),
         fix_scope: Some("technical_baseline_candidate_only".to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.technicalBaselineAcceptFile",
+        ),
     })
 }
 

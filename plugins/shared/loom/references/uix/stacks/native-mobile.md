@@ -42,3 +42,34 @@ NavigationContainer
 - Use simulator/device or framework preview when available.
 - Check safe areas, keyboard behavior, scroll, and touch targets.
 - Record platform/device or preview constraints in evidence when full verification is unavailable.
+
+## Platform Implementation Boundary
+
+UIX owns the visible screen composition and platform behavior. Keep framework
+configuration, package selection, networking, persistence, and native build
+settings in the project's engineering references and existing code conventions.
+
+```text
+platform navigation -> screen shell -> task region -> native input/list
+-> local validation -> async action -> platform feedback -> next route
+```
+
+- A screen owns its header/back affordance, safe-area container, scroll region, and primary action placement.
+- A feature component owns the visible representation of loading, empty, error, disabled, permission, and success states; do not leave these as invisible service outcomes.
+- Keep platform adapters behind a narrow interface so iOS/Android differences do not duplicate the business surface.
+- Use native controls for semantics, focus, keyboard, accessibility, and destructive confirmation before introducing a custom control.
+
+## Screen State And Restoration
+
+```ts
+type ScreenState<T> =
+  | { kind: 'loading' }
+  | { kind: 'ready'; value: T }
+  | { kind: 'empty'; action?: 'create' | 'retry' }
+  | { kind: 'error'; message: string; canRetry: boolean };
+```
+
+Keep draft input, selected identity, and navigation return context recoverable
+after backgrounding, rotation, permission prompts, or a failed request. A
+successful mutation must update the visible object and route to the next useful
+screen rather than only showing a transient notification.

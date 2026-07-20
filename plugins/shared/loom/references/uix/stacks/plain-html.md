@@ -53,3 +53,21 @@ Use for static HTML, vanilla JavaScript, simple Tailwind/CDN pages, server-rende
 - Check keyboard navigation, responsive breakpoints, and form validation.
 - Verify no product UI contains setup or verification instructions.
 - Inspect the generated DOM for semantic landmarks, labels, and live regions when feedback changes dynamically.
+
+## Entry, Asset, And Enhancement Boundary
+
+Find the repository's actual HTML entry, stylesheet/theme include, script entry,
+and static asset root before creating files. The stack reference describes the
+rendered boundary; build commands and server-template conventions come from the
+repository and selected engineering references.
+
+```text
+document entry -> semantic shell -> feature region -> DOM state attributes
+-> event handler -> local/API result -> updated region and live feedback
+```
+
+- Keep global tokens in one loaded stylesheet or theme include and keep page-specific styles close to their owned surface.
+- Use native forms and links as the baseline so the task remains understandable before enhancement.
+- Add `data-state`, `aria-busy`, and `aria-live` only where they describe a real state transition; do not use classes as an undocumented second state model.
+- Use small modules and event delegation for repeated interactions. Do not turn a multi-surface product into one inline script with unrelated global selectors.
+- Preserve the server-rendered content and form action as a meaningful fallback when JavaScript is unavailable or delayed.

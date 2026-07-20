@@ -19,6 +19,15 @@
 - Log errors at process/service boundaries, not at every propagation layer; avoid duplicate noisy logs.
 - Document expected error conditions for public functions when callers need to handle them.
 
+## Boundary Decisions
+
+- Use `thiserror` or an equivalent typed error for library/domain boundaries where callers match variants. Use `anyhow` or contextual application errors at orchestration boundaries where preserving operation context matters more than variant matching.
+- Add context when crossing I/O, parsing, configuration, network, database, and task boundaries, but do not expose paths, SQL, tokens, secrets, or internal stack details in normal user responses.
+- Map internal errors to API/CLI/user-facing errors once at the boundary. Avoid logging the same failure at every propagation layer; log with operation context at the service/process boundary.
+- Keep cancellation and shutdown errors distinct from ordinary business failures in async code. Cleanup may run before re-propagation, but cancellation must not be silently converted to success.
+- Use `#[from]` only for semantically lossless conversions. Preserve distinct business failures and include the source error when diagnostics remain useful.
+- Use `expect` only for an invariant whose violation means a programming bug, with a message that names the invariant. Do not use `unwrap` for external or recoverable data.
+
 ## Verification Focus
 
 - Add tests for each changed error branch, including invalid input, missing data, external failure, and conversion/mapping behavior.

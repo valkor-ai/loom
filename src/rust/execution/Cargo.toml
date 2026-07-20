@@ -10,6 +10,7 @@ name = "execution"
 path = "lib.rs"
 
 [dependencies]
+architecture = { path = "../architecture" }
 brainstorm = { path = "../brainstorm" }
 contracts = { path = "../contracts" }
 delivery-core = { path = "../core" }

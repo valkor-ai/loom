@@ -19,12 +19,21 @@
 - Own background scope cancellation during shutdown, component disposal, or ViewModel clearing. Do not leak jobs beyond their lifecycle.
 - Keep retries limited to safe/idempotent operations and document retryable exception types.
 
+## Decision Rules
+
+- Put the scope at the owner that can cancel the work: request scope for request work, a ViewModel or screen scope for UI work, and an application-owned scope only for work that must survive individual requests or screens.
+- Keep dispatcher selection at the blocking boundary. A repository that calls a blocking driver should isolate that call; callers should not guess which dispatcher a generic `suspend` function requires.
+- Use `StateFlow` for observable state with a current value, `SharedFlow` for events or broadcasts, and a cold `Flow` when each collector owns collection. Document replay and buffer policy when events can be lost.
+- Choose `flatMapLatest`, `buffer`, or `conflate` only after stating which work or values may be cancelled, delayed, or dropped. Do not hide this policy in a helper with a generic name.
+- Retry only idempotent operations or operations protected by an idempotency key. Bound attempts and delay, and surface the terminal error through the owning state or result type.
+
 ## Verification Focus
 
 - Use `runTest` or the repository coroutine test setup for coroutine code.
 - Use Turbine or equivalent for Flow emission order, completion, cancellation, and error assertions when Flow behavior changed.
 - Test cancellation, timeout, first-error/partial-success policy, dispatcher-sensitive boundaries, and lifecycle cleanup where touched.
 - Confirm no `GlobalScope`, `runBlocking` in production paths, swallowed cancellation, or unbounded parallelism was introduced.
+- For lifecycle changes, prove that the parent scope is cancelled and that child jobs do not outlive the request, screen, service, or shutdown owner.
 
 ## Evidence Focus
 

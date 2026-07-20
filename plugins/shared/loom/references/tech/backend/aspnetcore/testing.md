@@ -1,29 +1,86 @@
-# ASP.NET Core Testing Quality
+# ASP.NET Core Testing
 
-This file applies .NET build, unit test, integration test, and WebApplicationFactory rules to task-owned ASP.NET Core changes.
+Use the repository's selected test framework and the narrowest boundary that proves the task. ASP.NET Core work does not automatically require every test type; framework testing guidance is selected only for tasks that own test implementation.
 
-## When To Use
+## Proof Boundary
 
-- The task changes ASP.NET Core endpoints, clean architecture handlers, EF Core data access, authentication, configuration, health checks, or tests.
-- Use this when xUnit/NUnit/MSTest, WebApplicationFactory, TestServer, EF test databases, mocks, or integration probes are needed to prove behavior.
-- If the task changes only pure C# code outside ASP.NET Core wiring, use C# testing references without this ASP.NET Core testing reference.
+| Claim | Suitable proof |
+|---|---|
+| Domain invariant/value object | Plain unit test |
+| Application handler/orchestration | Unit test with owned ports mocked/faked |
+| EF mapping/query/transaction | Selected-provider integration test |
+| DI/options registration | Focused service-provider/host startup test |
+| Route, middleware, filters, auth, serialization | `WebApplicationFactory<Program>` HTTP test |
+| Published runtime/AOT behavior | Published artifact smoke/integration test |
 
-## Implementation Focus
+Calling a Minimal API delegate or controller method directly cannot prove route binding, global validation, middleware, exception handlers, authorization, response serialization, or host configuration.
 
-- Choose the smallest proof that covers the risk: unit tests for domain/application handlers, persistence tests for EF mapping/query behavior, and WebApplicationFactory integration tests for HTTP/middleware/DI behavior.
-- Use test data builders or clear fixtures. Avoid order-dependent tests and shared mutable database state.
-- Prefer realistic test configuration for auth, EF provider, options binding, and middleware when those behaviors are the target.
-- Use fakes/mocks at owned external boundaries; do not mock the class under test or EF behavior when provider mapping is the risk.
-- Keep cancellation, async behavior, and error paths covered for I/O-heavy handlers.
-- Run `dotnet build` and `dotnet test` for affected solution/project scope.
+## Unit And Handler Tests
 
-## Verification Focus
+Construct domain/application components directly when framework DI is irrelevant. Mock repositories, clocks, queues, HTTP ports, identity, and other owned boundaries; do not mock the rule/handler being tested.
 
-- Prove success, validation error, not found, conflict, auth denial, role/claim denial, and database side effects when relevant.
-- Verify DI container startup when registering handlers, services, validators, options, health checks, or middleware.
-- For EF changes, assert database state rather than only service return values.
-- For Minimal API changes, verify status codes, headers, response DTO shape, and OpenAPI metadata when contract changes.
+Assert returned values plus state transitions, calls, absence of forbidden side effects, cancellation, and typed failures. Keep time, IDs, and randomness deterministic through explicit ports where outcomes depend on them.
 
-## Evidence Focus
+Use test data builders/factories for readable valid defaults and override only scenario-relevant fields. Avoid one giant shared fixture whose mutation creates order dependence.
 
-- In the evidence summary, name the proof type: unit test, handler test, WebApplicationFactory integration test, EF provider test, auth middleware test, options binding test, or build/test command.
+## WebApplicationFactory Fidelity
+
+Derive a focused factory from the actual entry point and preserve production service registration, middleware, route groups, JSON options, validation, auth, and exception handling. Override only external/runtime dependencies outside the test's claim.
+
+```csharp
+public sealed class ApiFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IClock>();
+            services.AddSingleton<IClock>(new FrozenClock(TestTime.UtcNow));
+        });
+}
+```
+
+Use the factory client to assert exact status, headers, problem details, JSON shape, and durable effects. Dispose clients/factories and avoid shared mutable host/database state between tests.
+
+Do not replace authentication in the only security test. A stable test scheme may be used for non-auth behavior, while dedicated auth tests execute the selected real scheme/policy and denied paths.
+
+## EF Core Tests
+
+Use the accepted provider when testing constraints, SQL translation, decimals, JSON, collations, migrations, transactions, locking, or concurrency. EF InMemory does not behave like a relational database, and SQLite is not a universal substitute for SQL Server/PostgreSQL/MySQL.
+
+Isolate database state per test through transactions, schemas/databases, or deterministic cleanup compatible with the provider. Assert database readback and rollback, not only in-memory tracked entities.
+
+Use containers/shared dependencies only for suites that own provider fidelity, and reuse infrastructure according to the repository harness without leaking data across cases.
+
+## Configuration, Health, And Hosted Services
+
+Host startup tests should cover valid options and missing/invalid mandatory settings. Health tests should prove liveness/readiness classification and dependency transitions.
+
+For `BackgroundService`, create deterministic completion signals and cancellation. Do not wait arbitrary wall-clock delays. Verify scope creation, bounded retries, idempotency, shutdown, and resource cleanup where owned.
+
+Check for open servers, database connections, timers, consumers, and unobserved tasks after tests. Open-handle/resource warnings are failures to understand, not noise to suppress globally.
+
+## HTTP Contract Coverage
+
+For changed operations, cover the relevant set of success, malformed input, not found, conflict/concurrency, unauthenticated, forbidden/wrong owner, dependency unavailable, and cancellation behavior.
+
+Assert pagination bounds/order, conditional headers, location, content type, and sensitive-field exclusion when declared. Test list isolation separately from detail/mutation authorization.
+
+OpenAPI snapshots can detect contract drift when the repository uses them, but they do not replace behavior tests.
+
+## Verification Commands
+
+Run the changed test project/filter first, such as `dotnet test tests/Orders.Tests --filter FullyQualifiedName~ApproveOrder`. Then run the owning project/solution build or focused suite when shared contracts, DI, middleware, or project references changed. Preserve repository configuration and target framework flags.
+
+## Delivery Evidence
+
+Record the test boundary, scenario, command, and meaningful assertion. A passing `dotnet test` count alone does not prove real middleware, authorization, provider semantics, startup validation, migration safety, or resource cleanup.
+
+## Unsafe Defaults
+
+- Integration tests added for every pure rule.
+- Direct endpoint calls claimed as HTTP pipeline evidence.
+- Real auth replaced in the only authorization test.
+- EF InMemory/SQLite claimed as proof of selected-provider semantics.
+- Shared mutable factory/database state and order-dependent tests.
+- Arbitrary sleeps for hosted/background behavior.
+- OpenAPI snapshots used as the only route behavior proof.

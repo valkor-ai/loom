@@ -1,8 +1,9 @@
 use std::{collections::BTreeSet, path::Path};
 
 use delivery_core::{
-    canonical_tool_name, submit_tool_accepts_artifact, ArtifactKind, FileSubmitInput, ReadGroupRef,
-    RepairIssue, RouteAction, SubmitPreflightSummary, WriteMode, WriteTarget,
+    canonical_tool_name, submit_tool_accepts_artifact, ArtifactKind, DeliveryIndex,
+    FileSubmitInput, LoomMcpRepairableErrorResult, PendingRepair, ReadGroupRef, RepairIssue,
+    RouteAction, SubmitPreflightSummary, WriteMode, WriteTarget,
 };
 use serde_json::Value;
 
@@ -10,6 +11,7 @@ use crate::{
     boundary::ensure_project_contained,
     paths::{from_project_relative, project_paths},
     project::read_project_config,
+    read_audit::required_groups_not_read_at_fingerprint,
     request_index::get_request_index_entry,
     request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{path_exists, read_json_value, StateError},
@@ -68,8 +70,42 @@ pub fn authorize_write_targets(
         from_project_relative(&paths.root, &index_entry.request_file).map_err(fatal_state)?;
     let mut root = read_json_value(&request_file).map_err(fatal_state)?;
     hydrate_submit_refs(&mut root, &paths.root, &parsed.request_id)?;
+    if let Some(output_contract) = root.get("outputContract") {
+        if !delivery_core::contract_fingerprint_matches(output_contract) {
+            return Err(fatal(
+                "WRITE_CONTRACT_FINGERPRINT_INVALID",
+                "The request write contract fingerprint does not match its current contract contents.",
+            ));
+        }
+    }
     let read_groups = read_group_refs_from_root(&root, &parsed.project_id, &parsed.request_id)
         .map_err(fatal_state)?;
+
+    let required_group_ids = read_groups
+        .iter()
+        .filter(|group| group.required)
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    let contract_group_ids = read_groups
+        .iter()
+        .filter(|group| {
+            group
+                .expanded_fields()
+                .iter()
+                .any(|field| field == "outputContract.contractFingerprint")
+        })
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    let contract_fingerprint = root
+        .pointer("/outputContract/contractFingerprint")
+        .and_then(Value::as_str);
+    let unread_groups = required_groups_not_read_at_fingerprint(
+        &input.project_root,
+        &input.request_ref,
+        &required_group_ids,
+        &contract_group_ids,
+        contract_fingerprint,
+    );
 
     let artifact_kind = extract_artifact_kind(&root)?;
     if !submit_tool_accepts_artifact(submit_tool, artifact_kind) {
@@ -99,6 +135,69 @@ pub fn authorize_write_targets(
     validate_target_paths(&paths.root, &all_targets)?;
 
     let selected_targets = select_targets(&all_targets, input.written_target_ids.as_deref())?;
+    if !unread_groups.is_empty() {
+        let target_file = selected_targets
+            .first()
+            .map(|target| target.path.clone())
+            .unwrap_or_default();
+        let target_ids = selected_targets
+            .iter()
+            .map(|target| target.target_id.clone())
+            .collect();
+        let issues = unread_groups
+            .iter()
+            .map(|group_id| RepairIssue {
+                code: "WRITE_CONTRACT_NOT_READ".to_string(),
+                message: format!(
+                    "Read the current write contract group {group_id} with loom.readFieldGroup before submitting this artifact."
+                ),
+                target_id: Some("candidate".to_string()),
+                field_path: Some(format!("requestReadPlan.groups.{group_id}")),
+            })
+            .collect();
+        return Err(WriteTargetAuthorizationError::Repairable {
+            target_file,
+            target_ids,
+            issues,
+            read_groups,
+            resubmit_tool: submit_tool.to_string(),
+        });
+    }
+    let mut contract_issues = Vec::new();
+    if output_contract_has_field_contract(&root) {
+        for target in &selected_targets {
+            if write_mode == WriteMode::TaskplanGrouped
+                && (target.path.contains('{') || target.path.contains('}'))
+            {
+                continue;
+            }
+            let target_path =
+                from_project_relative(&paths.root, &target.path).map_err(fatal_state)?;
+            let candidate = read_json_value(&target_path).map_err(fatal_state)?;
+            contract_issues.extend(delivery_core::validate_agent_write_contract(
+                root.get("outputContract").unwrap_or(&Value::Null),
+                &target.target_id,
+                &candidate,
+            ));
+        }
+    }
+    if !contract_issues.is_empty() {
+        let target_file = selected_targets
+            .first()
+            .map(|target| target.path.clone())
+            .unwrap_or_default();
+        let target_ids = selected_targets
+            .iter()
+            .map(|target| target.target_id.clone())
+            .collect();
+        return Err(WriteTargetAuthorizationError::Repairable {
+            target_file,
+            target_ids,
+            issues: contract_issues,
+            read_groups,
+            resubmit_tool: submit_tool.to_string(),
+        });
+    }
     let repair_issues = validate_target_files(&paths.root, &selected_targets, write_mode);
     if !repair_issues.is_empty() {
         let target_file = selected_targets
@@ -132,6 +231,14 @@ pub fn authorize_write_targets(
     })
 }
 
+fn output_contract_has_field_contract(root: &Value) -> bool {
+    root.pointer("/outputContract/schemaProjection/fieldContract")
+        .is_some()
+        || root
+            .pointer("/outputContract/schemaProjection/fieldContractByTarget")
+            .is_some()
+}
+
 impl AuthorizedWriteSet {
     pub fn summary(&self) -> SubmitPreflightSummary {
         SubmitPreflightSummary {
@@ -147,6 +254,70 @@ impl AuthorizedWriteSet {
             next_action: self.next_action.clone(),
         }
     }
+}
+
+pub fn record_pending_repair(
+    project_root: &str,
+    authorized: &AuthorizedWriteSet,
+    result: &LoomMcpRepairableErrorResult,
+) -> Result<(), StateError> {
+    let (Some(delivery_id), Some(phase_id)) = (&authorized.delivery_id, &authorized.phase_id)
+    else {
+        return Ok(());
+    };
+    let paths = project_paths(project_root)?;
+    let delivery_file = crate::paths::delivery_index_file(&paths.root, delivery_id);
+    let mut delivery: DeliveryIndex = crate::store::read_json(&delivery_file)?;
+    let phase = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == *phase_id)
+        .ok_or_else(|| {
+            StateError::StateCorrupted(format!(
+                "delivery {delivery_id} is missing phase {phase_id}"
+            ))
+        })?;
+    phase.pending_repair = Some(PendingRepair::from_result(
+        authorized.request_ref.clone(),
+        result,
+    ));
+    delivery.updated_at = crate::store::now_string();
+    crate::store::write_json_atomic(&delivery_file, &delivery)
+}
+
+pub fn record_pending_repair_for_request(
+    project_root: &str,
+    request_ref: &str,
+    result: &LoomMcpRepairableErrorResult,
+) -> Result<(), StateError> {
+    let parsed = parse_request_ref(request_ref).map_err(|error| match error {
+        WriteTargetAuthorizationError::Fatal { message, .. } => {
+            StateError::InvalidArgument(message)
+        }
+        WriteTargetAuthorizationError::Repairable { .. } => {
+            StateError::InvalidArgument("requestRef cannot be used for repair state".to_string())
+        }
+    })?;
+    let index_entry = get_request_index_entry(project_root, &parsed.request_id)?;
+    let (Some(delivery_id), Some(phase_id)) = (index_entry.delivery_id, index_entry.phase_id)
+    else {
+        return Ok(());
+    };
+    let paths = project_paths(project_root)?;
+    let delivery_file = crate::paths::delivery_index_file(&paths.root, &delivery_id);
+    let mut delivery: DeliveryIndex = crate::store::read_json(&delivery_file)?;
+    let phase = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == phase_id)
+        .ok_or_else(|| {
+            StateError::StateCorrupted(format!(
+                "delivery {delivery_id} is missing phase {phase_id}"
+            ))
+        })?;
+    phase.pending_repair = Some(PendingRepair::from_result(request_ref, result));
+    delivery.updated_at = crate::store::now_string();
+    crate::store::write_json_atomic(&delivery_file, &delivery)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,7 +476,7 @@ fn select_targets(
     targets: &[WriteTarget],
     written_target_ids: Option<&[String]>,
 ) -> Result<Vec<WriteTarget>, WriteTargetAuthorizationError> {
-    let ids = written_target_ids
+    let requested = written_target_ids
         .unwrap_or(&[])
         .iter()
         .map(|id| id.trim().to_string())
@@ -315,14 +486,28 @@ fn select_targets(
         .iter()
         .map(|target| target.target_id.clone())
         .collect::<BTreeSet<_>>();
-    for id in &ids {
-        if !known.contains(id) {
+    let ids = requested
+        .iter()
+        .map(|value| {
+            if known.contains(value) {
+                return Ok(value.clone());
+            }
+            let path_matches = targets
+                .iter()
+                .filter(|target| target.path == *value)
+                .map(|target| target.target_id.clone())
+                .collect::<Vec<_>>();
+            if path_matches.len() == 1 {
+                return Ok(path_matches[0].clone());
+            }
             return Err(fatal(
                 "TARGET_NOT_ALLOWED",
-                format!("writtenTargetIds contains unknown targetId: {id}"),
+                format!(
+                    "writtenTargetIds contains unknown targetId: {value}; use one of the declared outputContract.writeTargets.targetId values."
+                ),
             ));
-        }
-    }
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
 
     let mut selected = Vec::new();
     for target in targets {

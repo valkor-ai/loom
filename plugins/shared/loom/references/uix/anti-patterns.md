@@ -12,7 +12,8 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 
 ## Brief Mapping
 
-`uiProductionBrief.visualContract.antiDemoRules` and `uiProductionBrief.contentBoundary.forbiddenUserVisibleContent` are blocking product constraints:
+The selected surface brief's visual and content constraints are blocking product
+constraints:
 
 - Treat anti-demo rules as implementation limits on layout, hierarchy, decorative treatment, and component choice.
 - Treat forbidden content as user-visible copy limits across pages, empty states, alerts, modals, tooltips, footers, and debug panels.

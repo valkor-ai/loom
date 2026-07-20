@@ -1,31 +1,92 @@
-# C# Core Quality
+# C# Application And Library Delivery
 
 ## When To Use
 
-- The task changes C# application, library, domain, service, API, worker, CLI, or shared contract code.
-- Use this for baseline .NET correctness: nullability, async contracts, dependency injection, result/error modeling, configuration, and public API shape.
-- If the task only changes generated files, static assets, or non-C# code, do not expand scope because this reference is available.
+Use this reference for task-owned C# application, domain, service, worker, CLI, library, or shared-contract code. Preserve target framework/language version, nullable/analyzer policy, async/error conventions, DI, serialization, and public API compatibility.
+
+Version-specific language features, ASP.NET Core, EF Core, Blazor, performance, and testing are selected separately.
 
 ## Implementation Focus
 
-- Respect the target framework and language version in `.csproj` before using C# 11/12 features such as required members, list patterns, primary constructors, or collection expressions.
-- Keep nullable reference types meaningful. Do not silence warnings with `!`, `#nullable disable`, or broad suppressions when validation or better types would solve the issue.
-- Use `required`, init-only properties, records, or readonly structs for immutable request/domain/value shapes when they match lifecycle semantics. Do not make mutable models just to satisfy serializers without checking serializer support.
-- Keep async all the way through I/O paths. Avoid `.Result`, `.Wait()`, sync-over-async wrappers, and fire-and-forget tasks outside deliberate background service ownership.
-- Accept and forward `CancellationToken` through HTTP, EF, file, queue, and remote-service operations when callers can cancel or the framework supplies a token.
-- Use DI constructors for services and adapters. Do not resolve scoped dependencies from the root container or store request-scoped services in singletons.
-- Model expected business failures consistently with the repository style: result type, typed exception, `ProblemDetails`, or validation result. Do not mix unrelated error styles in the same flow.
-- Use strongly typed options for configuration and validate required settings on startup. Avoid stringly typed config reads scattered through business code.
-- Keep DTOs, domain entities, persistence entities, and UI models separate when they have different validation, serialization, or lifecycle rules.
-- Add XML docs or clear comments for public APIs consumed outside the assembly when the repository exposes library surface; avoid comments that simply repeat method names.
+### Nullability And Invariants
+
+Treat nullable reference annotations as a public correctness contract. Validate external input, narrow nullable values with control flow, and model optional/required states explicitly.
+
+Do not use `!`, `#nullable disable`, broad warning suppression, or default-initialized required members to silence a real initialization/validation gap. A justified interop/framework assertion stays local and documented by the invariant.
+
+Keep DTO, domain, persistence, configuration, and UI models separate when required/nullability/serialization/lifetime differ.
+
+### Async And Cancellation
+
+Keep I/O paths asynchronous end to end. Avoid `.Result`, `.Wait()`, `GetAwaiter().GetResult()`, sync wrappers, and unobserved fire-and-forget work.
+
+Accept/forward `CancellationToken` when the owner or framework can cancel. Cancellation is not failure: preserve `OperationCanceledException`, stop starting new work, and clean up/rollback owned resources.
+
+Every background task needs a host/lifetime owner, error observation, stop policy, and shutdown deadline. `async void` is limited to required event-handler signatures with local error handling.
+
+Use `Task.WhenAll` only when operations are independent and concurrency/resource limits permit it. Preserve all failures and cancellation semantics rather than awaiting tasks repeatedly in a way that hides exceptions.
+
+### Resource And Disposal Ownership
+
+Use `using`/`await using`, `IDisposable`/`IAsyncDisposable`, and DI ownership consistently for streams, responses, DB contexts, timers, subscriptions, locks, native handles, channels, and scopes.
+
+Do not dispose container-owned services manually or capture scoped/disposable services in singletons/static state. A factory-created scope/service is disposed by its explicit owner.
+
+Return streams/enumerables only when the caller knows who owns the underlying resource and how long enumeration remains valid.
+
+### Dependency Injection And Lifetimes
+
+Constructor injection makes required dependencies explicit. Keep service lifetimes compatible: singleton cannot capture scoped/transient-disposable state; workers create scopes per unit of work when required.
+
+Avoid service locator calls and broad `IServiceProvider` injection except in composition/factory boundaries. Resolve keyed/named strategies through established typed factories when dynamic selection is product behavior.
+
+Keep pure domain logic free of framework container/config/logging dependencies where repository architecture separates it.
+
+### Errors And Results
+
+Follow the repository's expected-failure model: result/discriminated union, validation result, typed exception, or boundary-specific error. Do not add a homegrown `Result<T>` when a standard exists.
+
+Exceptions represent exceptional failures and preserve inner exception/stack; expected business rejection remains typed/actionable. Catch only when translating, adding safe context, compensating, or retrying with policy.
+
+Do not log and rethrow the same exception at every layer or expose raw provider messages, stack traces, secrets, or sensitive payloads.
+
+### Values, Collections, And Enumeration
+
+Use records/read-only/init types when value semantics and lifecycle fit; do not choose records for mutable identity-rich entities merely for brevity.
+
+Be explicit about `IEnumerable<T>` laziness, multiple enumeration, disposal, mutation during enumeration, and materialization bounds. Return `IReadOnlyList<T>`/immutable collections only when the contract truly prevents or isolates mutation.
+
+Use `DateTimeOffset`/UTC, decimal, culture-aware parsing/formatting, and checked numeric conversion according to domain/wire/storage requirements.
+
+### Configuration And Logging
+
+Bind strongly typed options at composition boundaries and validate required values before work starts. Avoid scattered string keys and insecure/local production fallbacks.
+
+Use structured logs with stable event context and no credentials/tokens/personal/sensitive payloads. Avoid logging the same error repeatedly across layers.
+
+### Serialization And Public API
+
+Keep wire/storage serializers explicit about names, null/default/unknown fields, enums, dates, decimals, polymorphism, and backward compatibility. Static types do not validate untrusted payloads automatically.
+
+For public assemblies, preserve accessibility, signatures, generic constraints, nullability, exceptions, attributes, serialization, and binary/source compatibility within accepted versioning policy. Document public behavior where repository policy requires it.
 
 ## Verification Focus
 
-- Run `dotnet build` and the configured `dotnet test` command for changed projects.
-- Treat nullable warnings and analyzer warnings from changed code as defects unless the repository explicitly allows them.
-- Add tests for domain branches, null/invalid input handling, async cancellation or error propagation where touched.
-- Confirm no new blocking async calls, broad null-forgiving operators, or service lifetime violations were introduced.
+- Run focused build/analyzers and tests for changed projects under the actual target framework/language version.
+- Treat new nullable/analyzer warnings in changed code as defects unless locally justified.
+- Exercise invalid/null/boundary input, expected and unexpected errors, cancellation, disposal, and DI lifetime behavior.
+- Test serialization/configuration/public API compatibility when those boundaries change.
+- Verify no blocking async calls, unowned background work, or sensitive logging was introduced.
 
 ## Evidence Focus
 
-- In the evidence summary, name the C# decision made: nullability, async/cancellation, DI lifetime, result/error style, options validation, DTO/domain split, or public API surface.
+Name the nullability/async/cancellation owner, DI/resource lifetime, error model, serialization/config/public API decision, and assertion proving behavior. A warning-free build alone does not prove cancellation, disposal, or runtime contract safety.
+
+## Unsafe Defaults
+
+- Null-forgiving/suppression used instead of initialization or validation.
+- Sync-over-async or unobserved fire-and-forget work.
+- Scoped/disposable dependency captured by singleton/static state.
+- New generic Result/error abstraction duplicating repository conventions.
+- Lazy enumerable escaping disposed resources or enumerated repeatedly unknowingly.
+- Raw exceptions or sensitive values logged/serialized publicly.

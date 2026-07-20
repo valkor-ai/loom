@@ -2,29 +2,40 @@
 
 ## When To Use
 
-- The task changes API clients, repositories, service layers, factories, builders, reducers, state machines, dependency wiring, mappers, or reusable TypeScript abstractions.
-- Use this when a pattern choice affects maintainability or correctness. Do not introduce a pattern object or class when a direct function and type would be clearer.
-- Repository conventions and existing architectural boundaries take precedence over this reference.
+- Load when the task owns an API client, repository or gateway, factory, builder, reducer, state machine, mapper, dependency boundary, or reusable TypeScript abstraction.
+- Do not introduce a pattern object or class when a direct function and a named type express the behavior clearly.
+- Existing repository boundaries and dependency conventions take precedence over generic TypeScript examples.
+
+## Decision Rules
+
+- Use a factory or builder for validated multi-step construction, fixture assembly, or complex dependency setup; keep simple object creation simple.
+- Centralize HTTP client behavior when adding calls: base URL, headers, response parsing, error normalization, cancellation, and typed mapping must not be duplicated in screens.
+- Align repository or gateway interfaces with real business operations. Do not expose generic CRUD when the workflow has named commands, validation, or state transitions.
+- Use a reducer or explicit state machine for multi-step UI or workflow state when combinations of booleans can become invalid.
+- Map DTOs to domain and view models at one boundary. Dates, money, enum labels, IDs, and optional fields should not be reformatted independently in components.
+- Use `Result` or `Either` only when the repository already uses it or the task owns error-handling architecture; otherwise follow the local throw/return convention.
+- Inject clocks, UUID generators, network clients, and storage only when nondeterminism affects behavior. Do not inject every pure helper.
 
 ## Implementation Focus
 
-- Keep pattern weight proportional to the problem. Use factories/builders for validated multi-step construction, test fixture assembly, or complex dependency setup; do not wrap simple object literals in ceremony.
-- Centralize API client behavior when adding frontend or Node HTTP calls: base URL resolution, headers, response parsing, error normalization, cancellation, and typed request/response mapping should not be duplicated across screens.
-- Keep repository or gateway interfaces aligned with actual persistence or remote operations. Do not expose generic CRUD methods if the business workflow needs named operations with validation and state transitions.
-- For multi-step UI or workflow state, use a reducer or explicit state machine with discriminated states. Avoid scattered booleans such as `isLoading`, `isSaving`, `hasError`, and `selectedId` when combinations can become invalid.
-- Keep DTO/domain/view-model mapping at boundaries. Dates, money, enum labels, IDs, and optional fields should be transformed in one place rather than repeatedly inside components or handlers.
-- Use `Result`/`Either` styles only if the repository already uses them or the task owns error-handling architecture. Otherwise follow the local throw/return/null convention consistently.
-- Match the project's dependency style. Do not add global mutable singletons for clients, stores, or configuration if the codebase uses dependency injection, hooks, context, or explicit parameters.
-- Keep abstractions testable by injecting clocks, UUID generators, network clients, and storage only where nondeterminism affects behavior. Do not inject every pure helper.
-- Avoid circular dependencies by moving shared contracts to a neutral module rather than importing upward across layers.
+- Keep abstractions testable without hiding the actual ownership boundary behind a global mutable singleton.
+- Move shared contracts to a neutral module when a pattern would otherwise create upward or circular imports.
+- Keep type-level API safety paired with runtime response validation; a generic client signature does not prove server data.
+- Make invalid transitions and construction failures explicit rather than returning partially initialized objects.
+
+## Failure Modes
+
+- Do not add a builder, repository, or service class when it only forwards one function and increases indirection.
+- Do not hide network errors behind a generic success type or let each caller invent a different error mapping.
+- Do not introduce a singleton store or client that makes tests share mutable state across cases.
 
 ## Verification Focus
 
-- Test the behavior provided by the pattern: state transitions, API error mapping, repository/gateway contract, factory validation, or mapper round-trip.
-- For API clients, test success, non-2xx response, malformed payload where relevant, and cancellation or timeout if implemented.
-- For reducers/state machines, test every allowed transition and at least one disallowed transition.
-- Run typecheck to prove the pattern improves call-site safety without requiring broad assertions.
+- Test the behavior provided by the pattern: state transitions, API error mapping, repository contracts, factory validation, or mapper round-trips.
+- For API clients, cover success, non-2xx responses, malformed payloads where applicable, and cancellation or timeout when implemented.
+- For reducers and state machines, cover every allowed transition and at least one disallowed transition.
+- Run typecheck to prove call sites do not need broad assertions.
 
 ## Evidence Focus
 
-- In the evidence summary, name the pattern decision and why it was needed for this task.
+- Record the selected pattern, the ownership boundary that required it, and the behavior used to prove it was necessary.

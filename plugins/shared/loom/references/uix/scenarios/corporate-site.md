@@ -78,3 +78,42 @@ Use for company, organization, venue, portfolio, institution, or brand informati
 - Generic corporate hero with abstract gradients and no concrete identity.
 - Overloaded nav that hides primary actions.
 - Stock-like imagery that does not reveal the actual organization or offering.
+
+## Proof And Conversion Continuity
+
+The page must connect identity to credible proof and a stakeholder action. A
+hero sentence without evidence or a reachable contact path is an incomplete
+corporate surface.
+
+```text
+identity -> capability or offering -> proof -> relevant resource -> contact/action
+```
+
+- Match each major claim with inspectable proof such as a case, location, product detail, credential, person, document, or outcome.
+- Give proof items an identity, category, date, and destination when they link to deeper content.
+- Keep the primary contact or inquiry action available after the proof section; do not make the user return to the hero.
+- Interactive contact forms need field-level validation, preserved input, submitting state, success confirmation, and recoverable failure.
+- Treat media as evidence when it reveals the organization, venue, product, people, or work. Decorative atmosphere cannot carry the main claim.
+
+## Responsive Identity
+
+At narrow widths, preserve the identity signal and stakeholder path before
+reducing decoration. Use a single-column reading order that keeps the object,
+proof, and action connected.
+
+```css
+.identity-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: var(--space-8);
+  align-items: center;
+}
+
+@media (max-width: 767px) {
+  .identity-hero { grid-template-columns: 1fr; gap: var(--space-5); }
+  .identity-hero [data-region="identity-media"] { order: -1; }
+}
+```
+
+Do not hide the organization name, location, contact route, or proof labels
+behind hover-only interactions on mobile.

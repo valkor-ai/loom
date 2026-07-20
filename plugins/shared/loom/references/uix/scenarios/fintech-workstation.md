@@ -107,3 +107,36 @@ Use for staff-facing finance, securities, account, risk, compliance, and transac
 - Hiding risk or eligibility behind tooltips only.
 - Treating business-rule blocks as generic errors.
 - Showing financial numbers without units, sign, date, or status.
+
+## Dense Financial Workbench
+
+Density supports repeated review only when identity and risk remain visible. Use
+stable columns and compact rows for comparison, then expand the selected record
+without losing the work queue.
+
+```text
+queue filters -> record identity/status -> amount and key dates -> eligibility
+-> selected detail -> approval/rejection -> row + audit update
+```
+
+- Keep queue criteria, selected record identity, status, amount, currency, and action eligibility in the first scan path.
+- Use tabular numerals and right alignment for comparable amounts, but keep currency and unit labels adjacent.
+- Keep a stable detail region or route that preserves queue position, filters, and selection after navigation.
+- Represent pending, escalated, blocked, approved, rejected, and reversed states with text and an explicit reason where applicable.
+- Avoid decorative KPI panels that push the queue or approval action below the first useful viewport.
+
+## Risk And Audit Continuity
+
+- High-impact actions show a review summary, actor/role, authorization condition, and confirmation requirement before submission.
+- Rejection or escalation requires a reason that appears beside the affected decision and in the history view.
+- Audit events include timestamp, actor, action, previous state, next state, and a readable reference to the affected record.
+- If an action is unavailable, show the business rule or missing permission near the action rather than silently disabling it.
+
+```html
+<aside data-region="decision-panel">
+  <dl data-region="approval-facts"></dl>
+  <p data-region="eligibility-message"></p>
+  <textarea data-region="decision-reason"></textarea>
+  <div data-region="decision-feedback" aria-live="polite"></div>
+</aside>
+```

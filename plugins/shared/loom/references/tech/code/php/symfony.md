@@ -21,12 +21,21 @@ This file applies Symfony conventions to task-owned behavior.
 - Console commands should validate arguments/options, delegate work to services, return correct exit codes, and avoid embedding business logic.
 - Serializer groups, normalizers, and response DTOs must make public response shape intentional; do not rely on default object serialization.
 
+## Delivery Decisions
+
+- Keep the Symfony container as composition infrastructure. Construct domain/application services through configuration and inject them; do not make domain code discover services from the container.
+- Choose DTO validation, entity validation, or domain validation by ownership. Request DTOs protect transport shape, while domain rules must still hold when called from a command, Messenger handler, or test.
+- Keep Doctrine repositories focused on persistence queries. Put multi-entity workflows, transaction ownership, and state transitions in an application service or handler.
+- Treat Messenger retries as a new handler invocation: load current state by identifier, make duplicate execution safe, and distinguish permanent validation failures from transient infrastructure failures.
+- Make serializer groups or response DTOs explicit for every public route changed. Lazy relations and internal fields must not become accidental API output.
+
 ## Verification Focus
 
 - Run kernel/controller functional tests for route changes and service/unit tests for business changes.
 - Test validation failure, voter denial/allowance, successful response shape, and persistence state when those paths are touched.
 - For Messenger, test handler behavior and dispatch shape using the project's configured transport test helpers.
 - For console commands, run or test the command with success and failure inputs, including exit code expectations.
+- For a kernel route or message path, verify the actual configured service/container wiring rather than only instantiating the controller or handler directly.
 
 ## Evidence Focus
 
