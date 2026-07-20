@@ -3628,23 +3628,15 @@ pub(crate) fn refresh_stale_task_result_repair_action(
             "source.taskId".to_string(),
             "source.taskPlanRunId".to_string(),
             "source.originalResultFile".to_string(),
-            "repairContract.issueConflicts".to_string(),
             "outputContract.resultFile".to_string(),
             "outputContract.blockedReasonOptions".to_string(),
         ],
     )?;
-    let has_frontend_quality_issue = repair_fields
-        .get("repairContract.issueConflicts")
-        .and_then(|field| field.value.as_array())
-        .is_some_and(|issues| {
-            issues.iter().any(|issue| {
-                issue.get("code").and_then(Value::as_str)
-                    == Some("TASK_RESULT_FRONTEND_QUALITY_INVALID")
-            })
-        });
-    if !has_frontend_quality_issue {
-        return Ok(None);
-    }
+    // Do not inspect repairContract.issueConflicts here. Large issue arrays are
+    // deliberately reprojected into indexed read-group fields, so requesting
+    // the unsplit parent field can make an otherwise valid repair request fail
+    // with FIELD_NOT_ALLOWED. The current canonical TaskDefinition and result
+    // are authoritative; validation below rebuilds the issue set directly.
     let source_task_id = string_field(&repair_fields, "source.taskId")?;
     let source_task_execution_request_ref =
         string_field(&repair_fields, "source.taskExecutionRequestRef")?;

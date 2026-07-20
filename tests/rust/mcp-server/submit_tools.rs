@@ -3648,10 +3648,7 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/App.tsx"]);
-    result
-        .as_object_mut()
-        .expect("result object")
-        .remove("frontendQualitySelfCheck");
+    result["frontendQualitySelfCheck"]["status"] = json!("satisfied");
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write invalid result");
     let invalid = call_submit(
         "loom.recordTaskResultFile",
@@ -3664,6 +3661,19 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
         .as_str()
         .expect("repair requestRef")
         .to_string();
+    let stale_request = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stale_repair_ref.clone(),
+    })
+    .expect("inspect stale repair request");
+    assert!(
+        stale_request
+            .read_groups
+            .iter()
+            .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+            .any(|field| field.starts_with("repairContract.issueConflicts.")),
+        "large repair issue arrays must use indexed read-group projections"
+    );
     mutate_private_request_storage_value(&fixture, &stale_repair_ref, "task", |task| {
         if let Some(requirement) = task
             .get_mut("frontendExperienceRequirement")
@@ -3685,7 +3695,6 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
         project_root: fixture.root_str().to_string(),
         request_ref: refreshed_repair_ref.to_string(),
         fields: vec![
-            "repairContract.issueConflicts".to_string(),
             "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"
                 .to_string(),
         ],
@@ -3699,22 +3708,6 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
         ui_production_brief["surfaceDecisionContract"].is_object(),
         "{ui_production_brief:#}"
     );
-    let issue_conflicts = refreshed_fields["repairContract.issueConflicts"]
-        .value
-        .as_array()
-        .expect("issue conflicts");
-    let frontend_issue = issue_conflicts
-        .iter()
-        .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
-        .expect("frontend quality issue");
-    assert!(!frontend_issue["expected"]["surfaceRegionIdsInScope"]
-        .as_array()
-        .expect("expected region ids")
-        .is_empty());
-    assert!(!frontend_issue["expected"]["surfaceQualityRuleIdsInScope"]
-        .as_array()
-        .expect("expected quality rule ids")
-        .is_empty());
 }
 
 #[test]
