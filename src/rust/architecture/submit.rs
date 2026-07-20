@@ -25,8 +25,8 @@ use state::{
 
 use crate::{
     paths::{
-        architecture_contract_file, architecture_latest_file, project_api_contract_file,
-        section_name,
+        architecture_contract_file, architecture_latest_file, architecture_section_file,
+        project_api_contract_file, section_name,
     },
     request::{
         architecture_quality_template_from_candidate_plan, architecture_read_groups,
@@ -322,6 +322,21 @@ where
     if candidate_normalized {
         state::store::write_json_atomic(&candidate_file, &candidate)?;
     }
+    let canonical_section_file =
+        architecture_section_file(project_root, &locator, candidate.section);
+    state::store::write_json_atomic(&canonical_section_file, &candidate)?;
+    let canonical_section_ref = to_project_relative(project_root, &canonical_section_file)?;
+    let output = section_outputs
+        .iter_mut()
+        .find(|output| output.section == candidate.section)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "request {} is missing accepted section output {}",
+                authorized.request_id,
+                section_name(candidate.section)
+            ))
+        })?;
+    output.candidate_file = canonical_section_ref;
 
     let next_section = next_section(candidate.section);
     if let Some(next_section) = next_section {
@@ -426,7 +441,11 @@ where
                     }),
                 },
             )
-            .map_err(to_state_error);
+            .map_err(to_state_error)
+            .and_then(|result| {
+                state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
+                Ok(result)
+            });
     }
 
     let mut contract = assemble_architecture_contract(
@@ -501,7 +520,7 @@ where
         store: FileTransitionStore,
         dispatcher,
     };
-    engine
+    let result = engine
         .advance_after_submit(
             OperationContext {
                 project_root: input.project_root.clone(),
@@ -530,7 +549,9 @@ where
                 }),
             },
         )
-        .map_err(to_state_error)
+        .map_err(to_state_error)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
+    Ok(result)
 }
 
 fn normalize_architecture_candidate_envelope(
@@ -3443,21 +3464,14 @@ fn update_request_for_next_section(
             ))
         })?;
     *section_output = next_output.clone();
-    if let Some(inline_section_outputs) =
-        root.get_mut("sectionOutputs").and_then(Value::as_array_mut)
-    {
-        let next_section_value =
-            serde_json::to_value(next_section).map_err(state::store::StateError::Json)?;
-        let inline_output = inline_section_outputs
-            .iter_mut()
-            .find(|output| output.get("section") == Some(&next_section_value))
-            .ok_or_else(|| {
-                state::store::StateError::StateCorrupted(format!(
-                    "architecture request sectionOutputs is missing {}",
-                    section_name(next_section)
-                ))
-            })?;
-        *inline_output = next_output_value.clone();
+    let section_outputs_value = Value::Array(
+        section_outputs
+            .iter()
+            .map(|output| serde_json::to_value(output).map_err(state::store::StateError::Json))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    if root.get("sectionOutputs").is_some() {
+        root["sectionOutputs"] = section_outputs_value;
     } else {
         write_private_section_outputs(project_root, request_id, section_outputs)?;
     }

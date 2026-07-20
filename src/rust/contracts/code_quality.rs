@@ -2237,7 +2237,11 @@ fn task_owns_api_contract(task: &TaskDefinition) -> bool {
 
 fn task_uses_api_client_binding(task: &TaskDefinition) -> bool {
     task_is_frontend_task(task)
-        && (!task.write_boundary.artifact_refs.interfaces.is_empty()
+        && (!task
+            .write_boundary
+            .artifact_refs
+            .all_interfaces()
+            .is_empty()
             || task
                 .implementation_actions
                 .iter()

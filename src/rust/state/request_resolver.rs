@@ -23,7 +23,7 @@ use crate::{
     },
     request_index::get_request_index_entry,
     request_manifest::{read_group_refs_from_root, request_storage_refs},
-    store::{read_json_value, read_text, StateError, StateResult},
+    store::{read_json_reference, read_json_value, read_text, StateError, StateResult},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,10 +441,14 @@ fn read_reference_value(
         return Ok(value.clone());
     }
     let paths = project_paths(project_root)?;
-    let file = from_project_relative(&paths.root, relative)?;
+    let path_ref = relative
+        .split_once('#')
+        .map(|(path, _)| path)
+        .unwrap_or(relative);
+    let file = from_project_relative(&paths.root, path_ref)?;
     let value = match file.extension().and_then(|extension| extension.to_str()) {
         Some("txt" | "md") => Value::String(read_text(&file)?),
-        _ => read_json_value(&file)?,
+        _ => read_json_reference(&paths.root, relative)?,
     };
     cache
         .reference_values

@@ -2444,7 +2444,6 @@ fn architecture_runtime_delivery_submit_derives_frontend_backend_shape() {
     );
     runtime.remove("frontend");
     runtime.remove("api");
-    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
     write_candidate_target(&fixture, &architecture_request_ref, &candidate);
 
     let result = call_submit(
@@ -2454,8 +2453,13 @@ fn architecture_runtime_delivery_submit_derives_frontend_backend_shape() {
     );
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let canonical_path = private_architecture_section_outputs(&fixture, &architecture_request_ref)
+        .into_iter()
+        .find(|output| output["section"] == json!("runtime_delivery"))
+        .and_then(|output| output["candidateFile"].as_str().map(str::to_owned))
+        .expect("canonical runtime section path");
     let normalized: Value =
-        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+        read_json_value(&fixture.root.join(canonical_path)).expect("normalized runtime");
     assert_eq!(
         normalized["content"]["runtimeDelivery"]["deploymentShape"],
         json!("frontend-and-backend")
@@ -2470,7 +2474,6 @@ fn architecture_runtime_delivery_submit_derives_integrated_static_shape() {
     let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
     candidate["content"]["runtimeDelivery"]["deploymentShape"] = json!("frontend-and-backend");
     candidate["content"]["runtimeDelivery"]["frontend"]["servedBy"] = json!("spring_boot_static");
-    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
     write_candidate_target(&fixture, &architecture_request_ref, &candidate);
 
     let result = call_submit(
@@ -2480,8 +2483,13 @@ fn architecture_runtime_delivery_submit_derives_integrated_static_shape() {
     );
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let canonical_path = private_architecture_section_outputs(&fixture, &architecture_request_ref)
+        .into_iter()
+        .find(|output| output["section"] == json!("runtime_delivery"))
+        .and_then(|output| output["candidateFile"].as_str().map(str::to_owned))
+        .expect("canonical runtime section path");
     let normalized: Value =
-        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+        read_json_value(&fixture.root.join(canonical_path)).expect("normalized runtime");
     assert_eq!(
         normalized["content"]["runtimeDelivery"]["deploymentShape"],
         json!("single-service")
@@ -4795,6 +4803,28 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         execution_result["next"]["submitTool"],
         "loom.recordTaskResultFile"
     );
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let taskplan: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(&taskplan_ref)).expect("read taskplan"),
+    )
+    .expect("parse taskplan");
+    let task = taskplan["tasks"]
+        .as_array()
+        .expect("taskplan tasks")
+        .iter()
+        .find(|task| task["taskId"] == json!("task-account-001"))
+        .expect("account task");
+    let owned_interfaces = task["writeBoundary"]["artifactRefs"]["interfaces"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(owned_interfaces.is_empty());
+    let consumed_interfaces = task["writeBoundary"]["artifactRefs"]["consumedInterfaces"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!consumed_interfaces.is_empty());
     let execution_request_ref = execution_result["next"]["requestRef"]
         .as_str()
         .expect("execution requestRef")
@@ -10793,6 +10823,23 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 }
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
+    if let Some(verifications) = result
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    {
+        for verification in verifications {
+            if verification.get("status").and_then(Value::as_str) != Some("passed") {
+                continue;
+            }
+            verification["provenance"] = json!({
+                "evidenceRefs": ["src/main.tsx"],
+                "changedFiles": ["src/main.tsx"],
+                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
+                "command": "fixture verification",
+                "exitCode": 0
+            });
+        }
+    }
     complete_architecture_quality_evidence_for_test(result);
     complete_api_contract_evidence_for_test(result);
     complete_browser_check_evidence_for_test(result);
@@ -11262,6 +11309,23 @@ fn write_task_result_candidate_with_detail_evidence(
         }
     }
     result["verificationResults"] = Value::Array(verification_results);
+    if let Some(verifications) = result
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    {
+        for verification in verifications {
+            if verification.get("status").and_then(Value::as_str) != Some("passed") {
+                continue;
+            }
+            verification["provenance"] = json!({
+                "evidenceRefs": ["src/main.tsx"],
+                "changedFiles": ["src/main.tsx"],
+                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
+                "command": "fixture verification",
+                "exitCode": 0
+            });
+        }
+    }
     result["selfRepairSummary"] = json!({
         "attempted": false,
         "attemptCount": 0,
@@ -11735,6 +11799,20 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/main.tsx"]);
+    if let Some(verifications) = result
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    {
+        for verification in verifications {
+            verification["provenance"] = json!({
+                "evidenceRefs": ["src/main.tsx"],
+                "changedFiles": ["src/main.tsx"],
+                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
+                "command": "fixture verification",
+                "exitCode": 0
+            });
+        }
+    }
     complete_frontend_quality_token_evidence_for_test(&mut result);
     if let Some(items) = result
         .get_mut("requirementDetailEvidence")

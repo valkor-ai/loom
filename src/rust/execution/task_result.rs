@@ -382,7 +382,7 @@ where
             )));
         }
     }
-    discard_agent_candidate(root, &target.path)?;
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let persisted_ref = to_project_relative(root, &persisted)?;
     let now = state::store::now_string();
     if let Some(state) = run
@@ -584,6 +584,7 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
+    validate_verification_provenance(result, &mut issues);
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -821,6 +822,7 @@ fn normalize_task_result_machine_fields(
 
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
+    normalize_verification_provenance(object);
 
     remove_non_applicable_evidence_fields(object, task);
     normalize_applicable_evidence_array_fields(object, task);
@@ -879,6 +881,71 @@ fn canonical_empty_task_result_field(field: &str) -> Value {
     match field {
         "noChangeReason" | "failure" => Value::Null,
         _ => Value::Array(vec![]),
+    }
+}
+
+fn normalize_verification_provenance(object: &mut serde_json::Map<String, Value>) {
+    let detail_evidence = object
+        .get("requirementDetailEvidence")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(verifications) = object
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for verification in verifications {
+        let Some(item) = verification.as_object_mut() else {
+            continue;
+        };
+        let verification_id = item
+            .get("verificationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut provenance = item
+            .get("provenance")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut evidence_refs = provenance
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if evidence_refs.is_empty() {
+            evidence_refs = detail_evidence
+                .iter()
+                .filter(|detail| {
+                    detail
+                        .get("verificationIds")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            ids.iter().any(|id| id.as_str() == Some(&verification_id))
+                        })
+                })
+                .flat_map(|detail| {
+                    detail
+                        .get("evidenceRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect();
+        }
+        provenance.insert("evidenceRefs".to_string(), Value::Array(evidence_refs));
+        provenance
+            .entry("testCaseRefs".to_string())
+            .or_insert_with(|| Value::Array(vec![]));
+        provenance
+            .entry("command".to_string())
+            .or_insert(Value::Null);
+        provenance
+            .entry("exitCode".to_string())
+            .or_insert(Value::Null);
+        item.insert("provenance".to_string(), Value::Object(provenance));
     }
 }
 
@@ -1176,6 +1243,7 @@ fn normalize_quality_evidence_machine_fields(
         .iter()
         .map(|intent| intent.verification_id.clone())
         .collect::<Vec<_>>();
+    let interface_refs = task.write_boundary.artifact_refs.all_interfaces();
     normalize_quality_evidence_array(
         object,
         "architectureQualityEvidence",
@@ -1188,7 +1256,7 @@ fn normalize_quality_evidence_machine_fields(
         "apiContractEvidence",
         &task.api_contract_requirement_refs,
         &verification_ids,
-        &task.write_boundary.artifact_refs.interfaces,
+        &interface_refs,
     );
     normalize_quality_evidence_array(
         object,
@@ -1726,6 +1794,37 @@ fn validate_verification_results(
             "notes",
             "completed_with_notes TaskResult must explain not_run or inconclusive verification results.",
         ));
+    }
+}
+
+fn validate_verification_provenance(
+    result: &TaskResult,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    for verification in &result.verification_results {
+        if verification.status != "passed" {
+            continue;
+        }
+        let traceable = verification.provenance.as_ref().is_some_and(|provenance| {
+            !provenance.evidence_refs.is_empty()
+                || !provenance.test_case_refs.is_empty()
+                || (provenance
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| !command.trim().is_empty())
+                    && provenance.exit_code.is_some())
+                || verification
+                    .browser_checks
+                    .iter()
+                    .any(|check| !check.artifact_refs.is_empty())
+        });
+        if !traceable {
+            issues.push(issue(
+                "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                "verificationResults[].provenance",
+                "Passed verification must cite a concrete evidence ref, test case, browser artifact, or command with exit code.",
+            ));
+        }
     }
 }
 
@@ -5713,16 +5812,6 @@ fn read_project_json_value(
 ) -> Result<Value, state::store::StateError> {
     let path = from_project_relative(project_root, relative)?;
     state::store::read_json_value(&path)
-}
-
-fn discard_agent_candidate(
-    project_root: &Path,
-    relative_path: &str,
-) -> Result<(), state::store::StateError> {
-    if !relative_path.starts_with(".loom/agent-writable/") {
-        return Ok(());
-    }
-    state::store::remove_file_if_exists(&from_project_relative(project_root, relative_path)?)
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {

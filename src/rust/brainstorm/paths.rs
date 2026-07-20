@@ -68,21 +68,8 @@ pub fn brainstorm_phase_concept_file(
     brainstorm_phase_dir(project_root, delivery_id, phase_id).join("phase-concept-grounding.json")
 }
 
-pub fn brainstorm_confirmed_frontend_file(
-    project_root: &Path,
-    delivery_id: &str,
-    phase_id: &str,
-) -> PathBuf {
-    brainstorm_phase_dir(project_root, delivery_id, phase_id)
-        .join("confirmed-frontend-experience.json")
-}
-
 pub fn brainstorm_delivery_glossary_file(project_root: &Path, delivery_id: &str) -> PathBuf {
     brainstorm_dir(project_root, delivery_id).join("delivery-concept-glossary.json")
-}
-
-pub fn brainstorm_current_frontend_file(project_root: &Path, delivery_id: &str) -> PathBuf {
-    brainstorm_dir(project_root, delivery_id).join("current-frontend-experience.json")
 }
 
 pub fn brainstorm_decisions_index_file(project_root: &Path, delivery_id: &str) -> PathBuf {

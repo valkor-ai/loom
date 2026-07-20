@@ -170,7 +170,14 @@ pub(crate) fn task_result_template_with_code_quality(
             let mut result = json!({
                 "status": if browser_checks.is_empty() { "passed" } else { "not_run" },
                 "evidenceType": if browser_checks.is_empty() { "automated_test" } else { "browser_automation" },
-                "summary": ""
+                "summary": "",
+                "provenance": {
+                    "evidenceRefs": [],
+                    "changedFiles": [],
+                    "testCaseRefs": [],
+                    "command": null,
+                    "exitCode": null
+                }
             });
             if !browser_checks.is_empty() {
                 result["browserChecks"] = Value::Array(
@@ -362,7 +369,14 @@ pub(crate) fn task_result_schema_shape(
     let mut verification_shape = json!({
         "status": "passed | not_run | failed | inconclusive",
         "evidenceType": "one of the matching verification intent acceptableEvidence values",
-        "summary": "string"
+        "summary": "string",
+        "provenance": {
+            "evidenceRefs": ["project-relative test report, command output, or other concrete evidence ref"],
+            "changedFiles": ["project-relative path changed by the task"],
+            "testCaseRefs": ["test file, test case, or check id"],
+            "command": "exact command when a command was run, otherwise null",
+            "exitCode": "integer when a command was run, otherwise null"
+        }
     });
     if browser_profile.is_some() {
         verification_shape["browserChecks"] = json!([{

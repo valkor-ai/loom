@@ -796,7 +796,7 @@ fn interactive_verification_probe_policy() -> Value {
             "Stop retrying that verification method when the same failure signature repeats without new observable evidence."
         ],
         "taskResultEvidence": [
-            "Record successful probe facts in verificationResults[].summary for the matching verificationId.",
+            "Record successful probe facts in verificationResults[].summary for the matching verificationId and keep verificationResults[].provenance tied to concrete evidence refs, changed files, test cases, command, and exit code.",
             "Record runtime command or probe evidence in runtimeDeliveryEvidence.commandsRun when runtimeDeliveryEvidence applies.",
             "Record remaining unverified responsibility in notes or runtimeDeliveryEvidence.unverifiedItems according to TaskResult rules."
         ]
@@ -1739,7 +1739,7 @@ fn frontend_task_scope(
     );
     push_unique_strings(
         &mut scope.interface_refs,
-        task.write_boundary.artifact_refs.interfaces.clone(),
+        task.write_boundary.artifact_refs.all_interfaces(),
     );
     for requirement in closure_requirements {
         push_unique(
@@ -2664,10 +2664,11 @@ fn task_matches_workflow_closure(task: &TaskDefinition, requirement: &Value) -> 
         .map(|workflow_ref| refs.user_flows.iter().any(|item| item == workflow_ref))
         .unwrap_or(false);
     let interface_refs = string_array_at(requirement, "interfaceRefs");
+    let task_interfaces = refs.all_interfaces();
     let interface_matches = !interface_refs.is_empty()
         && interface_refs
             .iter()
-            .any(|interface_ref| refs.interfaces.iter().any(|item| item == interface_ref));
+            .any(|interface_ref| task_interfaces.iter().any(|item| item == interface_ref));
     let acceptance_refs = string_array_at(requirement, "acceptanceRefs");
     let acceptance_matches = acceptance_refs.is_empty()
         || acceptance_refs.iter().any(|acceptance_ref| {

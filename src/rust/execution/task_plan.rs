@@ -1460,6 +1460,14 @@ fn validate_taskplan_refs(
             &mut issues,
         );
         validate_ref_list(
+            &task.write_boundary.artifact_refs.consumed_interfaces,
+            &allowed_set(allowed_refs, "interfaceRefs"),
+            "UNKNOWN_INTERFACE_REF",
+            "tasks[].writeBoundary.artifactRefs.consumedInterfaces",
+            &task.task_id,
+            &mut issues,
+        );
+        validate_ref_list(
             &task.write_boundary.artifact_refs.user_flows,
             &allowed_set(allowed_refs, "userFlowRefs"),
             "UNKNOWN_USER_FLOW_REF",
@@ -1521,6 +1529,10 @@ fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition], allowed_ref
         );
         clear_refs_when_unavailable(
             &mut task.write_boundary.artifact_refs.interfaces,
+            &interface_refs,
+        );
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.consumed_interfaces,
             &interface_refs,
         );
         clear_refs_when_unavailable(
@@ -1597,10 +1609,16 @@ fn canonicalize_task_ownership(
         .iter_mut()
         .filter(|task| !is_business_owner_task(task))
     {
+        let consumed_interfaces = if task_can_consume_api_contract(task) {
+            task.write_boundary.artifact_refs.all_interfaces()
+        } else {
+            Vec::new()
+        };
         task.scope_refs.clear();
         task.acceptance_refs.clear();
         task.requirement_detail_refs.clear();
         task.write_boundary.artifact_refs = TaskArtifactRefs::default();
+        task.write_boundary.artifact_refs.consumed_interfaces = consumed_interfaces;
         for intent in &mut task.verification_intents {
             intent.requirement_detail_refs.clear();
         }
@@ -1904,37 +1922,76 @@ fn normalize_artifact_refs(tasks: &mut [TaskDefinition], aac: &ArchitectureArtif
                     map
                 },
             );
-        let duplicate_owners = if field == "interfaces" {
-            // An interface ref is a shared contract binding: the backend
-            // implementation and a client/integration task may both consume
-            // it. It is not duplicated ownership, so keep every valid binding
-            // while still filtering refs that AAC does not declare.
-            BTreeMap::new()
-        } else {
-            occurrences
-                .iter()
-                .filter(|(_, indices)| indices.len() > 1)
-                .map(|(artifact_ref, indices)| {
-                    (
-                        artifact_ref.clone(),
-                        choose_artifact_owner(artifact_ref, field, indices, tasks, aac),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>()
-        };
+        let duplicate_owners = occurrences
+            .iter()
+            .filter(|(_, indices)| indices.len() > 1)
+            .map(|(artifact_ref, indices)| {
+                (
+                    artifact_ref.clone(),
+                    choose_artifact_owner(artifact_ref, field, indices, tasks, aac),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         for task in tasks.iter_mut() {
             if !is_business_owner_task(task) {
                 continue;
             }
-            let refs = artifact_refs_for_field_mut(&mut task.write_boundary.artifact_refs, field);
-            refs.retain(|artifact_ref| {
-                allowed
-                    .get(field)
-                    .is_some_and(|accepted| accepted.contains(artifact_ref))
-                    && duplicate_owners
-                        .get(artifact_ref)
-                        .is_none_or(|owner| owner == &task.task_id)
-            });
+            let consumed = {
+                let refs =
+                    artifact_refs_for_field_mut(&mut task.write_boundary.artifact_refs, field);
+                let original = refs.clone();
+                refs.retain(|artifact_ref| {
+                    allowed
+                        .get(field)
+                        .is_some_and(|accepted| accepted.contains(artifact_ref))
+                        && duplicate_owners
+                            .get(artifact_ref)
+                            .is_none_or(|owner| owner == &task.task_id)
+                });
+                if field == "interfaces" {
+                    original
+                        .into_iter()
+                        .filter(|interface_ref| {
+                            !refs.contains(interface_ref)
+                                && allowed
+                                    .get("interfaces")
+                                    .is_some_and(|accepted| accepted.contains(interface_ref))
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            };
+            for interface_ref in consumed {
+                push_unique(
+                    &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                    interface_ref,
+                );
+            }
+        }
+        if field == "interfaces" {
+            for task in tasks.iter_mut().filter(|task| is_business_owner_task(task)) {
+                if !task_owns_api_contract(task) {
+                    let non_owner_refs =
+                        std::mem::take(&mut task.write_boundary.artifact_refs.interfaces);
+                    for interface_ref in non_owner_refs {
+                        push_unique(
+                            &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                            interface_ref,
+                        );
+                    }
+                }
+                task.write_boundary
+                    .artifact_refs
+                    .consumed_interfaces
+                    .retain(|reference| {
+                        !task
+                            .write_boundary
+                            .artifact_refs
+                            .interfaces
+                            .contains(reference)
+                    });
+            }
         }
     }
 }
@@ -1946,14 +2003,28 @@ fn choose_artifact_owner(
     tasks: &[TaskDefinition],
     aac: &ArchitectureArtifactContract,
 ) -> String {
-    let workflow_owners = candidate_indices
+    let eligible_indices = if field == "interfaces" {
+        let api_owners = candidate_indices
+            .iter()
+            .copied()
+            .filter(|index| task_owns_api_contract(&tasks[*index]))
+            .collect::<Vec<_>>();
+        if api_owners.is_empty() {
+            candidate_indices.to_vec()
+        } else {
+            api_owners
+        }
+    } else {
+        candidate_indices.to_vec()
+    };
+    let workflow_owners = eligible_indices
         .iter()
         .copied()
         .filter(|index| {
             task_is_workflow_closure_artifact_owner(&tasks[*index], field, artifact_ref, aac)
         })
         .collect::<Vec<_>>();
-    let detail_owners = candidate_indices
+    let detail_owners = eligible_indices
         .iter()
         .copied()
         .filter(|index| {
@@ -1980,7 +2051,7 @@ fn choose_artifact_owner(
     } else if detail_owners.len() == 1 {
         detail_owners
     } else {
-        candidate_indices.to_vec()
+        eligible_indices
     };
     candidates
         .into_iter()
@@ -2087,13 +2158,6 @@ fn canonicalize_workflow_closure_owners(
                         .user_flows
                         .iter()
                         .any(|reference| reference == workflow_ref)
-                    && required_interfaces.iter().all(|interface_ref| {
-                        task.write_boundary
-                            .artifact_refs
-                            .interfaces
-                            .iter()
-                            .any(|reference| reference == interface_ref)
-                    })
                     && task.implementation_actions.iter().any(|action| {
                         matches!(action, ImplementationAction::WireReferenceInApiOrUi)
                     })
@@ -2127,7 +2191,7 @@ fn canonicalize_workflow_closure_owners(
         );
         for interface_ref in required_interfaces {
             push_unique(
-                &mut owner.write_boundary.artifact_refs.interfaces,
+                &mut owner.write_boundary.artifact_refs.consumed_interfaces,
                 interface_ref,
             );
         }
@@ -2732,9 +2796,8 @@ fn task_owned_frontend_ids(
     let mut interfaces = task
         .write_boundary
         .artifact_refs
-        .interfaces
-        .iter()
-        .cloned()
+        .all_interfaces()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     for detail in &aac.detail_coverage {
         if !task
@@ -3876,7 +3939,7 @@ pub(crate) fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &
     if !required_interfaces.iter().all(|interface_ref| {
         task.write_boundary
             .artifact_refs
-            .interfaces
+            .all_interfaces()
             .iter()
             .any(|item| item == interface_ref)
     }) {
@@ -5857,7 +5920,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "requirementSource": "outputContract.apiContractRequirementTemplate",
             "interfaceSource": "contextProjection.apiInterfaces (copied from the accepted AAC interfaces)",
             "exposureSource": "contextProjection.apiContract (copied from the accepted AAC API contract)",
-            "assignmentRule": "Tasks that create or change current-phase HTTP API implementations, frontend/client bindings, integration tests, or verification flows must include the accepted interface ids in task.writeBoundary.artifactRefs.interfaces. Loom derives one task-scoped API contract requirement for every such task; frontend/client tasks consume the contract without becoming API implementation owners.",
+            "assignmentRule": "Loom assigns each accepted interface id to one implementation owner in task.writeBoundary.artifactRefs.interfaces. Client, integration, and verification tasks receive the same contract in consumedInterfaces and the derived API requirement; they must not claim duplicate write ownership.",
             "implementationRule": "API tasks must preserve request schema, response schema, status codes, error schema, auth policy, and pagination policy declared by the AAC interface.",
             "verificationRule": "API tasks should include verification intents that prove at least the declared success path and important business or validation error path. Collection endpoints should also prove declared pagination/filter behavior.",
             "nonDuplicationRule": "Do not inline full API requirements inside every task; use interface refs and the generated task apiContractRequirementRefs."
@@ -6146,10 +6209,9 @@ fn normalize_api_contract_requirements(
         let mut interface_refs = task
             .write_boundary
             .artifact_refs
-            .interfaces
-            .iter()
-            .filter(|interface_ref| http_api_refs.contains(*interface_ref))
-            .cloned()
+            .all_interfaces()
+            .into_iter()
+            .filter(|interface_ref| http_api_refs.contains(interface_ref))
             .collect::<Vec<_>>();
         if interface_refs.is_empty() && task_can_consume_api_contract(task) {
             interface_refs = aac
@@ -6176,12 +6238,23 @@ fn normalize_api_contract_requirements(
                 .collect::<Vec<_>>();
             interface_refs.sort();
             interface_refs.dedup();
-            if !interface_refs.is_empty() {
-                task.write_boundary.artifact_refs.interfaces = interface_refs.clone();
-            }
+            // This is a consumer projection. The accepted owner boundary is
+            // intentionally not widened by API requirement derivation.
         }
         if interface_refs.is_empty() || !task_uses_api_contract(task) {
             continue;
+        }
+        if !task_owns_api_contract(task) {
+            for interface_ref in &interface_refs {
+                push_unique(
+                    &mut task.write_boundary.artifact_refs.consumed_interfaces,
+                    interface_ref.clone(),
+                );
+            }
+            task.write_boundary
+                .artifact_refs
+                .interfaces
+                .retain(|interface_ref| !interface_refs.contains(interface_ref));
         }
         let requirement_id = format!("api-contract-{}", task.task_id);
         requirement_ids_by_task
@@ -6350,9 +6423,8 @@ fn task_interface_refs_for_verification(task: &TaskDefinition) -> BTreeSet<Strin
     let mut refs = task
         .write_boundary
         .artifact_refs
-        .interfaces
-        .iter()
-        .cloned()
+        .all_interfaces()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     let Some(scope) = task
         .frontend_experience_requirement
@@ -6478,9 +6550,8 @@ fn code_reference_task_context(
     let owned_interfaces = task
         .write_boundary
         .artifact_refs
-        .interfaces
-        .iter()
-        .cloned()
+        .all_interfaces()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     let task_interfaces = aac
         .interfaces
@@ -6585,9 +6656,8 @@ fn task_owned_application_interactions<'a>(
     let interface_refs = task
         .write_boundary
         .artifact_refs
-        .interfaces
-        .iter()
-        .cloned()
+        .all_interfaces()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     aac.engineering_boundary
         .pointer("/applicationInteractions")

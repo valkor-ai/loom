@@ -595,7 +595,7 @@ where
     };
     let context_file = repository_context_file(project_root, &locator);
     state::store::write_json_atomic(&context_file, &persisted)?;
-    state::store::remove_file_if_exists(&candidate_file)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
     let context_ref = to_project_relative(project_root, &context_file)?;
 
     let store = FileTransitionStore;

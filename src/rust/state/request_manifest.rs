@@ -918,8 +918,7 @@ fn resolve_field_for_validation(
     }
     let root_key = parts.first().expect("selector has first part");
     if let Some(ref_entry) = refs.get(root_key) {
-        let ref_file = from_project_relative(project_root, &ref_entry.r#ref)?;
-        let ref_value = read_json_value(&ref_file)?;
+        let ref_value = crate::store::read_json_reference(project_root, &ref_entry.r#ref)?;
         if root_key == "rules"
             && parts[1..].join(".") == "requirementSemanticGrounding.compactRules"
         {
@@ -966,8 +965,7 @@ fn resolve_context_ref_for_validation(
         else {
             return Ok(None);
         };
-        let ref_file = from_project_relative(project_root, relative)?;
-        let ref_value = read_json_value(&ref_file)?;
+        let ref_value = crate::store::read_json_reference(project_root, relative)?;
         return Ok(Some(select_source_ref_registry(&ref_value, &parts[1..])?));
     }
     let aliases = [

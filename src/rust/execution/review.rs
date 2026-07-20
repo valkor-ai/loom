@@ -1158,7 +1158,7 @@ where
     };
     let persisted = review_result_file(root, &locator, &result.review_id);
     state::store::write_json_atomic(&persisted, &result)?;
-    discard_agent_candidate(root, &target.path)?;
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let result_ref = to_project_relative(root, &persisted)?;
     state::store::write_json_atomic(
         &review_latest_file(root, &locator),
@@ -2607,7 +2607,7 @@ where
     let persisted =
         manual_review_resolution_file(root, &locator, &resolution.manual_review_resolution_id);
     state::store::write_json_atomic(&persisted, &resolution)?;
-    discard_agent_candidate(root, &target.path)?;
+    state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
     let resolution_ref = to_project_relative(root, &persisted)?;
     apply_browser_quality_resolution(&input.project_root, &locator, &resolution, &fields)?;
     let effective_action = effective_manual_review_action(&resolution);
@@ -3422,16 +3422,6 @@ fn write_review_result(
     ))
 }
 
-fn discard_agent_candidate(
-    project_root: &Path,
-    relative_path: &str,
-) -> Result<(), state::store::StateError> {
-    if !relative_path.starts_with(".loom/agent-writable/") {
-        return Ok(());
-    }
-    state::store::remove_file_if_exists(&from_project_relative(project_root, relative_path)?)
-}
-
 fn load_task_results(
     root: &Path,
     locator: &DeliveryPhaseLocator,
@@ -3507,10 +3497,18 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                 let verification_supported = evidence
                     .map(|evidence| {
                         !evidence.verification_ids.is_empty()
-                            && evidence
-                                .verification_ids
-                                .iter()
-                                .all(|id| passed_ids.contains(id.as_str()))
+                            && evidence.verification_ids.iter().all(|id| {
+                                passed_ids.contains(id.as_str())
+                                    && result.is_some_and(|result| {
+                                        result
+                                            .verification_results
+                                            .iter()
+                                            .find(|verification| {
+                                                verification.verification_id == *id
+                                            })
+                                            .is_some_and(verification_is_traceable)
+                                    })
+                            })
                     })
                     .unwrap_or(false);
                 let artifact_supported = result
@@ -3931,6 +3929,22 @@ fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn verification_is_traceable(verification: &contracts::VerificationResult) -> bool {
+    verification.provenance.as_ref().is_some_and(|provenance| {
+        !provenance.evidence_refs.is_empty()
+            || !provenance.test_case_refs.is_empty()
+            || (provenance
+                .command
+                .as_deref()
+                .is_some_and(|command| !command.trim().is_empty())
+                && provenance.exit_code.is_some())
+            || verification
+                .browser_checks
+                .iter()
+                .any(|check| !check.artifact_refs.is_empty())
+    })
 }
 
 fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
@@ -5061,6 +5075,13 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                         "verificationId": verification.verification_id,
                         "status": verification.status,
                         "evidenceType": verification.evidence_type,
+                        "provenance": verification.provenance.as_ref().map(|provenance| json!({
+                            "evidenceRefCount": provenance.evidence_refs.len(),
+                            "changedFileCount": provenance.changed_files.len(),
+                            "testCaseRefCount": provenance.test_case_refs.len(),
+                            "commandPresent": provenance.command.as_deref().is_some_and(|command| !command.trim().is_empty()),
+                            "exitCode": provenance.exit_code
+                        })),
                         "browserChecks": verification.browser_checks.iter().map(|check| {
                             let diagnostic_artifact_refs = if check.status != contracts::BrowserCheckStatus::Passed
                                 || check.attempts > 1
@@ -5292,13 +5313,23 @@ fn allowed_refs(
         })
         .collect::<BTreeSet<_>>();
     verification_refs.extend(task_results.iter().flat_map(|result| {
-        result
-            .verification_results
-            .iter()
-            .flat_map(|verification| verification.browser_checks.iter())
-            .flat_map(|check| {
+        result.verification_results.iter().flat_map(|verification| {
+            let browser_refs = verification.browser_checks.iter().flat_map(|check| {
                 std::iter::once(check.check_id.clone()).chain(check.artifact_refs.iter().cloned())
-            })
+            });
+            let provenance_refs = verification
+                .provenance
+                .iter()
+                .flat_map(|provenance| {
+                    provenance
+                        .evidence_refs
+                        .iter()
+                        .chain(provenance.changed_files.iter())
+                        .chain(provenance.test_case_refs.iter())
+                })
+                .cloned();
+            browser_refs.chain(provenance_refs)
+        })
     }));
     let mut read_refs = vec!["reviewPacket".to_string(), "changeContext".to_string()];
     read_refs.extend(

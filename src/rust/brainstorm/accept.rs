@@ -214,7 +214,7 @@ where
             .map(|action| action.kind.clone()),
         &state::store::now_string(),
     )?;
-    state::store::remove_file_if_exists(&candidate_file)?;
+    state::lifecycle_store::finalize_agent_candidate(project_root, &target.path)?;
 
     let store = FileTransitionStore;
     let mut delivery = store

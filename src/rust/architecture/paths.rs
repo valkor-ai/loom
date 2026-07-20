@@ -36,6 +36,14 @@ pub fn architecture_contract_file(project_root: &Path, locator: &DeliveryPhaseLo
     architecture_contract_dir(project_root, locator).join("aac.json")
 }
 
+pub fn architecture_section_file(
+    project_root: &Path,
+    locator: &DeliveryPhaseLocator,
+    section: ArchitectureSectionGroup,
+) -> PathBuf {
+    architecture_contract_dir(project_root, locator).join(format!("{}.json", section_name(section)))
+}
+
 pub fn architecture_latest_file(project_root: &Path, locator: &DeliveryPhaseLocator) -> PathBuf {
     architecture_contract_dir(project_root, locator).join("latest.json")
 }
