@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "algorithm-client"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde_json",
 ]
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "architecture"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "contracts",
  "delivery-core",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "brainstorm"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "algorithm-client",
  "contracts",
@@ -228,7 +228,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "contracts"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "delivery-core",
  "schemars",
@@ -327,7 +327,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "delivery-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "schemars",
  "serde",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "deploy"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "contracts",
  "delivery-core",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "execution"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "architecture",
  "brainstorm",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "knowledge"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "algorithm-client",
  "chrono",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-server"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "architecture",
@@ -882,7 +882,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "planning"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "brainstorm",
  "contracts",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "setup"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "delivery-core",
@@ -1231,7 +1231,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "state"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "delivery-core",
  "schemars",
@@ -1486,7 +1486,7 @@ checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "verification"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "delivery-core",
@@ -1654,7 +1654,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workflow"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "architecture",
  "brainstorm",

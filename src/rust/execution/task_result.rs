@@ -3755,6 +3755,15 @@ pub(crate) fn refresh_stale_task_result_repair_action(
     if issues.is_empty() {
         return Ok(None);
     }
+    if !issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+    {
+        // This refresh path exists for stale frontend-quality projections. A
+        // repair request with unrelated issues must remain the active request;
+        // recreating it here would change the requestRef on every continue.
+        return Ok(None);
+    }
     let context = RepairContextInput {
         task_plan_id,
         task_id,

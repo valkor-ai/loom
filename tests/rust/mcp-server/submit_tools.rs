@@ -4264,10 +4264,6 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
     })
     .expect("read task execution fields")
     .fields;
-    let result_file = fields["outputContract.resultFile"]
-        .value
-        .as_str()
-        .expect("resultFile");
     let expected_task_plan_id = fields["source.taskPlanId"]
         .value
         .as_str()
@@ -4292,24 +4288,22 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         .as_str()
         .expect("closure id")
         .to_string();
-    let mut result = fields["outputContract.resultTemplate"].value.clone();
-    result["taskPlanId"] = json!("wrong-taskplan");
-    result["taskId"] = json!("wrong-task");
-    result["changedFiles"] = json!(["src/App.tsx"]);
-    complete_frontend_quality_token_evidence_for_test(&mut result);
-    result["verificationResults"][0]["verificationId"] = json!("wrong-verification");
-    result["verificationResults"][0]["evidenceType"] = json!("runtime_api_check");
-    result["failure"] = json!({
-        "code": "STALE_FAILURE",
-        "summary": "This stale failure must not force a repair for a completed result."
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["taskPlanId"] = json!("wrong-taskplan");
+        result["taskId"] = json!("wrong-task");
+        result["verificationResults"][0]["verificationId"] = json!("wrong-verification");
+        result["verificationResults"][0]["evidenceType"] = json!("runtime_api_check");
+        result["failure"] = json!({
+            "code": "STALE_FAILURE",
+            "summary": "This stale failure must not force a repair for a completed result."
+        });
+        result["requirementDetailEvidence"][0]["detailId"] = json!("wrong-detail");
+        result["requirementDetailEvidence"][0]["verificationIds"] = json!(["wrong-verification"]);
+        result["requirementDetailEvidence"][0]["evidenceRefs"] = json!(["src/App.tsx"]);
+        result["conceptEvidence"][0]["conceptRef"] = json!("wrong-concept");
+        result["frontendExperienceSelfCheck"]["closureRequirementIds"] = json!(["wrong-closure"]);
     });
-    result["requirementDetailEvidence"][0]["detailId"] = json!("wrong-detail");
-    result["requirementDetailEvidence"][0]["verificationIds"] = json!(["wrong-verification"]);
-    result["requirementDetailEvidence"][0]["evidenceRefs"] = json!(["src/App.tsx"]);
-    result["conceptEvidence"][0]["conceptRef"] = json!("wrong-concept");
-    result["frontendExperienceSelfCheck"]["closureRequirementIds"] = json!(["wrong-closure"]);
-    write_json_atomic(&fixture.root.join(result_file), &result)
-        .expect("write machine-ref-invalid task result");
 
     let accepted_result = call_submit(
         "loom.recordTaskResultFile",
@@ -4400,6 +4394,7 @@ fn task_result_contract_omits_and_strips_non_applicable_architecture_quality_evi
         "non-applicable architectureQualityEvidence must not be exposed in resultTemplate"
     );
 
+    write_task_result_candidate(&fixture, &execution_request_ref);
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.clone(),
@@ -4414,7 +4409,10 @@ fn task_result_contract_omits_and_strips_non_applicable_architecture_quality_evi
         .value
         .as_str()
         .expect("result file");
-    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    let mut result: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(result_file)).expect("read task result"),
+    )
+    .expect("parse task result");
     result["taskResultId"] = json!("result-with-extra-architecture-quality");
     result["changedFiles"] = json!(["src/App.tsx"]);
     complete_frontend_quality_token_evidence_for_test(&mut result);
@@ -11707,13 +11705,11 @@ fn task_result_repair_submit_preserves_required_architecture_evidence_when_repai
 fn task_result_submit_backfills_machine_owned_shape_fields() {
     let fixture = Fixture::new("task-result-backfills-machine-shape");
     let execution_request_ref = start_planned_task_execution_without_runtime_closure(&fixture);
+    write_task_result_candidate(&fixture, &execution_request_ref);
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.clone(),
-        fields: vec![
-            "outputContract.resultFile".to_string(),
-            "outputContract.resultTemplate".to_string(),
-        ],
+        fields: vec!["outputContract.resultFile".to_string()],
     })
     .expect("read task result contract")
     .fields;
@@ -11721,31 +11717,10 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
         .value
         .as_str()
         .expect("result file");
-    let mut result = fields["outputContract.resultTemplate"].value.clone();
-    result["changedFiles"] = json!(["src/main.tsx"]);
-    if let Some(verifications) = result
-        .get_mut("verificationResults")
-        .and_then(Value::as_array_mut)
-    {
-        for verification in verifications {
-            verification["provenance"] = json!({
-                "evidenceRefs": ["src/main.tsx"],
-                "changedFiles": ["src/main.tsx"],
-                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
-                "command": "fixture verification",
-                "exitCode": 0
-            });
-        }
-    }
-    complete_frontend_quality_token_evidence_for_test(&mut result);
-    if let Some(items) = result
-        .get_mut("requirementDetailEvidence")
-        .and_then(Value::as_array_mut)
-    {
-        for item in items {
-            item["evidenceRefs"] = json!(["src/main.tsx"]);
-        }
-    }
+    let mut result: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(result_file)).expect("read task result"),
+    )
+    .expect("parse task result");
     for field in [
         "schemaVersion",
         "taskResultId",

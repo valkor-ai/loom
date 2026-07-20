@@ -478,6 +478,19 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             "candidate_write_contract"
         ]
     );
+    let confirmed_state = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "confirmed_clarification_state"
+                }))),
+            )
+            .expect("read confirmed clarification state"),
+    );
+    assert!(confirmed_state["fields"]["confirmedClarificationState"].is_object());
     let source_ref_registry = structured(
         server
             .invoke_tool(
