@@ -68,7 +68,7 @@ pub enum ConfidenceLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TechnicalBaselineApproval {
     pub r#type: TechnicalBaselineApprovalType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,7 +78,7 @@ pub struct TechnicalBaselineApproval {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TechnicalBaselineEvidence {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -86,7 +86,7 @@ pub struct TechnicalBaselineEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TechnicalBaselineAlternative {
     pub name: String,
     pub tradeoff: String,
@@ -132,7 +132,7 @@ pub enum SecurityTransport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecurityProfile {
     pub profile_id: String,
     pub name: String,
@@ -153,7 +153,7 @@ pub struct SecurityProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TechnicalBaselineCandidateAgentWritable {
     pub status: TechnicalBaselineStatus,
     pub source: TechnicalBaselineSource,
@@ -168,8 +168,6 @@ pub struct TechnicalBaselineCandidateAgentWritable {
     pub evidence: Vec<TechnicalBaselineEvidence>,
     pub approval: TechnicalBaselineApproval,
     pub confidence: ConfidenceLevel,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requires_user_confirmation: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_summary: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -196,8 +194,6 @@ pub struct TechnicalBaselineContract {
     pub evidence: Vec<TechnicalBaselineEvidence>,
     pub approval: TechnicalBaselineApproval,
     pub confidence: ConfidenceLevel,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requires_user_confirmation: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_summary: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -442,7 +438,7 @@ pub struct ContextQuality {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RepositoryContextCandidateAgentWritable {
     pub status: String,
     #[schemars(skip)]

@@ -856,7 +856,6 @@ fn deploy_prepare_projects_redis_capabilities_into_health_and_storage_assets() {
             "provider": "redis",
             "startupRequirement": "required",
             "capabilities": [{
-                "capabilityId": "redis_session_0",
                 "purpose": "session",
                 "durability": "persistent",
                 "startupRequirement": "required"
@@ -928,7 +927,6 @@ fn deploy_prepare_does_not_gate_startup_on_optional_redis() {
             "provider": "redis",
             "startupRequirement": "optional",
             "capabilities": [{
-                "capabilityId": "redis_cache_0",
                 "purpose": "cache",
                 "durability": "ephemeral",
                 "startupRequirement": "optional"

@@ -222,7 +222,8 @@ where
         }
     };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
-    let issues = validate_result(
+    let mut issues = validate_non_applicable_evidence_fields(&raw_result, &task);
+    issues.extend(validate_result(
         root,
         &normalized_result,
         &result,
@@ -233,7 +234,7 @@ where
         &blocked_output,
         &result_file,
         &target.path,
-    );
+    ));
     if !issues.is_empty() {
         return repair_task_result_or_error(
             input,
@@ -679,6 +680,7 @@ fn normalize_task_result_machine_fields(
     {
         object.insert("changedFiles".to_string(), json!([]));
     }
+    normalize_string_array_field(object, "changedFiles");
     if !object.contains_key("noChangeReason")
         || !object
             .get("noChangeReason")
@@ -708,6 +710,7 @@ fn normalize_task_result_machine_fields(
     if !object.get("notes").and_then(Value::as_array).is_some() {
         object.insert("notes".to_string(), json!([]));
     }
+    normalize_string_array_field(object, "notes");
     if object
         .get("status")
         .and_then(Value::as_str)
@@ -752,8 +755,100 @@ fn normalize_task_result_machine_fields(
         object,
         task.frontend_experience_requirement.as_ref(),
     );
+    if let Some(continuity) = object
+        .get_mut("executionContinuity")
+        .and_then(Value::as_object_mut)
+    {
+        normalize_string_array_field(continuity, "notes");
+    }
+    project_task_result_to_canonical_fields(object);
 
     raw_result
+}
+
+fn project_task_result_to_canonical_fields(object: &mut serde_json::Map<String, Value>) {
+    retain_object_fields(
+        object,
+        &[
+            "schemaVersion",
+            "taskResultId",
+            "taskId",
+            "taskPlanId",
+            "status",
+            "changedFiles",
+            "noChangeReason",
+            "verificationResults",
+            "selfRepairSummary",
+            "failure",
+            "executionContinuity",
+            "notes",
+            "frontendExperienceSelfCheck",
+            "frontendQualitySelfCheck",
+            "runtimeDeliveryEvidence",
+            "requirementDetailEvidence",
+            "conceptEvidence",
+            "architectureQualityEvidence",
+            "apiContractEvidence",
+            "codeQualityEvidence",
+            "blockedReasons",
+            "createdAt",
+            "updatedAt",
+        ],
+    );
+    project_object_fields(object, "noChangeReason", &["code", "summary"]);
+    project_object_fields(
+        object,
+        "selfRepairSummary",
+        &[
+            "attempted",
+            "attemptCount",
+            "stopReason",
+            "progressObserved",
+        ],
+    );
+    project_object_fields(object, "failure", &["code", "summary"]);
+    project_object_fields(
+        object,
+        "executionContinuity",
+        &[
+            "taskResultSubmittedAfterVerification",
+            "agentOwnedLongRunningWork",
+            "notes",
+        ],
+    );
+    project_object_array_fields(
+        object,
+        "blockedReasons",
+        &["code", "nextNode", "message", "details"],
+    );
+}
+
+fn retain_object_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]) {
+    object.retain(|key, _| fields.iter().any(|allowed| *allowed == key));
+}
+
+fn project_object_fields(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    allowed_fields: &[&str],
+) {
+    if let Some(value) = object.get_mut(field).and_then(Value::as_object_mut) {
+        retain_object_fields(value, allowed_fields);
+    }
+}
+
+fn project_object_array_fields(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    allowed_fields: &[&str],
+) {
+    if let Some(items) = object.get_mut(field).and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(item) = item.as_object_mut() {
+                retain_object_fields(item, allowed_fields);
+            }
+        }
+    }
 }
 
 fn canonical_task_result_value(
@@ -853,6 +948,19 @@ fn normalize_verification_provenance(object: &mut serde_json::Map<String, Value>
         provenance
             .entry("exitCode".to_string())
             .or_insert(Value::Null);
+        normalize_string_array_field(&mut provenance, "evidenceRefs");
+        normalize_string_array_field(&mut provenance, "changedFiles");
+        normalize_string_array_field(&mut provenance, "testCaseRefs");
+        retain_object_fields(
+            &mut provenance,
+            &[
+                "evidenceRefs",
+                "changedFiles",
+                "testCaseRefs",
+                "command",
+                "exitCode",
+            ],
+        );
         item.insert("provenance".to_string(), Value::Object(provenance));
     }
 }
@@ -960,27 +1068,90 @@ fn remove_non_applicable_evidence_fields(
     object: &mut serde_json::Map<String, Value>,
     task: &TaskDefinition,
 ) {
-    if !frontend_self_check_applies(task) {
+    if !frontend_self_check_applies(task)
+        && object
+            .get("frontendExperienceSelfCheck")
+            .is_some_and(Value::is_null)
+    {
         object.remove("frontendExperienceSelfCheck");
     }
-    if !frontend_quality_self_check_applies(task) {
+    if !frontend_quality_self_check_applies(task)
+        && object
+            .get("frontendQualitySelfCheck")
+            .is_some_and(Value::is_null)
+    {
         object.remove("frontendQualitySelfCheck");
     }
-    if !runtime_delivery_evidence_applies(task) {
+    if !runtime_delivery_evidence_applies(task)
+        && object
+            .get("runtimeDeliveryEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("runtimeDeliveryEvidence");
     }
-    if task.concept_refs.is_empty() {
+    if task.concept_refs.is_empty() && object.get("conceptEvidence").is_some_and(Value::is_null) {
         object.remove("conceptEvidence");
     }
-    if !architecture_quality_evidence_applies(task) {
+    if !architecture_quality_evidence_applies(task)
+        && object
+            .get("architectureQualityEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("architectureQualityEvidence");
     }
-    if !api_contract_evidence_applies(task) {
+    if !api_contract_evidence_applies(task)
+        && object
+            .get("apiContractEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("apiContractEvidence");
     }
-    if !code_quality_evidence_applies(task) {
+    if !code_quality_evidence_applies(task)
+        && object
+            .get("codeQualityEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("codeQualityEvidence");
     }
+}
+
+fn validate_non_applicable_evidence_fields(
+    raw_result: &Value,
+    task: &TaskDefinition,
+) -> Vec<delivery_core::RepairIssue> {
+    let Some(object) = raw_result.as_object() else {
+        return Vec::new();
+    };
+    let fields = [
+        (
+            frontend_self_check_applies(task),
+            "frontendExperienceSelfCheck",
+        ),
+        (
+            frontend_quality_self_check_applies(task),
+            "frontendQualitySelfCheck",
+        ),
+        (
+            runtime_delivery_evidence_applies(task),
+            "runtimeDeliveryEvidence",
+        ),
+        (!task.concept_refs.is_empty(), "conceptEvidence"),
+        (
+            architecture_quality_evidence_applies(task),
+            "architectureQualityEvidence",
+        ),
+        (api_contract_evidence_applies(task), "apiContractEvidence"),
+        (code_quality_evidence_applies(task), "codeQualityEvidence"),
+    ];
+    fields
+        .into_iter()
+        .filter(|(applies, field)| !applies && object.get(*field).is_some_and(|value| !value.is_null()))
+        .map(|(_, field)| issue(
+            "TASK_RESULT_EVIDENCE_NOT_APPLICABLE",
+            field,
+            "TaskResult must not include evidence fields when the canonical task contract does not assign that evidence type; remove the field instead of submitting an unconsumed value.",
+        ))
+        .collect()
 }
 
 fn normalize_applicable_evidence_array_fields(
@@ -1058,6 +1229,7 @@ fn normalize_frontend_quality_self_check_shape(
         self_check.remove("surfaceDecisionContractRef");
     }
     normalize_string_array_field(self_check, "referencePlanFilesChecked");
+    normalize_string_array_field(self_check, "evidenceRefs");
     normalize_string_array_field(self_check, "knownGaps");
     if !self_check
         .get("contentBoundaryEvidence")
@@ -1088,6 +1260,49 @@ fn normalize_frontend_quality_self_check_shape(
     {
         self_check.remove("designTokenEvidence");
     }
+    project_frontend_quality_self_check(self_check);
+}
+
+fn project_frontend_quality_self_check(self_check: &mut serde_json::Map<String, Value>) {
+    retain_object_fields(
+        self_check,
+        &[
+            "status",
+            "surfaceDecisionContractRef",
+            "evidenceRefs",
+            "surfaceRegionEvidence",
+            "surfaceActionEvidence",
+            "surfaceStateEvidence",
+            "surfaceQualityRuleEvidence",
+            "contentBoundaryEvidence",
+            "referencePlanFilesChecked",
+            "designTokenEvidence",
+            "knownGaps",
+        ],
+    );
+    project_object_fields(
+        self_check,
+        "contentBoundaryEvidence",
+        &[
+            "checked",
+            "allowedContentExamples",
+            "forbiddenContentViolations",
+            "evidence",
+        ],
+    );
+    project_object_fields(
+        self_check,
+        "designTokenEvidence",
+        &[
+            "strategyUsed",
+            "templateIdUsed",
+            "tokenAssetFiles",
+            "tokenConsumerFiles",
+            "existingTokenSystemReused",
+            "parallelTokenSystemCreated",
+            "mergeSummary",
+        ],
+    );
 }
 
 fn normalize_concept_evidence_machine_fields(
@@ -1121,15 +1336,34 @@ fn normalize_concept_evidence_machine_fields(
                 &mut used,
                 false,
             );
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("conceptRef");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("conceptRef".to_string(), json!(concept_ref));
-            if !item.get("evidenceType").is_some_and(Value::is_string) {
-                item.insert("evidenceType".to_string(), json!("code"));
-            }
-            if !item.get("summary").is_some_and(Value::is_string) {
-                item.insert("summary".to_string(), json!(""));
-            }
+            item.insert(
+                "evidenceType".to_string(),
+                raw_object
+                    .and_then(|value| value.get("evidenceType"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("code")),
+            );
+            item.insert(
+                "refs".to_string(),
+                raw_object
+                    .and_then(|value| value.get("refs"))
+                    .filter(|value| value.is_array())
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+            normalize_string_array_field(&mut item, "refs");
+            item.insert(
+                "summary".to_string(),
+                raw_object
+                    .and_then(|value| value.get("summary"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1216,21 +1450,60 @@ fn normalize_quality_evidence_array(
                 &mut used,
                 false,
             );
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("requirementId");
-            item.remove("verificationIds");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("requirementId".to_string(), json!(requirement_id));
             item.insert("verificationIds".to_string(), json!(verification_ids));
-            if !item.get("status").and_then(Value::as_str).is_some() {
-                item.insert("status".to_string(), json!("not_verified"));
-            }
-            if !item.get("summary").is_some_and(Value::is_string) {
-                item.insert("summary".to_string(), json!(""));
-            }
+            item.insert(
+                "status".to_string(),
+                raw_object
+                    .and_then(|value| value.get("status"))
+                    .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                    .cloned()
+                    .unwrap_or_else(|| json!("not_verified")),
+            );
             if field == "apiContractEvidence" {
-                item.remove("interfaceRefs");
                 item.insert("interfaceRefs".to_string(), json!(interface_refs));
             }
+            if field == "codeQualityEvidence" {
+                item.insert(
+                    "referenceGroupsChecked".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("referenceGroupsChecked"))
+                        .filter(|value| value.is_object())
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
+                );
+                item.insert(
+                    "referenceFilesChecked".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("referenceFilesChecked"))
+                        .filter(|value| value.is_array())
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                );
+                normalize_string_array_field(&mut item, "referenceFilesChecked");
+                normalize_string_array_map_field(&mut item, "referenceGroupsChecked");
+            }
+            if matches!(field, "apiContractEvidence" | "codeQualityEvidence") {
+                item.insert(
+                    "knownGaps".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("knownGaps"))
+                        .filter(|value| value.is_array())
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                );
+                normalize_string_array_field(&mut item, "knownGaps");
+            }
+            item.insert(
+                "summary".to_string(),
+                raw_object
+                    .and_then(|value| value.get("summary"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1263,15 +1536,34 @@ fn normalize_frontend_surface_evidence_array(
         .enumerate()
         .map(|(index, expected_id)| {
             let raw = ordered_machine_item(&raw_items, index, "id", expected_id, &mut used, false);
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("id");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("id".to_string(), json!(expected_id));
-            if !item.get("status").and_then(Value::as_str).is_some() {
-                item.insert("status".to_string(), json!("missing"));
-            }
-            if !item.get("evidence").is_some_and(Value::is_string) {
-                item.insert("evidence".to_string(), json!(""));
-            }
+            item.insert(
+                "status".to_string(),
+                raw_object
+                    .and_then(|value| value.get("status"))
+                    .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                    .cloned()
+                    .unwrap_or_else(|| json!("missing")),
+            );
+            item.insert(
+                "files".to_string(),
+                raw_object
+                    .and_then(|value| value.get("files"))
+                    .filter(|value| value.is_array())
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+            normalize_string_array_field(&mut item, "files");
+            item.insert(
+                "evidence".to_string(),
+                raw_object
+                    .and_then(|value| value.get("evidence"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1287,6 +1579,27 @@ fn normalize_string_array_field(object: &mut serde_json::Map<String, Value>, fie
         field.to_string(),
         Value::Array(items.into_iter().filter(Value::is_string).collect()),
     );
+}
+
+fn normalize_string_array_map_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(values) = object.get(field).and_then(Value::as_object) else {
+        object.insert(field.to_string(), json!({}));
+        return;
+    };
+    let normalized = values
+        .iter()
+        .map(|(key, value)| {
+            let items = value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (key.clone(), json!(items))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    object.insert(field.to_string(), Value::Object(normalized));
 }
 
 fn ordered_machine_item(
@@ -1344,24 +1657,25 @@ fn normalize_verification_result_machine_fields(
             &mut used,
             false,
         );
-        let mut item = raw.as_object().cloned().unwrap_or_default();
-        item.remove("verificationId");
+        let raw_object = raw.as_object();
+        let mut item = serde_json::Map::new();
         item.insert(
             "verificationId".to_string(),
             json!(intent.verification_id.clone()),
         );
-        if !item
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            item.insert("status".to_string(), json!("not_run"));
-        }
-        let evidence_type = item
-            .get("evidenceType")
+        item.insert(
+            "status".to_string(),
+            raw_object
+                .and_then(|value| value.get("status"))
+                .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| json!("not_run")),
+        );
+        let submitted_evidence_type = raw_object
+            .and_then(|value| value.get("evidenceType"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let evidence_allowed = evidence_type.as_ref().is_some_and(|candidate| {
+        let evidence_allowed = submitted_evidence_type.as_ref().is_some_and(|candidate| {
             intent
                 .acceptable_evidence
                 .iter()
@@ -1376,18 +1690,34 @@ fn normalize_verification_result_machine_fields(
             } else {
                 item.remove("evidenceType");
             }
+        } else if let Some(evidence_type) = submitted_evidence_type {
+            item.insert("evidenceType".to_string(), json!(evidence_type));
         }
-        if !item
-            .get("summary")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
+        if let Some(browser_checks) = raw_object
+            .and_then(|value| value.get("browserChecks"))
+            .filter(|value| value.is_array())
+            .cloned()
         {
-            item.insert(
-                "summary".to_string(),
-                json!("Verification result was not reported before TaskResult submission."),
-            );
+            item.insert("browserChecks".to_string(), browser_checks);
         }
         normalize_browser_check_machine_fields(&mut item, &intent.verification_id, browser_profile);
+        item.insert(
+            "summary".to_string(),
+            raw_object
+                .and_then(|value| value.get("summary"))
+                .filter(|value| value.as_str().is_some_and(|summary| !summary.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    json!("Verification result was not reported before TaskResult submission.")
+                }),
+        );
+        if let Some(provenance) = raw_object
+            .and_then(|value| value.get("provenance"))
+            .filter(|value| value.is_object())
+            .cloned()
+        {
+            item.insert("provenance".to_string(), provenance);
+        }
         normalized.push(Value::Object(item));
     }
     object.insert("verificationResults".to_string(), Value::Array(normalized));
@@ -1457,6 +1787,18 @@ fn normalize_browser_check_machine_fields(
         {
             item.insert("blockedReason".to_string(), Value::Null);
         }
+        retain_object_fields(
+            &mut item,
+            &[
+                "checkId",
+                "status",
+                "command",
+                "attempts",
+                "artifactRefs",
+                "observedOutcome",
+                "blockedReason",
+            ],
+        );
         normalized.push(Value::Object(item));
     }
     verification.insert("browserChecks".to_string(), Value::Array(normalized));
@@ -1476,17 +1818,17 @@ fn normalize_requirement_detail_evidence_machine_fields(
     let mut normalized = Vec::new();
     for (index, detail_id) in detail_ids.iter().enumerate() {
         let raw = ordered_machine_item(&raw_items, index, "detailId", detail_id, &mut used, false);
-        let mut item = raw.as_object().cloned().unwrap_or_default();
-        item.remove("detailId");
-        item.remove("verificationIds");
+        let raw_object = raw.as_object();
+        let mut item = serde_json::Map::new();
         item.insert("detailId".to_string(), json!(detail_id));
-        if !item
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            item.insert("status".to_string(), json!("not_verified"));
-        }
+        item.insert(
+            "status".to_string(),
+            raw_object
+                .and_then(|value| value.get("status"))
+                .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| json!("not_verified")),
+        );
         let detail_verification_ids = verification_ids_for_detail_with_fallback(task, detail_id);
         if !detail_verification_ids.is_empty() {
             item.insert(
@@ -1498,21 +1840,35 @@ fn normalize_requirement_detail_evidence_machine_fields(
             .and_then(Value::as_array)
             .is_some()
         {
-            item.insert("verificationIds".to_string(), json!([]));
-        }
-        if !item.get("evidenceRefs").and_then(Value::as_array).is_some() {
-            item.insert("evidenceRefs".to_string(), json!([]));
-        }
-        if !item
-            .get("summary")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
             item.insert(
-                "summary".to_string(),
-                json!("Requirement detail evidence was not reported before TaskResult submission."),
+                "verificationIds".to_string(),
+                raw_object
+                    .and_then(|value| value.get("verificationIds"))
+                    .filter(|value| value.is_array())
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
             );
+            normalize_string_array_field(&mut item, "verificationIds");
         }
+        item.insert(
+            "evidenceRefs".to_string(),
+            raw_object
+                .and_then(|value| value.get("evidenceRefs"))
+                .filter(|value| value.is_array())
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        normalize_string_array_field(&mut item, "evidenceRefs");
+        item.insert(
+            "summary".to_string(),
+            raw_object
+                .and_then(|value| value.get("summary"))
+                .filter(|value| value.as_str().is_some_and(|summary| !summary.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    json!("Requirement detail evidence was not reported before TaskResult submission.")
+                }),
+        );
         normalized.push(Value::Object(item));
     }
     object.insert(
@@ -1540,6 +1896,21 @@ fn normalize_runtime_delivery_evidence(
             json!(requirement.affected_contract_fields),
         );
     }
+    normalize_string_array_field(evidence, "checkedFields");
+    normalize_string_array_field(evidence, "commandsRun");
+    normalize_string_array_field(evidence, "unverifiedItems");
+    if evidence
+        .get("requirementRef")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        evidence.remove("requirementRef");
+    }
+    if evidence
+        .get("runtimeProbeCleanup")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        evidence.remove("runtimeProbeCleanup");
+    }
     let raw_checks = evidence
         .get("codeLevelChecks")
         .and_then(Value::as_array)
@@ -1547,40 +1918,60 @@ fn normalize_runtime_delivery_evidence(
         .unwrap_or_default();
     if raw_checks.is_empty() {
         evidence.insert("codeLevelChecks".to_string(), json!([]));
-        return;
+    } else {
+        let mut used = BTreeSet::new();
+        let checks = requirement
+            .required_code_level_checks
+            .iter()
+            .enumerate()
+            .take(raw_checks.len())
+            .map(|(index, required)| {
+                let raw = ordered_machine_item(
+                    &raw_checks,
+                    index,
+                    "checkId",
+                    &required.check_id,
+                    &mut used,
+                    false,
+                );
+                let raw_object = raw.as_object();
+                let mut check = serde_json::Map::new();
+                check.insert("checkId".to_string(), json!(required.check_id));
+                if let Some(contract_field) = &required.contract_field {
+                    check.insert("contractField".to_string(), json!(contract_field));
+                }
+                check.insert(
+                    "status".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("status"))
+                        .filter(|value| value.is_string())
+                        .cloned()
+                        .unwrap_or_else(|| json!("not_applicable")),
+                );
+                check.insert(
+                    "evidence".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("evidence"))
+                        .filter(|value| value.is_string())
+                        .cloned()
+                        .unwrap_or_else(|| json!("")),
+                );
+                Value::Object(check)
+            })
+            .collect::<Vec<_>>();
+        evidence.insert("codeLevelChecks".to_string(), Value::Array(checks));
     }
-    let mut used = BTreeSet::new();
-    let checks = requirement
-        .required_code_level_checks
-        .iter()
-        .enumerate()
-        .take(raw_checks.len())
-        .map(|(index, required)| {
-            let raw = ordered_machine_item(
-                &raw_checks,
-                index,
-                "checkId",
-                &required.check_id,
-                &mut used,
-                false,
-            );
-            let mut check = raw.as_object().cloned().unwrap_or_default();
-            check.remove("checkId");
-            check.remove("contractField");
-            check.insert("checkId".to_string(), json!(required.check_id));
-            if let Some(contract_field) = &required.contract_field {
-                check.insert("contractField".to_string(), json!(contract_field));
-            }
-            if !check.get("status").and_then(Value::as_str).is_some() {
-                check.insert("status".to_string(), json!("not_applicable"));
-            }
-            if !check.get("evidence").is_some_and(Value::is_string) {
-                check.insert("evidence".to_string(), json!(""));
-            }
-            Value::Object(check)
-        })
-        .collect::<Vec<_>>();
-    evidence.insert("codeLevelChecks".to_string(), Value::Array(checks));
+    retain_object_fields(
+        evidence,
+        &[
+            "requirementRef",
+            "checkedFields",
+            "codeLevelChecks",
+            "commandsRun",
+            "unverifiedItems",
+            "runtimeProbeCleanup",
+        ],
+    );
 }
 
 fn normalize_frontend_experience_self_check(
@@ -1594,10 +1985,26 @@ fn normalize_frontend_experience_self_check(
         return;
     };
     let closure_ids = workflow_closure_requirement_ids(requirement);
-    if closure_ids.is_empty() {
-        return;
+    if !closure_ids.is_empty() {
+        self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
     }
-    self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
+    normalize_string_array_field(self_check, "evidenceRefs");
+    retain_object_fields(
+        self_check,
+        &[
+            "status",
+            "dataBinding",
+            "evidenceRefs",
+            "closureRequirementIds",
+        ],
+    );
+    if let Some(data_binding) = self_check
+        .get_mut("dataBinding")
+        .and_then(Value::as_object_mut)
+    {
+        retain_object_fields(data_binding, &["mode", "knownGaps"]);
+        normalize_string_array_field(data_binding, "knownGaps");
+    }
 }
 
 fn validate_self_repair(result: &TaskResult, issues: &mut Vec<delivery_core::RepairIssue>) {
@@ -2638,9 +3045,29 @@ fn validate_runtime_delivery_evidence(
         ));
         return;
     };
-    let checked_fields = string_array_at(evidence, "checkedFields");
+    if let Some(cleanup) = evidence.runtime_probe_cleanup.as_deref() {
+        let invalid_cleanup = cleanup.trim().is_empty();
+        if invalid_cleanup {
+            issues.push(issue(
+                "TASK_RESULT_RUNTIME_EVIDENCE_INVALID",
+                "runtimeDeliveryEvidence.runtimeProbeCleanup",
+                "runtimeDeliveryEvidence.runtimeProbeCleanup must be null or a non-empty cleanup outcome.",
+            ));
+        }
+    }
+    if evidence
+        .commands_run
+        .iter()
+        .any(|command| command.trim().is_empty())
+    {
+        issues.push(issue(
+            "TASK_RESULT_RUNTIME_EVIDENCE_INVALID",
+            "runtimeDeliveryEvidence.commandsRun",
+            "runtimeDeliveryEvidence.commandsRun must be an array of non-empty command strings.",
+        ));
+    }
     for field in &requirement.affected_contract_fields {
-        if !checked_fields.contains(field) {
+        if !evidence.checked_fields.contains(field) {
             issues.push(issue(
                 "TASK_RESULT_REF_INVALID",
                 "runtimeDeliveryEvidence.checkedFields",
@@ -2648,7 +3075,12 @@ fn validate_runtime_delivery_evidence(
             ));
         }
     }
-    let result_check_ids = object_array_string_field(evidence, "codeLevelChecks", "checkId");
+    let result_check_ids = evidence
+        .code_level_checks
+        .iter()
+        .filter_map(|check| check.check_id.as_deref())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
     let allowed_check_ids = requirement
         .required_code_level_checks
         .iter()
@@ -2707,7 +3139,11 @@ fn validate_frontend_experience_self_check(
         }
         return;
     };
-    let covered = string_array_at(self_check, "closureRequirementIds");
+    let covered = self_check
+        .closure_requirement_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     for closure_id in closure_ids {
         if !covered.contains(&closure_id) {
             issues.push(issue(
@@ -2717,19 +3153,19 @@ fn validate_frontend_experience_self_check(
             ));
         }
     }
-    let status = self_check.get("status").and_then(Value::as_str);
-    let data_binding = self_check.get("dataBinding").unwrap_or(&Value::Null);
-    let binding_mode = data_binding.get("mode").and_then(Value::as_str);
-    let known_gaps = data_binding
-        .get("knownGaps")
-        .and_then(Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    if status == Some("satisfied") && (binding_mode != Some("wired") || known_gaps > 0) {
+    if self_check.status == "satisfied"
+        && (self_check.data_binding.mode != "wired"
+            || !self_check.data_binding.known_gaps.is_empty()
+            || self_check.evidence_refs.is_empty()
+            || self_check
+                .evidence_refs
+                .iter()
+                .any(|reference| reference.trim().is_empty()))
+    {
         issues.push(issue(
             "TASK_RESULT_WORKFLOW_CLOSURE_INVALID",
             "frontendExperienceSelfCheck.dataBinding",
-            "Satisfied frontendExperienceSelfCheck requires wired dataBinding and no known gaps.",
+            "Satisfied frontendExperienceSelfCheck requires wired dataBinding, no known gaps, and at least one concrete evidence ref.",
         ));
     }
 }
@@ -2757,26 +3193,6 @@ fn validate_frontend_quality_self_check(
         return;
     };
     let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
-    for obsolete_field in [
-        "referenceIdsChecked",
-        "scenarioKind",
-        "qualityLevel",
-        "referenceGroupsChecked",
-        "referenceFilesChecked",
-        "statesCovered",
-        "businessUiRulesChecked",
-        "forbiddenContentCheck",
-        "surfacesCovered",
-        "gateResults",
-    ] {
-        if self_check.get(obsolete_field).is_some() {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.{obsolete_field}"),
-                "frontendQualitySelfCheck must use the surface decision evidence contract only; legacy UI quality self-check fields are not allowed.",
-            ));
-        }
-    }
     let surface_contract = frontend_requirement
         .and_then(|requirement| {
             requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
@@ -2804,6 +3220,15 @@ fn validate_frontend_quality_self_check(
         TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
     );
     let self_check_status = self_check.get("status").and_then(Value::as_str);
+    if self_check_status == Some("satisfied")
+        && non_empty_string_array_at(&self_check, "evidenceRefs").is_empty()
+    {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.evidenceRefs",
+            "Satisfied frontendQualitySelfCheck must cite at least one concrete evidence ref so Review can trace the accepted quality result.",
+        ));
+    }
     let violations = self_check
         .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
         .and_then(Value::as_array)
@@ -3261,6 +3686,13 @@ fn string_array_at(value: &Value, field: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn non_empty_string_array_at(value: &Value, field: &str) -> Vec<String> {
+    string_array_at(value, field)
+        .into_iter()
+        .filter(|item| !item.trim().is_empty())
         .collect()
 }
 
@@ -5066,13 +5498,14 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .any(|issue| issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID")
     {
         rules.push("Keep runtimeDeliveryEvidence.codeLevelChecks in the request order and repair status/evidence only; Loom derives check ids and contract fields.");
-        rules.push("For passed runtime checks, omit reason; use a non-empty reason only for failed, blocked, or not_applicable checks.");
+        rules.push("Use the code-level check evidence field for a concise outcome; do not add an uncontracted reason field.");
     }
     if issues
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
     {
         rules.push("When uiSurfaceDecisionContractRef is present, frontendQualitySelfCheck must prove the task-scoped surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from uiProductionBrief.");
+        rules.push("A satisfied frontendQualitySelfCheck must include at least one non-empty evidenceRefs entry; this is the trace from the persisted TaskResult to concrete source, test, command, or browser evidence used by Review.");
         rules.push("frontendQualitySelfCheck must not include removed legacy UI quality self-check fields such as scenarioKind, referenceFilesChecked, statesCovered, surfacesCovered, or gateResults.");
         rules.push("frontendQualitySelfCheck.status=satisfied is valid only when contentBoundaryEvidence has no forbidden content violations and knownGaps is empty.");
     }
@@ -5837,6 +6270,44 @@ mod tests {
                 == Some("frontendQualitySelfCheck.surfaceQualityRuleEvidence")),
             "{issues:#?}"
         );
+    }
+
+    #[test]
+    fn frontend_surface_evidence_projection_discards_legacy_unconsumed_fields() {
+        let mut self_check = json!({
+            "surfaceRegionEvidence": [{
+                "id": "region_primary",
+                "status": "satisfied",
+                "files": ["src/App.tsx"],
+                "evidence": "The primary region is implemented.",
+                "states": ["loading", "success"],
+                "actions": ["create"],
+                "summary": "Legacy summary with no review consumer."
+            }]
+        })
+        .as_object_mut()
+        .cloned()
+        .expect("self check object");
+
+        normalize_frontend_surface_evidence_array(
+            &mut self_check,
+            "surfaceRegionEvidence",
+            &surface_contract(),
+            "regionsInScope",
+            "regionId",
+        );
+
+        let evidence = &self_check["surfaceRegionEvidence"][0];
+        assert_eq!(evidence["id"], json!("region-main"));
+        assert_eq!(evidence["status"], json!("satisfied"));
+        assert_eq!(evidence["files"], json!(["src/App.tsx"]));
+        assert_eq!(
+            evidence["evidence"],
+            json!("The primary region is implemented.")
+        );
+        assert!(evidence.get("states").is_none());
+        assert!(evidence.get("actions").is_none());
+        assert!(evidence.get("summary").is_none());
     }
 
     #[test]

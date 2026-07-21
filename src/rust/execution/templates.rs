@@ -432,7 +432,6 @@ pub(crate) fn task_result_schema_shape(
                     "knownGaps": []
                 },
                 "evidenceRefs": ["project-relative evidence ref"],
-                "summary": "string"
             }),
         );
     }
@@ -441,32 +440,25 @@ pub(crate) fn task_result_schema_shape(
             "frontendQualitySelfCheck".to_string(),
             json!({
                 "status": "satisfied | partial | missing | blocked_by_environment",
+                "evidenceRefs": ["project-relative evidence ref"],
                 "surfaceRegionEvidence": [{
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
-                    "states": ["covered state id"],
-                    "actions": ["covered action id"],
                     "evidence": "string"
                 }],
                 "surfaceActionEvidence": [{
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
-                    "states": ["covered state id"],
-                    "actions": ["covered action id"],
                     "evidence": "string"
                 }],
                 "surfaceStateEvidence": [{
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
-                    "states": ["covered state id"],
-                    "actions": ["covered action id"],
                     "evidence": "string"
                 }],
                 "surfaceQualityRuleEvidence": [{
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file or check"],
-                    "states": ["covered state id"],
-                    "actions": ["covered action id"],
                     "evidence": "string"
                 }],
                 "contentBoundaryEvidence": {
@@ -486,7 +478,6 @@ pub(crate) fn task_result_schema_shape(
                     "mergeSummary": "string"
                 },
                 "knownGaps": [],
-                "summary": "string"
             }),
         );
     }
@@ -519,7 +510,6 @@ pub(crate) fn task_result_schema_shape(
             "architectureQualityEvidence".to_string(),
             json!([{
                 "status": "satisfied | partial | not_verified",
-                "changedFiles": ["project-relative path"],
                 "summary": "string"
             }]),
         );
@@ -529,11 +519,6 @@ pub(crate) fn task_result_schema_shape(
             "apiContractEvidence".to_string(),
             json!([{
                 "status": "satisfied | partial | not_verified",
-                "changedFiles": ["project-relative path"],
-                "successPaths": ["HTTP method/path or operation id"],
-                "errorPaths": ["HTTP method/path or operation id"],
-                "paginationPaths": ["HTTP method/path or operation id"],
-                "contractFileRefs": ["project-relative contract file"],
                 "knownGaps": [],
                 "summary": "string"
             }]),
@@ -546,8 +531,6 @@ pub(crate) fn task_result_schema_shape(
                 "status": "satisfied | partial | not_verified",
                 "referenceGroupsChecked": {"language_or_framework": ["group"]},
                 "referenceFilesChecked": ["reference path"],
-                "changedFiles": ["project-relative path"],
-                "commandsRun": ["command"],
                 "knownGaps": [],
                 "summary": "string"
             }]),
@@ -660,7 +643,6 @@ fn architecture_quality_evidence_template(task: &TaskDefinition) -> Value {
             .map(|_| {
                 json!({
                     "status": "not_verified",
-                    "changedFiles": [],
                     "summary": ""
                 })
             })
@@ -675,11 +657,6 @@ fn api_contract_evidence_template(task: &TaskDefinition) -> Value {
             .map(|_| {
                 json!({
                     "status": "not_verified",
-                    "changedFiles": [],
-                    "successPaths": [],
-                    "errorPaths": [],
-                    "paginationPaths": [],
-                    "contractFileRefs": [],
                     "knownGaps": [],
                     "summary": ""
                 })
@@ -716,8 +693,6 @@ fn code_quality_evidence_template(
                     "status": "not_verified",
                     "referenceGroupsChecked": reference_groups,
                     "referenceFilesChecked": reference_files,
-                    "changedFiles": [],
-                    "commandsRun": [],
                     "knownGaps": [],
                     "summary": "Explain how the changed files followed the selected code quality references and existing repository style."
                 })
@@ -736,8 +711,7 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
             "mode": "partial",
             "knownGaps": []
         },
-        "evidenceRefs": [],
-        "summary": ""
+        "evidenceRefs": []
     })
 }
 
@@ -759,17 +733,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let surface_state_ids = surface_decision_contract
-        .get("statesInScope")
-        .and_then(Value::as_array)
-        .map(|states| {
-            states
-                .iter()
-                .filter_map(|state| state.get("state").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     let surface_region_evidence = surface_decision_contract
         .get("regionsInScope")
         .and_then(Value::as_array)
@@ -781,8 +744,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                         json!({
                             "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_region"],
-                            "states": merged_state_refs(region, &surface_state_ids),
-                            "actions": region.get("actionRefs").cloned().unwrap_or_else(|| json!([])),
                             "evidence": ""
                         })
                     })
@@ -797,12 +758,10 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             actions
                 .iter()
                 .filter_map(|action| {
-                    action.get("actionId").and_then(Value::as_str).map(|id| {
+                    action.get("actionId").and_then(Value::as_str).map(|_id| {
                         json!({
                             "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_action"],
-                            "states": [],
-                            "actions": [id],
                             "evidence": ""
                         })
                     })
@@ -817,12 +776,10 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             states
                 .iter()
                 .filter_map(|state| {
-                    state.get("state").and_then(Value::as_str).map(|id| {
+                    state.get("state").and_then(Value::as_str).map(|_id| {
                         json!({
                             "status": "missing",
                             "files": ["replace_with_ui_file_path_for_this_state"],
-                            "states": [id],
-                            "actions": [],
                             "evidence": ""
                         })
                     })
@@ -841,8 +798,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                         json!({
                             "status": "missing",
                             "files": ["replace_with_ui_file_path_or_check_for_this_rule"],
-                            "states": [],
-                            "actions": [],
                             "evidence": ""
                         })
                     })
@@ -869,6 +824,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .unwrap_or_default();
     json!({
         "status": "partial",
+        "evidenceRefs": [],
         "surfaceRegionEvidence": surface_region_evidence,
         "surfaceActionEvidence": surface_action_evidence,
         "surfaceStateEvidence": surface_state_evidence,
@@ -889,22 +845,8 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             "parallelTokenSystemCreated": false,
             "mergeSummary": ""
         },
-        "knownGaps": [],
-        "summary": ""
+        "knownGaps": []
     })
-}
-
-fn merged_state_refs(region: &Value, surface_state_ids: &[String]) -> Value {
-    let mut states = region
-        .get("stateRefs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    states.extend(surface_state_ids.iter().cloned());
-    Value::Array(states.into_iter().map(Value::String).collect())
 }
 
 #[cfg(test)]
@@ -965,6 +907,11 @@ mod tests {
         }));
         let template = frontend_quality_self_check_template(&task);
 
+        assert!(template.get("evidenceRefs").is_some());
+        assert!(template["surfaceRegionEvidence"][0].get("states").is_none());
+        assert!(template["surfaceActionEvidence"][0]
+            .get("actions")
+            .is_none());
         for key in [
             "scenarioKind",
             "qualityLevel",

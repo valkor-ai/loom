@@ -223,22 +223,11 @@ fn redis_reference_items_for_task(
     }
 
     let cache = task_has_action(task, ImplementationAction::ImplementCachePolicy);
-    let messaging = task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
-        || task_has_action(
-            task,
-            ImplementationAction::ImplementExternalServiceIntegration,
-        );
-    let atomicity = task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
-        || task_has_action(
-            task,
-            ImplementationAction::ImplementExternalServiceIntegration,
-        );
+    let messaging = task_has_action(task, ImplementationAction::ImplementAsyncProcessing);
+    let atomicity = task_has_action(task, ImplementationAction::ImplementResiliencePolicy);
     let session = task_has_action(
         task,
         ImplementationAction::ImplementAuthenticationOrAuthorization,
-    ) || task_has_action(
-        task,
-        ImplementationAction::ImplementExternalServiceIntegration,
     );
 
     let mut items = BTreeSet::new();
@@ -2775,7 +2764,6 @@ mod tests {
                 reason: Some("confirmed".to_string()),
             },
             confidence: ConfidenceLevel::High,
-            requires_user_confirmation: None,
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-06T00:00:00Z".to_string(),
@@ -4331,6 +4319,17 @@ mod tests {
         );
         let api_selection = code_reference_selection_for_task(&baseline, &api_task).unwrap();
         assert!(!api_selection.reference_groups.contains_key("redis"));
+
+        let integration_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementExternalServiceIntegration],
+        );
+        let integration_selection =
+            code_reference_selection_for_task(&baseline, &integration_task).unwrap();
+        assert!(
+            !integration_selection.reference_groups.contains_key("redis"),
+            "generic external integration must not claim Redis capability references"
+        );
 
         let cache_task = task(
             TaskKind::FeatureIncrement,

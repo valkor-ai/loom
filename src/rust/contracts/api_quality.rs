@@ -82,7 +82,6 @@ pub fn build_api_quality_seed_from_foundation(
                 "filterFields",
                 "sortFields",
                 "authPolicy",
-                "contractFileRefs",
                 "compatibilityPolicy",
                 "idempotencyPolicy",
                 "cachePolicy",

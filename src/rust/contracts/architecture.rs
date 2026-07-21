@@ -42,7 +42,7 @@ pub enum ArchitectureSectionStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArchitectureBlockedReason {
     pub code: String,
     pub message: String,
@@ -50,7 +50,7 @@ pub struct ArchitectureBlockedReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArchitectureSectionCandidateAgentWritable {
     #[serde(default)]
     #[schemars(skip)]

@@ -961,6 +961,14 @@ where
         created_at: outline.created_at.clone(),
         updated_at: now.clone(),
     };
+    let mut task_plan = task_plan;
+    for task in &mut task_plan.tasks {
+        *task = crate::task_execution::task_with_execution_guidance(
+            task.clone(),
+            &aac,
+            &pgc.planning_inputs.user_facing_language,
+        );
+    }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),

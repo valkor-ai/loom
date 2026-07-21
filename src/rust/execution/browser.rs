@@ -1279,7 +1279,6 @@ importers:
                 reason: None,
             },
             confidence: contracts::ConfidenceLevel::High,
-            requires_user_confirmation: None,
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-13T00:00:00Z".to_string(),

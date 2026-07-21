@@ -828,6 +828,14 @@ fn dependency_service_name(dependency: &Value, kind: DependencyServiceKind) -> S
     let Some(dependency_id) = dependency.get("dependencyId").and_then(Value::as_str) else {
         return default_name.to_string();
     };
+    let normalized_id = dependency_id
+        .strip_prefix("runtime_")
+        .unwrap_or(dependency_id);
+    if dependency_service_kind(dependency) == Some(kind)
+        && (normalized_id == "persistence" || normalized_id == default_name)
+    {
+        return default_name.to_string();
+    }
     let suffix = dependency_id
         .strip_prefix("runtime_")
         .unwrap_or(dependency_id)
@@ -1010,7 +1018,6 @@ mod tests {
             "provider": "redis",
             "startupRequirement": "optional",
             "capabilities": [{
-                "capabilityId": "redis_cache_0",
                 "purpose": "cache",
                 "durability": "ephemeral",
                 "startupRequirement": "optional"
@@ -1034,7 +1041,6 @@ mod tests {
             "provider": "redis",
             "startupRequirement": "required",
             "capabilities": [{
-                "capabilityId": "redis_session_0",
                 "purpose": "session",
                 "durability": "persistent",
                 "startupRequirement": "required"

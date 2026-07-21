@@ -789,7 +789,14 @@ fn technical_baseline_selection_guidance(
             "conditionalTracks": {
                 "qualityAutomation": "Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline."
             },
-            "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary."
+            "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
+            "externalServicesProviderShape": {
+                "allowedProviderFields": ["provider", "capabilities"],
+                "allowedCapabilityFields": ["purpose", "durability", "startupRequirement"],
+                "capabilityRoles": ["cache", "session", "queue", "stream", "lock_rate_limit"],
+                "ownership": "TechnicalBaseline confirms provider, capability role, durability, and startup requirement only. MCP derives dependencyId and kind. Failure handling, recovery, consumers, and observability belong to the Architecture quality model when they affect the current phase.",
+                "unknownFieldPolicy": "Do not add dependencyId, kind, requiredFor, failureBehavior, recoveryStrategy, observability, TTL, key schema, queue acknowledgment, or deployment settings here. MCP derives dependency identity and the later stages own operational behavior."
+            }
         },
         "recommendationBasis": {
             "authority": "Use the complete BrainstormContract as the product-scope authority for the first new-project TechnicalBaseline recommendation.",
@@ -1047,12 +1054,10 @@ where
             "security_profile_confirmation".to_string(),
         ));
     }
-    if candidate.requires_user_confirmation.unwrap_or(false)
-        || matches!(
-            candidate.status,
-            TechnicalBaselineStatus::NeedsUserConfirmation
-        )
-    {
+    if matches!(
+        candidate.status,
+        TechnicalBaselineStatus::NeedsUserConfirmation
+    ) {
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
@@ -1096,7 +1101,6 @@ where
         evidence: candidate.evidence,
         approval: candidate.approval,
         confidence: candidate.confidence,
-        requires_user_confirmation: candidate.requires_user_confirmation,
         reasoning_summary: candidate.reasoning_summary,
         alternatives: candidate.alternatives,
         created_at: now.clone(),
@@ -1257,6 +1261,18 @@ fn validate_security_profiles(
             "A protected requirement must select at least one canonical security profile before the TechnicalBaseline can be accepted.",
         ));
     }
+    if protected
+        && !candidate
+            .security_profiles
+            .iter()
+            .any(|profile| matches!(profile.mechanism, SecurityMechanism::BearerJwt))
+    {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_PROTECTED_PROFILE_REQUIRED",
+            "securityProfiles",
+            "A protected requirement must include at least one non-none security profile so protected interfaces have an enforceable authentication mechanism.",
+        ));
+    }
     let mut profile_ids = BTreeSet::new();
     for (index, profile) in candidate.security_profiles.iter().enumerate() {
         let path = format!("securityProfiles[{index}]");
@@ -1341,6 +1357,75 @@ fn validate_external_services_track(stack: &Value, issues: &mut Vec<delivery_cor
             "stack.tracks.externalServices.providers",
             "A selected externalServices track must include at least one provider with one or more structured capability roles, each declaring purpose, durability, and startupRequirement.",
         ));
+    }
+    if let Some(providers) = track.get("providers").and_then(Value::as_array) {
+        let mut provider_ids = BTreeSet::new();
+        for (provider_index, provider) in providers.iter().enumerate() {
+            let Some(provider) = provider.as_object() else {
+                continue;
+            };
+            let provider_path =
+                format!("stack.tracks.externalServices.providers[{provider_index}]");
+            if let Some(provider_name) = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .filter(|value| !value.is_empty())
+            {
+                if !provider_ids.insert(provider_name) {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_EXTERNAL_SERVICE_PROVIDER_DUPLICATE",
+                        &format!("{provider_path}.provider"),
+                        "Each external service provider may appear once; combine its capability roles in one providers entry so MCP can derive one stable runtime dependency.",
+                    ));
+                }
+            }
+            for field in provider.keys() {
+                if !matches!(field.as_str(), "provider" | "capabilities") {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_EXTERNAL_SERVICE_FIELD_UNKNOWN",
+                        &format!("{provider_path}.{field}"),
+                        "TechnicalBaseline external service providers may only declare provider and capabilities; MCP derives dependency identity and operational fields belong to Architecture.",
+                    ));
+                }
+            }
+            if let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) {
+                let mut purposes = BTreeSet::new();
+                for (capability_index, capability) in capabilities.iter().enumerate() {
+                    let Some(capability) = capability.as_object() else {
+                        continue;
+                    };
+                    let capability_path =
+                        format!("{provider_path}.capabilities[{capability_index}]");
+                    if let Some(purpose) = capability
+                        .get("purpose")
+                        .and_then(Value::as_str)
+                        .map(normalize_stack_token)
+                        .filter(|value| !value.is_empty())
+                    {
+                        if !purposes.insert(purpose) {
+                            issues.push(issue(
+                                "TECHNICAL_BASELINE_EXTERNAL_SERVICE_PURPOSE_DUPLICATE",
+                                &format!("{capability_path}.purpose"),
+                                "Each provider may declare a capability purpose once; merge duplicate role entries before accepting the TechnicalBaseline.",
+                            ));
+                        }
+                    }
+                    for field in capability.keys() {
+                        if !matches!(
+                            field.as_str(),
+                            "purpose" | "durability" | "startupRequirement"
+                        ) {
+                            issues.push(issue(
+                                "TECHNICAL_BASELINE_CAPABILITY_FIELD_UNKNOWN",
+                                &format!("{capability_path}.{field}"),
+                                "TechnicalBaseline capability roles may only declare purpose, durability, and startupRequirement; consumer, failure, recovery, and observability fields are not part of this contract.",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

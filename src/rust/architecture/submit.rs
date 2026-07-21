@@ -2354,7 +2354,7 @@ fn validate_runtime_dependency_capabilities(
         for field in capability.keys() {
             if !matches!(
                 field.as_str(),
-                "capabilityId" | "purpose" | "durability" | "startupRequirement"
+                "purpose" | "durability" | "startupRequirement"
             ) {
                 issues.push(issue(
                     "RUNTIME_DEPENDENCY_CAPABILITY_FIELD_UNKNOWN",
@@ -2363,12 +2363,7 @@ fn validate_runtime_dependency_capabilities(
                 ));
             }
         }
-        for field in [
-            "capabilityId",
-            "purpose",
-            "durability",
-            "startupRequirement",
-        ] {
+        for field in ["purpose", "durability", "startupRequirement"] {
             if capability
                 .get(field)
                 .and_then(Value::as_str)
@@ -4934,7 +4929,6 @@ mod tests {
             "provider": "redis",
             "startupRequirement": "required",
             "capabilities": [{
-                "capabilityId": "redis_session_0",
                 "purpose": "session",
                 "durability": "persistent",
                 "startupRequirement": "required"
@@ -4948,7 +4942,7 @@ mod tests {
             content.pointer("/runtimeDelivery/runtimeDependencies"),
             Some(&candidates)
         );
-        assert!(content.to_string().contains("redis_session_0"));
+        assert!(content.to_string().contains("\"purpose\":\"session\""));
         assert!(!content.to_string().contains("free_form_text"));
     }
 

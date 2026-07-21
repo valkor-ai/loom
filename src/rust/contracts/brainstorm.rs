@@ -713,7 +713,7 @@ pub struct UserConfirmation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrainstormCandidateAgentWritable {
     pub request_summary: RequestSummary,
     pub scope: BrainstormScope,

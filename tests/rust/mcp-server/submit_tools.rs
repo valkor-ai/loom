@@ -1221,7 +1221,6 @@ fn technical_baseline_repo_signal_conflict_with_previous_stack_requires_user_gat
                 "reason": "Existing baseline fixture."
             },
             "confidence": "high",
-            "requiresUserConfirmation": false,
             "reasoningSummary": ["Previous Node baseline fixture."],
             "alternatives": [],
             "createdAt": "2026-06-24T09:00:00+08:00",
@@ -1358,7 +1357,6 @@ fn new_project_technical_baseline_needing_confirmation_uses_user_gate() {
         "type": "none",
         "reason": "The recommended stack still needs user confirmation."
     });
-    candidate["requiresUserConfirmation"] = json!(true);
     write_candidate_target(&fixture, &baseline_request_ref, &candidate);
 
     let result = call_submit(
@@ -3210,6 +3208,27 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .as_str()
         .expect("execution requestRef");
 
+    let delivery_id = request_delivery_id(fixture.root_str(), execution_request_ref);
+    let latest_task_plan = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(&delivery_id)
+            .join("tasks/phase-1/taskplans/latest.json"),
+    )
+    .expect("read latest task plan pointer");
+    let task_plan_ref = latest_task_plan["taskPlanRef"]
+        .as_str()
+        .expect("task plan ref");
+    let task_plan =
+        read_json_value(&fixture.root.join(task_plan_ref)).expect("read canonical task plan");
+    assert!(task_plan["tasks"].as_array().into_iter().flatten().any(|task| {
+        task.pointer(
+            "/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract",
+        )
+        .is_some_and(Value::is_object)
+    }));
+
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.to_string(),
@@ -3428,18 +3447,14 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             .expect("region files")
             .contains(&json!("replace_with_ui_file_path_for_this_region"))
     );
-    assert!(
-        frontend_quality_template["surfaceRegionEvidence"][0]["states"]
-            .as_array()
-            .expect("region states")
-            .contains(&json!("business_blocking"))
-    );
-    assert!(
-        frontend_quality_template["surfaceActionEvidence"][0]["actions"]
-            .as_array()
-            .expect("surface actions")
-            .contains(&json!("action_open_account"))
-    );
+    assert!(frontend_quality_template["surfaceRegionEvidence"][0]
+        .get("states")
+        .is_none());
+    assert!(frontend_quality_template["surfaceActionEvidence"][0]
+        .get("actions")
+        .is_none());
+    assert!(frontend_quality_template["surfaceRegionEvidence"][0]["evidence"].is_string());
+    assert!(frontend_quality_template["surfaceActionEvidence"][0]["evidence"].is_string());
     assert_eq!(
         frontend_quality_template["designTokenEvidence"]["templateIdUsed"],
         json!("tokens-css")
@@ -3735,6 +3750,30 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
             requirement.remove("executionGuidance");
         }
     });
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let latest_task_plan = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(&delivery_id)
+            .join("tasks/phase-1/taskplans/latest.json"),
+    )
+    .expect("read latest task plan pointer");
+    let task_plan_path = latest_task_plan["taskPlanRef"]
+        .as_str()
+        .expect("task plan ref");
+    let mut task_plan =
+        read_json_value(&fixture.root.join(task_plan_path)).expect("read canonical task plan");
+    for task in task_plan["tasks"].as_array_mut().into_iter().flatten() {
+        if task["taskId"] == json!("task-account-ui-001") {
+            task["frontendExperienceRequirement"]
+                .as_object_mut()
+                .expect("frontend task requirement")
+                .remove("executionGuidance");
+        }
+    }
+    write_json_atomic(&fixture.root.join(task_plan_path), &task_plan)
+        .expect("write stale canonical task plan");
 
     let refreshed = continue_delivery(fixture.root_str());
 
@@ -4481,7 +4520,6 @@ fn task_result_contract_omits_and_strips_non_applicable_architecture_quality_evi
         "requirementId": "not-assigned",
         "status": "satisfied",
         "verificationIds": ["verify-account-ui-001"],
-        "changedFiles": ["src/App.tsx"],
         "summary": "This field is not applicable to the task and should be stripped before validation."
     }]);
     write_json_atomic(&fixture.root.join(result_file), &result)
@@ -4493,17 +4531,29 @@ fn task_result_contract_omits_and_strips_non_applicable_architecture_quality_evi
         fixture.root_str(),
     );
     assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
-    assert_ne!(
+    assert_eq!(
         accepted["next"]["artifactKind"],
         json!("task_result_repair")
     );
-
-    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
-    let persisted_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
-    let persisted: Value =
-        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(persisted_ref)).unwrap())
-            .expect("parse persisted task result");
-    assert!(persisted.get("architectureQualityEvidence").is_none());
+    let repair_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("task result repair request ref");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read non-applicable evidence issue")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| {
+            issue["code"] == json!("TASK_RESULT_EVIDENCE_NOT_APPLICABLE")
+                && issue["fieldPath"] == json!("architectureQualityEvidence")
+        }));
 }
 
 #[test]
@@ -4653,7 +4703,6 @@ fn task_result_rejects_placeholder_jvm_production_package() {
             .and_then(Value::as_array_mut)
         {
             for item in items {
-                item["changedFiles"] = json!([java_file]);
                 item["summary"] = json!(
                     "The Java file was checked against the selected code quality references."
                 );
@@ -5198,6 +5247,9 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.taskResultSummaries"));
+    assert!(review_packet_fields
+        .iter()
+        .any(|field| field == "reviewPacket.taskPlanProjectionFingerprint"));
     assert!(!review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.groups"));
@@ -5320,7 +5372,8 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(!review_packets_text.contains("very large detail evidence summary"));
     assert!(!review_packets_text.contains("referenceFilesChecked"));
     assert!(!review_packets_text.contains("referenceGroupsChecked"));
-    assert!(!review_packets_text.contains("evidenceRefs"));
+    assert!(review_packets_text.contains("evidenceRefCount"));
+    assert!(review_packets_text.contains("evidenceRefsSatisfied"));
     assert!(
         serde_json::to_vec_pretty(&review_packets.fields["reviewPacket.taskResultSummaries"].value)
             .expect("serialize task result summaries")
@@ -10823,6 +10876,7 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
         .and_then(Value::as_object_mut)
     {
         self_check.insert("status".to_string(), json!("satisfied"));
+        self_check.insert("evidenceRefs".to_string(), json!(["src/App.tsx"]));
         self_check.insert("knownGaps".to_string(), json!([]));
         complete_frontend_quality_surface_evidence_for_test(self_check);
     }
@@ -10925,10 +10979,6 @@ fn complete_frontend_quality_surface_evidence_for_test(
             json!("src/App.tsx was checked to keep user-visible content inside the business UI boundary."),
         );
     }
-    self_check.insert(
-        "summary".to_string(),
-        json!("Frontend quality evidence is complete for the task-scoped surface contract."),
-    );
 }
 
 fn complete_runtime_delivery_evidence_for_test(
@@ -10997,7 +11047,6 @@ fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
     for evidence in evidence_items {
         evidence["status"] = json!("satisfied");
         evidence["verificationIds"] = json!([verification_id]);
-        evidence["changedFiles"] = json!(["src/main.tsx"]);
         evidence["summary"] = json!(
             "The task implementation respects the assigned architecture quality requirement and links it to verification evidence."
         );
@@ -11033,8 +11082,6 @@ fn complete_code_quality_evidence_for_test(result: &mut Value, context: Option<V
         let requirement = requirement.or_else(|| requirements.first());
         evidence["status"] = json!("satisfied");
         evidence["verificationIds"] = json!([verification_id]);
-        evidence["changedFiles"] = json!(["src/main.tsx"]);
-        evidence["commandsRun"] = json!([]);
         evidence["knownGaps"] = json!([]);
         evidence["summary"] = json!(
             "The changed files follow the selected code quality references and repository style."
@@ -11076,9 +11123,6 @@ fn complete_api_contract_evidence_for_test(result: &mut Value) {
     for evidence in evidence_items {
         evidence["status"] = json!("satisfied");
         evidence["verificationIds"] = json!([verification_id]);
-        evidence["changedFiles"] = json!(["src/main.tsx"]);
-        evidence["successPaths"] = json!(["declared API success path verified"]);
-        evidence["errorPaths"] = json!(["declared API validation or business error path verified"]);
         evidence["summary"] = json!(
             "The task implementation preserves the declared API request, response, status, and error contract and links it to verification evidence."
         );
@@ -11355,10 +11399,6 @@ fn write_task_result_candidate_with_detail_evidence(
         .and_then(Value::as_object_mut)
     {
         self_check.insert("evidenceRefs".to_string(), json!(["src/App.tsx"]));
-        self_check.insert(
-            "summary".to_string(),
-            json!("The frontend flow is wired to the declared task behavior and verified."),
-        );
     }
     complete_frontend_quality_token_evidence_for_test(&mut result);
     complete_api_contract_evidence_for_test(&mut result);
@@ -12085,7 +12125,6 @@ fn write_failed_task_result_candidate_with_id(
             "frontendExperienceSelfCheck": null,
             "runtimeDeliveryEvidence": null,
             "requirementDetailEvidence": [],
-            "conceptEvidence": [],
             "blockedReasons": [],
             "createdAt": "2026-06-24T10:06:00+08:00",
             "updatedAt": "2026-06-24T10:06:00+08:00"
@@ -12143,7 +12182,6 @@ fn write_blocked_task_result_candidate(
     result["frontendQualitySelfCheck"] = Value::Null;
     result["runtimeDeliveryEvidence"] = Value::Null;
     result["requirementDetailEvidence"] = json!([]);
-    result["conceptEvidence"] = json!([]);
     result["blockedReasons"] = json!([{
         "code": code,
         "nextNode": next_node,
@@ -13423,7 +13461,6 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
             "reason": "Current repository stack is stable."
         },
         "confidence": "high",
-        "requiresUserConfirmation": false,
         "reasoningSummary": [
             "The current phase should preserve a stable application stack."
         ],
@@ -13495,7 +13532,6 @@ fn new_project_technical_baseline_candidate_json() -> Value {
             "reason": "User confirmed the final technology baseline."
         },
         "confidence": "high",
-        "requiresUserConfirmation": false,
         "reasoningSummary": [
             "The selected stack supports the confirmed new-project phase without adding extra surfaces."
         ],
@@ -13536,7 +13572,6 @@ fn write_previous_technical_baseline(fixture: &Fixture, delivery_id: &str) {
                 "reason": "Existing baseline fixture."
             },
             "confidence": "high",
-            "requiresUserConfirmation": false,
             "reasoningSummary": ["Previous baseline fixture."],
             "alternatives": [],
             "createdAt": "2026-06-24T09:00:00+08:00",

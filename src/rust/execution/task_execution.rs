@@ -953,7 +953,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "Run the smallest available compile, type, lint, unit, or integration check that proves the changed code.",
-            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence.",
+            "Record selected reference groups and reference files in codeQualityEvidence. Changed files and commands belong to the canonical TaskResult changedFiles and verificationResults[].provenance fields; do not duplicate them inside codeQualityEvidence.",
             "For completed or completed_with_notes results, codeQualityEvidence.status must be satisfied and knownGaps must be an empty array; a reference that is irrelevant to one changed file is explained in summary, not recorded as a gap.",
             "Do not author requirementId or verificationIds when the result template marks them as MCP-derived; keep evidence entries in the assigned requirement order and let Loom normalize linkage fields."
         ]

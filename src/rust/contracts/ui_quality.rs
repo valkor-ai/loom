@@ -3596,7 +3596,6 @@ mod tests {
                 reason: Some("test".to_string()),
             },
             confidence: ConfidenceLevel::High,
-            requires_user_confirmation: Some(false),
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-02T00:00:00Z".to_string(),

@@ -568,7 +568,6 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
             "kind": "storage",
             "startupRequirement": "required",
             "capabilities": [{
-                "capabilityId": "primary_storage",
                 "purpose": "primary_storage",
                 "durability": "persistent",
                 "startupRequirement": "required"
@@ -587,15 +586,10 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
                 .unwrap_or("external")
                 .to_string();
             let provider_name = normalize_provider(&provider_name);
-            let capabilities = canonical_external_capabilities(&provider_name, &provider);
+            let capabilities = canonical_external_capabilities(&provider);
             let startup_requirement = aggregate_startup_requirement(&capabilities);
-            let dependency_id = provider
-                .get("dependencyId")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("runtime_{provider_name}"));
             candidates.push(json!({
-                "dependencyId": dependency_id,
+                "dependencyId": format!("runtime_{provider_name}"),
                 "track": "externalServices",
                 "kind": "external_runtime",
                 "provider": provider_name,
@@ -611,20 +605,18 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
     })
 }
 
-fn canonical_external_capabilities(provider_name: &str, provider: &Value) -> Value {
+fn canonical_external_capabilities(provider: &Value) -> Value {
     let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) else {
         return json!([]);
     };
     Value::Array(
         capabilities
             .iter()
-            .enumerate()
-            .filter_map(|(index, capability)| {
+            .filter_map(|capability| {
                 let purpose = capability.get("purpose")?.as_str()?.trim();
                 let durability = capability.get("durability")?.as_str()?.trim();
                 let startup_requirement = capability.get("startupRequirement")?.as_str()?.trim();
                 Some(json!({
-                    "capabilityId": format!("{provider_name}_{purpose}_{index}"),
                     "purpose": purpose,
                     "durability": durability,
                     "startupRequirement": startup_requirement
@@ -1562,7 +1554,6 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
             "actorRefs": ["actor id"],
             "permissionRefs": ["permission or capability id"]
         },
-        "contractFileRefs": ["string"],
         "idempotencyPolicy": "optional object for retry-sensitive or duplicate-sensitive operations",
         "cachePolicy": "optional object for cacheable reads",
         "conditionalRequestPolicy": "optional object for optimistic concurrency or cache validators",
@@ -2236,7 +2227,6 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
             "actorRefs": [],
             "permissionRefs": []
         },
-        "contractFileRefs": [],
         "idempotencyPolicy": {
             "required": false,
             "keyHeader": "",

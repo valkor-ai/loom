@@ -8,7 +8,7 @@ use std::{
 use contracts::{
     ArchitectureArtifactContract, ManualReviewResolution, ReviewFinding, ReviewNextAction,
     ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup, TaskPlanRun, TaskPlanRunStatus,
-    TaskResult,
+    TaskResult, TaskResultStatus, TaskRunStatus,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -101,7 +101,7 @@ fn materialize_review_request_inner(
                 "phase {phase_id} does not exist in delivery {delivery_id}"
             ))
         })?;
-    let task_results = load_task_results(root, &locator, &task_plan, &run);
+    let task_results = load_task_results(root, &locator, &task_plan, &run)?;
     if let Some(existing_request_ref) = phase.latest_refs.get("reviewRequestRef").cloned() {
         if state::inspect_request(delivery_core::InspectRequestInput {
             project_root: project_root.to_string(),
@@ -112,6 +112,7 @@ fn materialize_review_request_inner(
             && review_request_matches_current_task_results(
                 project_root,
                 &existing_request_ref,
+                &task_plan,
                 &task_results,
             )
         {
@@ -195,6 +196,7 @@ fn materialize_review_request_inner(
 fn review_request_matches_current_task_results(
     project_root: &str,
     request_ref: &str,
+    task_plan: &TaskPlan,
     task_results: &[TaskResult],
 ) -> bool {
     if task_results.is_empty() {
@@ -207,6 +209,7 @@ fn review_request_matches_current_task_results(
         fields: vec![
             "reviewPacket.taskResultSummaries".to_string(),
             "reviewPacket.taskResultSnapshotFingerprint".to_string(),
+            "reviewPacket.taskPlanProjectionFingerprint".to_string(),
         ],
     });
     let Ok(fields) = fields else {
@@ -222,7 +225,12 @@ fn review_request_matches_current_task_results(
         .get("reviewPacket.taskResultSnapshotFingerprint")
         .and_then(|field| field.value.as_str())
         .is_some_and(|actual| actual == task_result_snapshot_fingerprint(task_results));
-    summaries_match && fingerprint_match
+    let task_plan_match = fields
+        .fields
+        .get("reviewPacket.taskPlanProjectionFingerprint")
+        .and_then(|field| field.value.as_str())
+        .is_some_and(|actual| actual == task_plan_projection_fingerprint(task_plan));
+    summaries_match && fingerprint_match && task_plan_match
 }
 
 fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
@@ -243,6 +251,20 @@ fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
             .cmp(&right.get("taskResultId").and_then(Value::as_str))
     });
     delivery_core::contract_fingerprint(&Value::Array(snapshots))
+}
+
+fn task_plan_projection_fingerprint(task_plan: &TaskPlan) -> String {
+    let projection = json!({
+        "scopeSnapshot": task_plan.scope_snapshot,
+        "groups": task_plan.groups,
+        "tasks": task_plan.tasks,
+        "engineeringQualityRequirements": task_plan.engineering_quality_requirements,
+        "architectureQualityRequirements": task_plan.architecture_quality_requirements,
+        "apiContractRequirements": task_plan.api_contract_requirements,
+        "codeQualityRequirements": task_plan.code_quality_requirements,
+        "browserVerificationProfiles": task_plan.browser_verification_profiles
+    });
+    delivery_core::contract_fingerprint(&projection)
 }
 
 fn build_review_request(
@@ -278,7 +300,7 @@ fn build_review_request(
     let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
     let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
-        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract);
+        build_frontend_quality_review_matrix(task_plan, task_results);
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
@@ -323,6 +345,7 @@ fn build_review_request(
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results),
             "taskResultSnapshotFingerprint": task_result_snapshot_fingerprint(task_results),
+            "taskPlanProjectionFingerprint": task_plan_projection_fingerprint(task_plan),
             "apiContractContext": compact_api_contract_context(
                 task_plan,
                 architecture_contract,
@@ -466,6 +489,7 @@ fn build_review_request(
                         "reviewPacket.taskSummaries",
                         "reviewPacket.taskResultSummaries",
                         "reviewPacket.taskResultSnapshotFingerprint",
+                        "reviewPacket.taskPlanProjectionFingerprint",
                         "reviewPacket.apiContractContext"
                     ])
                 },
@@ -3427,20 +3451,82 @@ fn load_task_results(
     locator: &DeliveryPhaseLocator,
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
-) -> Vec<TaskResult> {
+) -> Result<Vec<TaskResult>, state::store::StateError> {
     run.task_states
         .iter()
         .filter_map(|state| {
             let task_id = &state.task_id;
-            let result_id = state.result_id.as_ref()?;
-            let task = task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *task_id)?;
+            let Some(result_id) = state.result_id.as_ref() else {
+                if matches!(state.status, TaskRunStatus::Pending | TaskRunStatus::Running) {
+                    return None;
+                }
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskPlanRun {} has terminal task {} with no canonical TaskResult reference",
+                    run.run_id, task_id
+                ))));
+            };
+            let Some(task) = task_plan.tasks.iter().find(|task| task.task_id == *task_id) else {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskPlanRun {} references task {} that is absent from the canonical TaskPlan",
+                    run.run_id, task_id
+                ))));
+            };
             let path = task_result_file(root, locator, &run.run_id, &task.task_id, result_id);
-            state::store::read_json(&path).ok()
+            let result: TaskResult = match state::store::read_json(&path) {
+                Ok(result) => result,
+                Err(error) => return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} for task {} cannot be loaded from {}: {}",
+                    result_id,
+                    task_id,
+                    path.display(),
+                    error
+                )))),
+            };
+            if result.task_result_id != *result_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskResult file {} contains taskResultId {}, but TaskPlanRun points to {}",
+                    path.display(),
+                    result.task_result_id,
+                    result_id
+                ))));
+            }
+            if result.task_id != *task_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} belongs to task {}, but TaskPlanRun expects {}",
+                    result.task_result_id, result.task_id, task_id
+                ))));
+            }
+            if result.task_plan_id != task_plan.task_plan_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} belongs to TaskPlan {}, but Review loaded {}",
+                    result.task_result_id, result.task_plan_id, task_plan.task_plan_id
+                ))));
+            }
+            if !task_result_status_matches_run_state(result.status, state.status) {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} status {:?} conflicts with TaskPlanRun task {} status {:?}",
+                    result.task_result_id, result.status, task_id, state.status
+                ))));
+            }
+            Some(Ok(result))
         })
         .collect()
+}
+
+fn task_result_status_matches_run_state(
+    result_status: TaskResultStatus,
+    run_status: TaskRunStatus,
+) -> bool {
+    matches!(
+        (result_status, run_status),
+        (TaskResultStatus::Completed, TaskRunStatus::Completed)
+            | (
+                TaskResultStatus::CompletedWithNotes,
+                TaskRunStatus::CompletedWithNotes
+            )
+            | (TaskResultStatus::Blocked, TaskRunStatus::Blocked)
+            | (TaskResultStatus::Failed, TaskRunStatus::Failed)
+    )
 }
 
 fn build_concept_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Vec<Value> {
@@ -3968,7 +4054,6 @@ fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
 fn build_frontend_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
-    architecture_contract: Option<&ArchitectureArtifactContract>,
 ) -> Vec<Value> {
     task_plan
         .tasks
@@ -3979,8 +4064,7 @@ fn build_frontend_quality_review_matrix(
             if !applicability.frontend_quality_self_check {
                 return None;
             }
-            let surface_contract =
-                task_scoped_surface_contract_for_review(requirement, architecture_contract);
+            let surface_contract = task_scoped_surface_contract_for_review(requirement);
             if !surface_contract.is_object() {
                 return None;
             }
@@ -4047,6 +4131,9 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
+            let evidence_refs = string_array_field(&self_check, "evidenceRefs");
+            let evidence_refs_satisfied = !evidence_refs.is_empty()
+                && evidence_refs.iter().all(|reference| !reference.trim().is_empty());
             let expected_browser_checks = task_plan
                 .browser_verification_profiles
                 .iter()
@@ -4098,6 +4185,7 @@ fn build_frontend_quality_review_matrix(
                 && surface_contract_satisfied
                 && token_asset_satisfied
                 && browser_verification_satisfied
+                && evidence_refs_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
@@ -4135,6 +4223,8 @@ fn build_frontend_quality_review_matrix(
                 },
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
+                "evidenceRefCount": evidence_refs.len(),
+                "evidenceRefsSatisfied": evidence_refs_satisfied,
                 "recommendedNextAction": if quality_satisfied {
                     "none"
                 } else if required_browser_environment_blocked {
@@ -4147,85 +4237,12 @@ fn build_frontend_quality_review_matrix(
         .collect()
 }
 
-fn task_scoped_surface_contract_for_review(
-    requirement: &Value,
-    architecture_contract: Option<&ArchitectureArtifactContract>,
-) -> Value {
-    if let Some(contract) = requirement
+fn task_scoped_surface_contract_for_review(requirement: &Value) -> Value {
+    requirement
         .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
         .filter(|value| value.is_object())
-    {
-        return contract.clone();
-    }
-
-    let full_contract = architecture_contract
-        .and_then(|contract| contract.frontend_experience.as_ref())
-        .and_then(|frontend| frontend.get("uiSurfaceDecisionContract"))
         .cloned()
-        .unwrap_or(Value::Null);
-    if !full_contract.is_object() {
-        return Value::Null;
-    }
-
-    let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
-    let region_ids = object_id_array_field(scope, "regionsInScope", "regionId");
-    let action_ids = object_id_array_field(scope, "actionsInContract", "actionId");
-    let state_ids = object_id_array_field(scope, "statesInContract", "state");
-    let quality_rule_ids = object_id_array_field(scope, "qualityRulesInScope", "ruleId");
-    json!({
-        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": "task_scope",
-        "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
-        "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
-        "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
-        "regionsInScope": selected_surface_contract_values(&full_contract, "regionModel", "regionId", &region_ids),
-        "informationModel": full_contract.get("informationModel").cloned().unwrap_or(Value::Null),
-        "actionsInScope": selected_surface_contract_values(&full_contract, "actionModel", "actionId", &action_ids),
-        "statesInScope": selected_surface_contract_values(&full_contract, "stateModel", "state", &state_ids),
-        "compositionConstraints": full_contract.get("compositionConstraints").cloned().unwrap_or(Value::Null),
-        "contentBoundary": full_contract.get("contentBoundary").cloned().unwrap_or(Value::Null),
-        "qualityRulesInScope": selected_surface_contract_values(&full_contract, "qualityRules", "ruleId", &quality_rule_ids),
-        "designTokenAssetPlan": full_contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
-        "referencePlan": full_contract.get("referencePlan").cloned().unwrap_or_else(|| json!([]))
-    })
-}
-
-fn object_id_array_field(value: &Value, key: &str, id_key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get(id_key).and_then(Value::as_str).map(str::to_string))
-        .collect()
-}
-
-fn selected_surface_contract_values(
-    contract: &Value,
-    array_key: &str,
-    id_key: &str,
-    ids: &[String],
-) -> Vec<Value> {
-    let values = contract
-        .get(array_key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
-    values
-        .into_iter()
-        .filter(|value| {
-            value
-                .get(id_key)
-                .and_then(Value::as_str)
-                .is_some_and(|id| selected.contains(id))
-        })
-        .cloned()
-        .collect()
+        .unwrap_or(Value::Null)
 }
 
 fn frontend_surface_contract_review(
@@ -4276,6 +4293,11 @@ fn frontend_surface_contract_review(
         &expected_reference_plan_files,
         &checked_reference_plan_files,
     );
+    let evidence_refs = string_array_field(self_check, "evidenceRefs");
+    let evidence_refs_satisfied = !evidence_refs.is_empty()
+        && evidence_refs
+            .iter()
+            .all(|reference| !reference.trim().is_empty());
     let content_checked = self_check
         .pointer("/contentBoundaryEvidence/checked")
         .and_then(Value::as_bool)
@@ -4298,6 +4320,7 @@ fn frontend_surface_contract_review(
         && review_satisfied(&state_review)
         && review_satisfied(&quality_rule_review)
         && missing_reference_plan_files.is_empty()
+        && evidence_refs_satisfied
         && content_boundary_satisfied;
 
     json!({
@@ -4312,6 +4335,8 @@ fn frontend_surface_contract_review(
         "referencePlanFileCount": expected_reference_plan_files.len(),
         "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
         "missingReferencePlanFiles": missing_reference_plan_files,
+        "evidenceRefCount": evidence_refs.len(),
+        "evidenceRefsSatisfied": evidence_refs_satisfied,
         "contentBoundary": {
             "checked": content_checked,
             "evidencePresent": content_evidence_present,
@@ -4550,9 +4575,7 @@ fn build_review_signals(
             }
         }));
     }
-    for quality in
-        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract)
-    {
+    for quality in build_frontend_quality_review_matrix(task_plan, task_results) {
         let task_id = quality
             .get("taskId")
             .and_then(Value::as_str)
@@ -4818,28 +4841,21 @@ fn build_review_signals(
                 .iter()
                 .find(|result| result.task_id == task.task_id);
             let check = result.and_then(|result| result.frontend_experience_self_check.as_ref());
-            let data_binding = check
-                .and_then(|check| check.get("dataBinding"))
-                .unwrap_or(&Value::Null);
+            let data_binding = check.map(|check| &check.data_binding);
             let known_gap_count = data_binding
-                .get("knownGaps")
-                .and_then(Value::as_array)
-                .map(|items| items.len())
+                .map(|binding| binding.known_gaps.len())
                 .unwrap_or(0);
             let covered_closures = check
-                .and_then(|check| check.get("closureRequirementIds"))
-                .and_then(Value::as_array)
+                .map(|check| check.closure_requirement_ids.iter().cloned())
                 .into_iter()
                 .flatten()
-                .filter_map(|item| item.as_str().map(str::to_string))
                 .collect::<BTreeSet<_>>();
-            let closure_satisfied = check
-                .and_then(|check| check.get("status"))
-                .and_then(Value::as_str)
-                == Some("satisfied")
-                && data_binding.get("mode").and_then(Value::as_str) == Some("wired")
+            let closure_satisfied = check.is_some_and(|check| check.status == "satisfied")
+                && data_binding.is_some_and(|binding| binding.mode == "wired")
                 && known_gap_count == 0
+                && check.is_some_and(|check| !check.evidence_refs.is_empty())
                 && covered_closures.contains(&closure_id);
+            let evidence_ref_count = check.map(|check| check.evidence_refs.len()).unwrap_or(0);
             signals.push(json!({
                 "signalId": format!("sig-workflow-closure-{}-{}", safe_signal_id(&closure_id), safe_signal_id(&task.task_id)),
                 "kind": "frontend_workflow_closure",
@@ -4847,9 +4863,10 @@ fn build_review_signals(
                 "taskRefs": [task.task_id.clone()],
                 "taskResultId": result.map(|result| result.task_result_id.clone()),
                 "closureSatisfied": closure_satisfied,
-                "actualFrontendSelfCheckStatus": check.and_then(|check| check.get("status")).and_then(Value::as_str),
-                "actualDataBindingMode": data_binding.get("mode").and_then(Value::as_str),
+                "actualFrontendSelfCheckStatus": check.map(|check| check.status.as_str()),
+                "actualDataBindingMode": data_binding.map(|binding| binding.mode.as_str()),
                 "knownGapCount": known_gap_count,
+                "evidenceRefCount": evidence_ref_count,
                 "requiredDataBindingMode": "wired",
                 "recommendedNextAction": if closure_satisfied { "none" } else { "execution_repair" },
                 "reason": if closure_satisfied {
@@ -4868,35 +4885,72 @@ fn build_review_signals(
             .map(task_evidence_applicability)
             .unwrap_or_default();
         if applicability.runtime_delivery_evidence && result.runtime_delivery_evidence.is_some() {
+            let runtime_evidence = compact_runtime_delivery_evidence(result);
             signals.push(json!({
                 "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "runtime_delivery"
+                "evidenceType": "runtime_delivery",
+                "runtimeEvidence": runtime_evidence
             }));
         }
         if applicability.frontend_self_check && result.frontend_experience_self_check.is_some() {
+            let frontend_evidence = result
+                .frontend_experience_self_check
+                .as_ref()
+                .map(|check| check.evidence_refs.len())
+                .unwrap_or(0);
             signals.push(json!({
                 "signalId": format!("sig-frontend-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "frontend_experience"
+                "evidenceType": "frontend_experience",
+                "evidenceRefCount": frontend_evidence
             }));
         }
         if applicability.frontend_quality_self_check && result.frontend_quality_self_check.is_some()
         {
+            let frontend_quality_evidence = compact_frontend_quality_self_check(result);
             signals.push(json!({
                 "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "frontend_quality"
+                "evidenceType": "frontend_quality",
+                "evidenceRefCount": frontend_quality_evidence
+                    .get("evidenceRefCount")
+                    .cloned()
+                    .unwrap_or(Value::from(0)),
+                "evidenceRefsSatisfied": frontend_quality_evidence
+                    .get("evidenceRefsSatisfied")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false))
             }));
         }
     }
     Value::Array(signals)
+}
+
+fn compact_runtime_delivery_evidence(result: &TaskResult) -> Value {
+    let Some(evidence) = result.runtime_delivery_evidence.as_ref() else {
+        return json!({ "present": false });
+    };
+    let command_count = evidence.commands_run.len();
+    let unverified_item_count = evidence.unverified_items.len();
+    let check_statuses = evidence
+        .code_level_checks
+        .iter()
+        .map(|check| check.status.clone())
+        .collect::<Vec<_>>();
+    json!({
+        "present": true,
+        "commandCount": command_count,
+        "unverifiedItemCount": unverified_item_count,
+        "codeLevelCheckStatuses": check_statuses,
+        "runtimeProbeCleanup": evidence.runtime_probe_cleanup.as_deref().map(compact_summary)
+    })
 }
 
 fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
@@ -5190,6 +5244,22 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
     json!({
         "present": true,
         "status": self_check.get("status").and_then(Value::as_str),
+        "evidenceRefCount": self_check
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "evidenceRefsSatisfied": self_check
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .is_some_and(|refs| {
+                !refs.is_empty()
+                    && refs.iter().all(|reference| {
+                        reference
+                            .as_str()
+                            .is_some_and(|value| !value.trim().is_empty())
+                    })
+            }),
         "surfaceDecisionContractRef": self_check
             .get("surfaceDecisionContractRef")
             .and_then(Value::as_str),
@@ -5772,6 +5842,7 @@ mod tests {
         json!({
             "status": "satisfied",
             "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "evidenceRefs": ["web/src/App.tsx"],
             "surfaceRegionEvidence": [{
                 "id": "region-main",
                 "status": "satisfied",
