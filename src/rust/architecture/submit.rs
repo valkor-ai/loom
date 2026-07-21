@@ -593,7 +593,10 @@ fn normalize_architecture_candidate_envelope(
         );
     }
     if matches!(current_section, ArchitectureSectionGroup::RuntimeDelivery) {
-        normalize_runtime_dependency_field_names(object.get_mut("content"));
+        normalize_runtime_dependencies_from_seed(
+            object.get_mut("content"),
+            request_root.pointer("/runtimeDependencySeed/candidates"),
+        );
     }
 }
 
@@ -805,44 +808,47 @@ fn normalize_operational_policy_alias(value: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_runtime_dependency_field_names(content: Option<&mut Value>) {
-    let Some(dependencies) = content
-        .and_then(|value| value.pointer_mut("/runtimeDelivery/runtimeDependencies"))
-        .and_then(Value::as_array_mut)
-    else {
-        return;
+fn normalize_runtime_dependencies_from_seed(
+    content: Option<&mut Value>,
+    candidates: Option<&Value>,
+) -> bool {
+    let Some(content) = content else {
+        return false;
     };
-    for dependency in dependencies {
-        let Some(object) = dependency.as_object_mut() else {
-            continue;
-        };
-        if !object.contains_key("requiredFor") {
-            if let Some(value) = object.remove("affectedCapability") {
-                object.insert(
-                    "requiredFor".to_string(),
-                    match value {
-                        Value::Array(_) => value,
-                        value => Value::Array(vec![value]),
-                    },
-                );
-            }
-        } else {
-            object.remove("affectedCapability");
-        }
-        if !object.contains_key("observability") {
-            if let Some(value) = object.remove("observableSignal") {
-                object.insert(
-                    "observability".to_string(),
-                    match value {
-                        Value::Array(_) => value,
-                        value => Value::Array(vec![value]),
-                    },
-                );
-            }
-        } else {
-            object.remove("observableSignal");
-        }
-    }
+    let Some(runtime_delivery) = content
+        .as_object_mut()
+        .and_then(|object| object.get_mut("runtimeDelivery"))
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    runtime_delivery.remove("runtimeDependencies");
+    let projection = candidates
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let object = item.as_object()?;
+                    let mut dependency = serde_json::Map::new();
+                    for field in [
+                        "dependencyId",
+                        "kind",
+                        "provider",
+                        "startupRequirement",
+                        "capabilities",
+                    ] {
+                        if let Some(value) = object.get(field) {
+                            dependency.insert(field.to_string(), value.clone());
+                        }
+                    }
+                    Some(Value::Object(dependency))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    runtime_delivery.insert("runtimeDependencies".to_string(), Value::Array(projection));
+    true
 }
 
 fn normalize_architecture_quality_candidate_fields(
@@ -2123,11 +2129,8 @@ fn validate_runtime_rules(
                             "dependencyId"
                                 | "kind"
                                 | "provider"
-                                | "requiredFor"
                                 | "startupRequirement"
-                                | "failureBehavior"
-                                | "recoveryStrategy"
-                                | "observability"
+                                | "capabilities"
                         ) {
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_FIELD_UNKNOWN",
@@ -2136,13 +2139,7 @@ fn validate_runtime_rules(
                             ));
                         }
                     }
-                    for field in [
-                        "dependencyId",
-                        "kind",
-                        "startupRequirement",
-                        "failureBehavior",
-                        "recoveryStrategy",
-                    ] {
+                    for field in ["dependencyId", "kind", "startupRequirement"] {
                         if dependency
                             .get(field)
                             .and_then(Value::as_str)
@@ -2151,33 +2148,11 @@ fn validate_runtime_rules(
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_FIELD_REQUIRED",
                                 &format!("{path}.{field}"),
-                                "Runtime dependencies must declare ownership, startup, failure, and recovery semantics.",
+                                "Runtime dependencies are MCP-owned projections and must declare identity, kind, and startup requirement.",
                             ));
                         }
                     }
-                    for field in ["requiredFor", "observability"] {
-                        let Some(values) = dependency.get(field).and_then(Value::as_array) else {
-                            issues.push(issue(
-                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                                &format!("{path}.{field}"),
-                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
-                            ));
-                            continue;
-                        };
-                        if values.is_empty() {
-                            issues.push(issue(
-                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                                &format!("{path}.{field}"),
-                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
-                            ));
-                        }
-                        validate_array_entries_are_strings(
-                            values,
-                            &format!("{path}.{field}"),
-                            "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                            &mut issues,
-                        );
-                    }
+                    validate_runtime_dependency_capabilities(dependency, &path, &mut issues);
                     if dependency
                         .get("kind")
                         .and_then(Value::as_str)
@@ -2282,6 +2257,97 @@ fn validate_runtime_rules(
     issues
 }
 
+fn validate_runtime_dependency_capabilities(
+    dependency: &serde_json::Map<String, Value>,
+    path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(capabilities) = dependency.get("capabilities") else {
+        return;
+    };
+    let Some(capabilities) = capabilities.as_array() else {
+        issues.push(issue(
+            "RUNTIME_DEPENDENCY_CAPABILITIES_INVALID",
+            &format!("{path}.capabilities"),
+            "MCP-owned runtime dependency capabilities must be an array of structured objects.",
+        ));
+        return;
+    };
+    for (index, capability) in capabilities.iter().enumerate() {
+        let capability_path = format!("{path}.capabilities[{index}]");
+        let Some(capability) = capability.as_object() else {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_CAPABILITY_INVALID",
+                &capability_path,
+                "Each runtime dependency capability must be a structured object.",
+            ));
+            continue;
+        };
+        for field in capability.keys() {
+            if !matches!(
+                field.as_str(),
+                "capabilityId" | "purpose" | "durability" | "startupRequirement"
+            ) {
+                issues.push(issue(
+                    "RUNTIME_DEPENDENCY_CAPABILITY_FIELD_UNKNOWN",
+                    &format!("{capability_path}.{field}"),
+                    "Runtime dependency capability fields are MCP-owned; remove invented fields.",
+                ));
+            }
+        }
+        for field in [
+            "capabilityId",
+            "purpose",
+            "durability",
+            "startupRequirement",
+        ] {
+            if capability
+                .get(field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "RUNTIME_DEPENDENCY_CAPABILITY_FIELD_REQUIRED",
+                    &format!("{capability_path}.{field}"),
+                    "Each runtime dependency capability must declare its MCP-derived identity and deployment semantics.",
+                ));
+            }
+        }
+        if capability
+            .get("durability")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !matches!(value, "ephemeral" | "persistent"))
+        {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_DURABILITY_INVALID",
+                &format!("{capability_path}.durability"),
+                "Runtime dependency durability must be ephemeral or persistent.",
+            ));
+        }
+        if capability
+            .get("purpose")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                !matches!(
+                    value,
+                    "primary_storage"
+                        | "cache"
+                        | "session"
+                        | "queue"
+                        | "stream"
+                        | "lock_rate_limit"
+                )
+            })
+        {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_PURPOSE_INVALID",
+                &format!("{capability_path}.purpose"),
+                "Runtime dependency purpose must use a confirmed capability role.",
+            ));
+        }
+    }
+}
+
 fn validate_runtime_dependency_seed(
     runtime: &Value,
     request_root: &Value,
@@ -2293,14 +2359,21 @@ fn validate_runtime_dependency_seed(
     else {
         return;
     };
-    if candidates.is_empty() {
-        return;
-    }
     let dependencies = runtime
         .get("runtimeDependencies")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if candidates.is_empty() {
+        if !dependencies.is_empty() {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_SEED_UNEXPECTED",
+                "content.runtimeDelivery.runtimeDependencies",
+                "The accepted TechnicalBaseline has no runtime dependency candidates; MCP must persist an empty runtime dependency projection.",
+            ));
+        }
+        return;
+    }
     for (index, candidate) in candidates.iter().enumerate() {
         let Some(candidate_id) = candidate.get("dependencyId").and_then(Value::as_str) else {
             continue;
@@ -2312,6 +2385,7 @@ fn validate_runtime_dependency_seed(
                 && candidate
                     .get("provider")
                     .is_none_or(|provider| dependency.get("provider") == Some(provider))
+                && dependency.get("capabilities") == candidate.get("capabilities")
         });
         if !matched {
             issues.push(issue(
@@ -4772,6 +4846,42 @@ mod tests {
             &mut issues,
         );
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn runtime_dependencies_are_rebuilt_from_seed_without_agent_semantic_fields() {
+        let mut content = json!({
+            "runtimeDelivery": {
+                "runtimeDependencies": [{
+                    "dependencyId": "invented",
+                    "provider": "redis",
+                    "requiredFor": ["free_form_text"],
+                    "failureBehavior": "free_form_text"
+                }]
+            }
+        });
+        let candidates = json!([{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "required",
+            "capabilities": [{
+                "capabilityId": "redis_session_0",
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
+        }]);
+        assert!(normalize_runtime_dependencies_from_seed(
+            Some(&mut content),
+            Some(&candidates)
+        ));
+        assert_eq!(
+            content.pointer("/runtimeDelivery/runtimeDependencies"),
+            Some(&candidates)
+        );
+        assert!(content.to_string().contains("redis_session_0"));
+        assert!(!content.to_string().contains("free_form_text"));
     }
 
     #[test]

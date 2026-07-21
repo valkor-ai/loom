@@ -505,6 +505,17 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/code/{file}.md"))
                 .exists());
         }
+        for file in [
+            "redis/core",
+            "redis/cache",
+            "redis/session",
+            "redis/atomicity",
+            "redis/messaging",
+        ] {
+            assert!(root
+                .join(format!("skills/loom/references/tech/code/{file}.md"))
+                .exists());
+        }
         for file in BACKEND_REFERENCE_FILES {
             assert!(root
                 .join(format!("skills/loom/references/tech/backend/{file}.md"))
@@ -528,6 +539,7 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom-deploy/references/topology.md")
             .exists());
+        assert!(root.join("skills/loom-deploy/references/redis.md").exists());
     }
 
     assert!(env
@@ -2641,6 +2653,20 @@ impl Fixture {
                 &format!("# {path} Code Reference\n"),
             );
         }
+        for path in [
+            "redis/core",
+            "redis/cache",
+            "redis/session",
+            "redis/atomicity",
+            "redis/messaging",
+        ] {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/code/{path}.md"
+                )),
+                &format!("# {path} Code Reference\n"),
+            );
+        }
         for path in BACKEND_REFERENCE_FILES {
             write_file(
                 &self.package_root.join(format!(
@@ -2670,6 +2696,7 @@ impl Fixture {
             "php",
             "providers",
             "python",
+            "redis",
             "repair",
             "ruby",
             "source-model",

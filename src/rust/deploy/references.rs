@@ -1,5 +1,6 @@
 use contracts::{
-    DeployProvider, DeploymentFailureKind, DeploymentSpec, DeploymentTopologyClass, RuntimeKind,
+    DependencyServiceKind, DeployProvider, DeploymentFailureKind, DeploymentSpec,
+    DeploymentTopologyClass, RuntimeKind,
 };
 use delivery_core::{DeployReferenceProfile, ReferenceLoadPlanItem};
 use serde_json::json;
@@ -79,6 +80,14 @@ fn reference_load_plan(
             push(&mut ids, reference_id);
         }
     }
+    if spec
+        .source_model
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.kind == DependencyServiceKind::Redis)
+    {
+        push(&mut ids, "deploy.dependencies.redis");
+    }
 
     if let Some(kind) = failure_kind {
         add_failure_references(&mut ids, kind);
@@ -139,6 +148,10 @@ fn reference_metadata(reference_id: &str) -> (&'static str, &'static str) {
         "deploy.repair" => (
             "repair.md",
             "Deploy repair decision tree and editable asset boundary.",
+        ),
+        "deploy.dependencies.redis" => (
+            "redis.md",
+            "Redis dependency capabilities, persistence, health, and generated asset boundary.",
         ),
         "deploy.stacks.node" => (
             "node.md",

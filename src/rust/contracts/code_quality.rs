@@ -98,7 +98,8 @@ pub fn code_quality_enum_refs() -> Value {
                     "postgresql.schema", "postgresql.queries", "postgresql.transactions",
                     "sqlserver.schema", "sqlserver.queries", "sqlserver.transactions",
                     "oracle.schema", "oracle.queries", "oracle.transactions"
-                ]
+                ],
+                "redis": ["core", "cache", "atomicity", "messaging"]
             }
         },
         "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "resilience", "observability", "cloud", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
@@ -123,7 +124,8 @@ pub fn code_reference_selection_for_task_with_context(
     context: &CodeReferenceTaskContext,
 ) -> Option<CodeReferenceSelection> {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
-    if signals.is_empty() {
+    let redis_items = redis_reference_items_for_task(baseline, task);
+    if signals.is_empty() && redis_items.is_empty() {
         return None;
     }
     let stack_frameworks = signals
@@ -170,6 +172,13 @@ pub fn code_reference_selection_for_task_with_context(
         }
     }
 
+    for item in redis_items {
+        reference_groups
+            .entry("redis".to_string())
+            .or_default()
+            .insert(item);
+    }
+
     if reference_groups.is_empty() && unmapped_signals.is_empty() {
         return None;
     }
@@ -182,6 +191,78 @@ pub fn code_reference_selection_for_task_with_context(
         focus_tags,
         unmapped_signals,
     })
+}
+
+fn redis_reference_items_for_task(
+    baseline: &TechnicalBaselineContract,
+    task: &TaskDefinition,
+) -> BTreeSet<String> {
+    let capabilities = baseline
+        .stack
+        .pointer("/tracks/externalServices/providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|provider| {
+            provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("redis"))
+        })
+        .flat_map(|provider| {
+            provider
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|capability| capability.get("purpose").and_then(Value::as_str))
+        })
+        .collect::<BTreeSet<_>>();
+    if capabilities.is_empty() {
+        return BTreeSet::new();
+    }
+
+    let cache = task_has_action(task, ImplementationAction::ImplementCachePolicy);
+    let messaging = task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementExternalServiceIntegration,
+        );
+    let atomicity = task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementExternalServiceIntegration,
+        );
+    let session = task_has_action(
+        task,
+        ImplementationAction::ImplementAuthenticationOrAuthorization,
+    ) || task_has_action(
+        task,
+        ImplementationAction::ImplementExternalServiceIntegration,
+    );
+
+    let mut items = BTreeSet::new();
+    if (capabilities.contains("cache") && cache)
+        || (capabilities.contains("session") && session)
+        || (capabilities.contains("queue") && messaging)
+        || (capabilities.contains("stream") && messaging)
+        || (capabilities.contains("lock_rate_limit") && atomicity)
+    {
+        items.insert("core".to_string());
+    }
+    if capabilities.contains("cache") && cache {
+        items.insert("cache".to_string());
+    }
+    if capabilities.contains("session") && session {
+        items.insert("session".to_string());
+    }
+    if capabilities.contains("lock_rate_limit") && atomicity {
+        items.insert("atomicity".to_string());
+    }
+    if (capabilities.contains("queue") || capabilities.contains("stream")) && messaging {
+        items.insert("messaging".to_string());
+    }
+    items
 }
 
 pub fn code_reference_load_plan(
@@ -2090,6 +2171,18 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
                 };
             }
         }
+    }
+    if group_key == "redis"
+        && matches!(
+            group,
+            "core" | "cache" | "session" | "atomicity" | "messaging"
+        )
+    {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("tech.code.redis.{group}"),
+            path: format!("tech/code/redis/{group}.md"),
+            reason: format!("Selected Redis {group} reference for this task-owned capability."),
+        };
     }
     ReferenceLoadPlanItem {
         ref_id: format!("tech.code.{group_key}.{group}"),
@@ -4213,6 +4306,71 @@ mod tests {
     }
 
     #[test]
+    fn redis_references_follow_structured_capability_and_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "externalServices": {
+                    "status": "selected",
+                    "selection": "Redis",
+                    "providers": [{
+                        "provider": "redis",
+                        "capabilities": [
+                            {"purpose": "cache", "durability": "ephemeral", "startupRequirement": "optional"},
+                            {"purpose": "session", "durability": "persistent", "startupRequirement": "required"},
+                            {"purpose": "queue", "durability": "persistent", "startupRequirement": "required"}
+                        ]
+                    }]
+                }
+            }
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let api_selection = code_reference_selection_for_task(&baseline, &api_task).unwrap();
+        assert!(!api_selection.reference_groups.contains_key("redis"));
+
+        let cache_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::ImplementCachePolicy],
+        );
+        let cache_selection = code_reference_selection_for_task(&baseline, &cache_task).unwrap();
+        assert_eq!(
+            cache_selection.reference_groups.get("redis"),
+            Some(&vec!["cache".to_string(), "core".to_string()])
+        );
+
+        let session_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let session_selection =
+            code_reference_selection_for_task(&baseline, &session_task).unwrap();
+        assert_eq!(
+            session_selection.reference_groups.get("redis"),
+            Some(&vec!["core".to_string(), "session".to_string()])
+        );
+
+        let queue_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let queue_selection = code_reference_selection_for_task(&baseline, &queue_task).unwrap();
+        assert_eq!(
+            queue_selection.reference_groups.get("redis"),
+            Some(&vec!["core".to_string(), "messaging".to_string()])
+        );
+        let load_plan = code_reference_load_plan(&queue_selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/redis/messaging.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/redis/testing.md"));
+    }
+
+    #[test]
     fn structured_task_context_selects_owned_spring_capabilities() {
         let baseline = baseline(json!({
             "tracks": {
@@ -5996,6 +6154,48 @@ mod tests {
                 assert!(
                     content.contains(section),
                     "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn redis_references_are_complete_and_non_operational() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let files = [
+            "plugins/shared/loom/references/tech/code/redis/core.md",
+            "plugins/shared/loom/references/tech/code/redis/cache.md",
+            "plugins/shared/loom/references/tech/code/redis/session.md",
+            "plugins/shared/loom/references/tech/code/redis/atomicity.md",
+            "plugins/shared/loom/references/tech/code/redis/messaging.md",
+        ];
+        for relative in files {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 45,
+                "{} is too thin",
+                path.display()
+            );
+            for section in [
+                "## When To Use",
+                "## Implementation Focus",
+                "## Verification Focus",
+                "## Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+            let lower = content.to_ascii_lowercase();
+            for term in ["sentinel", "cluster", "replication", "backup", "monitoring"] {
+                assert!(
+                    !lower.contains(term),
+                    "{} contains excluded Redis operation {term}",
                     path.display()
                 );
             }

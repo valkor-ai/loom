@@ -1533,6 +1533,47 @@ fn new_project_web_baseline_requires_quality_automation_track() {
 }
 
 #[test]
+fn selected_external_services_require_structured_capabilities() {
+    let fixture = Fixture::new("technical-baseline-external-service-capabilities");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = new_project_technical_baseline_candidate_json();
+    candidate["stack"]["tracks"]["externalServices"] = json!({
+        "status": "selected",
+        "selection": "Redis",
+        "source": "user_confirmed",
+        "rationale": "The confirmed workflow needs shared runtime state."
+    });
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "TECHNICAL_BASELINE_EXTERNAL_SERVICES_UNSTRUCTURED"
+                && issue["fieldPath"] == "stack.tracks.externalServices.providers"
+        }));
+}
+
+#[test]
 fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
     let fixture = Fixture::new("repository-context-pgc");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -1814,6 +1855,12 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .is_none(),
         "deploymentShape is MCP-derived and must not be agent-writable: {runtime_contract:#}"
     );
+    assert!(
+        runtime_contract
+            .pointer("/schemaShape/content/runtimeDelivery/runtimeDependencies")
+            .is_none(),
+        "runtimeDependencies is MCP-derived and must not be agent-writable: {runtime_contract:#}"
+    );
     assert_eq!(
         runtime_contract
             .pointer("/resultTemplate/content/runtimeDelivery/httpProbes/expectedStatus")
@@ -1826,6 +1873,12 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .pointer("/resultTemplate/content/runtimeDelivery/deploymentShape")
             .is_none(),
         "deploymentShape is MCP-derived and must not appear in resultTemplate: {runtime_contract:#}"
+    );
+    assert!(
+        runtime_contract
+            .pointer("/resultTemplate/content/runtimeDelivery/runtimeDependencies")
+            .is_none(),
+        "runtimeDependencies is MCP-derived and must not appear in resultTemplate: {runtime_contract:#}"
     );
     assert!(runtime_contract
         .pointer("/resultTemplate/content/runtimeDelivery/commands/development/start/port")

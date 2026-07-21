@@ -556,13 +556,12 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
             "track": "persistence",
             "kind": "storage",
             "startupRequirement": "required",
-            "requiredFor": ["current_phase_persistent_capabilities"],
-            "failureBehavior": "Storage failure must prevent false success and preserve write consistency.",
-            "recoveryStrategy": "Restore the configured storage boundary, then restart or retry the affected runtime operation.",
-            "observability": [
-                "Startup exposes storage readiness or failure.",
-                "Affected runtime operations expose an actionable failure signal."
-            ]
+            "capabilities": [{
+                "capabilityId": "primary_storage",
+                "purpose": "primary_storage",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
         });
         if let Some(provider) = structured_provider_from_track(tracks.get("persistence")) {
             candidate["provider"] = json!(provider);
@@ -570,29 +569,84 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
         candidates.push(candidate);
     }
     if track_is_selected(tracks.get("externalServices")) {
-        let mut candidate = json!({
-            "dependencyId": "runtime_external_services",
-            "track": "externalServices",
-            "kind": "external_runtime",
-            "startupRequirement": "required",
-            "requiredFor": ["current_phase_external_capabilities"],
-            "failureBehavior": "An unavailable external runtime must produce an explicit failure and must not be reported as a successful operation.",
-            "recoveryStrategy": "Restore the configured external runtime or use the declared fallback before retrying.",
-            "observability": [
-                "Dependency readiness or connection failure is observable.",
-                "Affected runtime operations expose an actionable failure signal."
-            ]
-        });
-        if let Some(provider) = structured_provider_from_track(tracks.get("externalServices")) {
-            candidate["provider"] = json!(provider);
+        for provider in structured_external_service_providers(tracks.get("externalServices")) {
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("external")
+                .to_string();
+            let provider_name = normalize_provider(&provider_name);
+            let capabilities = canonical_external_capabilities(&provider_name, &provider);
+            let startup_requirement = aggregate_startup_requirement(&capabilities);
+            let dependency_id = provider
+                .get("dependencyId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("runtime_{provider_name}"));
+            candidates.push(json!({
+                "dependencyId": dependency_id,
+                "track": "externalServices",
+                "kind": "external_runtime",
+                "provider": provider_name,
+                "startupRequirement": startup_requirement,
+                "capabilities": capabilities
+            }));
         }
-        candidates.push(candidate);
     }
     json!({
         "authority": "technical_baseline.stack.tracks",
         "candidates": candidates,
         "emptyPolicy": "runtimeDependencies may be empty only when candidates is empty"
     })
+}
+
+fn canonical_external_capabilities(provider_name: &str, provider: &Value) -> Value {
+    let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) else {
+        return json!([]);
+    };
+    Value::Array(
+        capabilities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, capability)| {
+                let purpose = capability.get("purpose")?.as_str()?.trim();
+                let durability = capability.get("durability")?.as_str()?.trim();
+                let startup_requirement = capability.get("startupRequirement")?.as_str()?.trim();
+                Some(json!({
+                    "capabilityId": format!("{provider_name}_{purpose}_{index}"),
+                    "purpose": purpose,
+                    "durability": durability,
+                    "startupRequirement": startup_requirement
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn structured_external_service_providers(track: Option<&Value>) -> Vec<Value> {
+    track
+        .and_then(Value::as_object)
+        .and_then(|track| track.get("providers"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn aggregate_startup_requirement(capabilities: &Value) -> &'static str {
+    let values = capabilities
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|capability| capability.get("startupRequirement"))
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if values.contains(&"required") {
+        "required"
+    } else if values.contains(&"optional") {
+        "optional"
+    } else {
+        "not_applicable"
+    }
 }
 
 fn structured_provider_from_track(track: Option<&Value>) -> Option<String> {
@@ -1422,16 +1476,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
                 }
             },
             "runtimeSurfaces": ["object"],
-            "runtimeDependencies": [{
-                "dependencyId": "string",
-                "kind": "service | storage | queue | filesystem | external_runtime",
-                "provider": "optional canonical provider id from runtimeDependencySeed",
-                "requiredFor": ["string"],
-                "startupRequirement": "required | optional | not_applicable",
-                "failureBehavior": "string",
-                "recoveryStrategy": "string",
-                "observability": ["string"]
-            }],
             "httpProbes": {
                 "previewPath": "string",
                 "healthPath": "optional string; only when the repository exposes this probe",
@@ -2045,7 +2089,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
                 "urlPath": "",
                 "purpose": ""
             }],
-            "runtimeDependencies": [],
             "httpProbes": {
                 "previewPath": "/",
                 "healthPath": "",
@@ -2344,8 +2387,8 @@ pub fn section_generation_rules(
                 .to_string(),
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
-            "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state requiredFor capabilities, startup requirement, failure behavior, recovery strategy, and observability signals. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
-            "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, startupRequirement, and provider when present; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
+            "Do not write runtimeDependencies. MCP rebuilds the canonical runtime dependency projection from runtimeDependencySeed before validating and persisting this section. Put dependency failure, recovery, and observability decisions in architectureQuality with sourceRefs and verificationHints when they affect the current phase.".to_string(),
+            "Use runtimeDependencySeed to understand which confirmed dependencies and capability roles are in scope. Do not add providers, capability roles, persistence modes, startup requirements, or legacy runtime dependency fields from Agent prose.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -2403,13 +2446,22 @@ mod tests {
         let seed = runtime_dependency_seed_from_stack(&json!({
             "tracks": {
                 "persistence": {"status": "selected", "selection": "PostgreSQL"},
-                "externalServices": {"status": "not_needed", "selection": "None"}
+                "externalServices": {"status": "selected", "selection": "Redis", "providers": [{
+                    "provider": "redis",
+                    "capabilities": [{
+                        "purpose": "cache",
+                        "durability": "ephemeral",
+                        "startupRequirement": "optional"
+                    }]
+                }]}
             }
         }));
         assert_eq!(seed["authority"], "technical_baseline.stack.tracks");
-        assert_eq!(seed["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(seed["candidates"].as_array().unwrap().len(), 2);
         assert_eq!(seed["candidates"][0]["kind"], "storage");
         assert_eq!(seed["candidates"][0]["startupRequirement"], "required");
+        assert_eq!(seed["candidates"][1]["provider"], "redis");
+        assert_eq!(seed["candidates"][1]["capabilities"][0]["purpose"], "cache");
         assert_eq!(
             seed["emptyPolicy"],
             "runtimeDependencies may be empty only when candidates is empty"
@@ -2614,8 +2666,8 @@ mod tests {
             .is_some());
         assert!(behavior.pointer("/userFlows/0/failurePaths").is_some());
         assert!(runtime
-            .pointer("/runtimeDelivery/runtimeDependencies/0/failureBehavior")
-            .is_some());
+            .pointer("/runtimeDelivery/runtimeDependencies")
+            .is_none());
     }
 
     #[test]

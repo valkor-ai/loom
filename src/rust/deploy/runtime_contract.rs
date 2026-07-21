@@ -605,7 +605,7 @@ fn heuristic_runtime_contract() -> DeploymentRuntimeContract {
 }
 
 fn dependency_services_from_runtime(runtime: &Value) -> Vec<DependencyService> {
-    let mut kinds = runtime
+    runtime
         .get("runtimeDependencies")
         .and_then(Value::as_array)
         .into_iter()
@@ -613,11 +613,19 @@ fn dependency_services_from_runtime(runtime: &Value) -> Vec<DependencyService> {
         .filter(|dependency| {
             dependency.get("startupRequirement").and_then(Value::as_str) != Some("not_applicable")
         })
-        .filter_map(dependency_service_kind)
-        .collect::<Vec<_>>();
-    kinds.sort_by_key(|kind| format!("{kind:?}"));
-    kinds.dedup();
-    kinds.into_iter().map(service_definition).collect()
+        .filter_map(|dependency| {
+            let kind = dependency_service_kind(dependency)?;
+            Some(service_definition_for_dependency(kind, dependency))
+        })
+        .fold(Vec::new(), |mut services, service| {
+            if !services
+                .iter()
+                .any(|existing: &DependencyService| existing.service_name == service.service_name)
+            {
+                services.push(service);
+            }
+            services
+        })
 }
 
 fn dependency_service_kind(dependency: &Value) -> Option<DependencyServiceKind> {
@@ -648,6 +656,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "postgres".to_string(),
             image: "postgres:16-alpine".to_string(),
             port: 5432,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([
                 ("POSTGRES_DB".to_string(), "loom_app".to_string()),
                 ("POSTGRES_USER".to_string(), "loom".to_string()),
@@ -670,6 +679,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "redis".to_string(),
             image: "redis:7-alpine".to_string(),
             port: 6379,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::new(),
             connection_env: BTreeMap::from([(
                 "REDIS_URL".to_string(),
@@ -684,6 +694,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "mysql".to_string(),
             image: "mysql:8".to_string(),
             port: 3306,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([
                 ("MYSQL_DATABASE".to_string(), "loom_app".to_string()),
                 ("MYSQL_USER".to_string(), "loom".to_string()),
@@ -707,6 +718,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "mongodb".to_string(),
             image: "mongo:8".to_string(),
             port: 27017,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([("MONGO_INITDB_DATABASE".to_string(), "loom_app".to_string())]),
             connection_env: BTreeMap::from([(
                 "MONGODB_URL".to_string(),
@@ -721,6 +733,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "rabbitmq".to_string(),
             image: "rabbitmq:3-management-alpine".to_string(),
             port: 5672,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([
                 ("RABBITMQ_DEFAULT_USER".to_string(), "loom".to_string()),
                 ("RABBITMQ_DEFAULT_PASS".to_string(), "loom".to_string()),
@@ -738,6 +751,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "elasticsearch".to_string(),
             image: "docker.elastic.co/elasticsearch/elasticsearch:8.15.0".to_string(),
             port: 9200,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([
                 ("discovery.type".to_string(), "single-node".to_string()),
                 ("xpack.security.enabled".to_string(), "false".to_string()),
@@ -755,6 +769,7 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             service_name: "minio".to_string(),
             image: "minio/minio:latest".to_string(),
             port: 9000,
+            startup_requirement: "required".to_string(),
             env: BTreeMap::from([
                 ("MINIO_ROOT_USER".to_string(), "loom".to_string()),
                 (
@@ -772,6 +787,70 @@ pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyServi
             reason: "Declared by structured RuntimeDeliveryContract dependency facts.".to_string(),
         },
     }
+}
+
+fn service_definition_for_dependency(
+    kind: DependencyServiceKind,
+    dependency: &Value,
+) -> DependencyService {
+    let mut service = service_definition(kind);
+    let service_name = dependency_service_name(dependency, kind);
+    service.service_name = service_name.clone();
+    service.startup_requirement = dependency
+        .get("startupRequirement")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "required" | "optional" | "not_applicable"))
+        .unwrap_or("required")
+        .to_string();
+    if kind == DependencyServiceKind::Redis && service_name != "redis" {
+        service.connection_env.insert(
+            "REDIS_URL".to_string(),
+            format!("redis://{service_name}:{}", service.port),
+        );
+    }
+    if kind == DependencyServiceKind::Redis && dependency_has_persistent_capability(dependency) {
+        service.volume_name = Some(format!("loom_{service_name}_data"));
+        service.volume_target = Some("/data".to_string());
+    }
+    service
+}
+
+fn dependency_service_name(dependency: &Value, kind: DependencyServiceKind) -> String {
+    let default_name = match kind {
+        DependencyServiceKind::Redis => "redis",
+        DependencyServiceKind::Postgres => "postgres",
+        DependencyServiceKind::Mysql => "mysql",
+        DependencyServiceKind::Mongodb => "mongodb",
+        DependencyServiceKind::Rabbitmq => "rabbitmq",
+        DependencyServiceKind::Elasticsearch => "elasticsearch",
+        DependencyServiceKind::Minio => "minio",
+    };
+    let Some(dependency_id) = dependency.get("dependencyId").and_then(Value::as_str) else {
+        return default_name.to_string();
+    };
+    let suffix = dependency_id
+        .strip_prefix("runtime_")
+        .unwrap_or(dependency_id)
+        .split('_')
+        .skip_while(|part| *part == default_name)
+        .collect::<Vec<_>>()
+        .join("_");
+    if suffix.is_empty() {
+        default_name.to_string()
+    } else {
+        format!("{default_name}_{suffix}")
+    }
+}
+
+fn dependency_has_persistent_capability(dependency: &Value) -> bool {
+    dependency
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.get("durability").and_then(Value::as_str) == Some("persistent")
+            })
+        })
 }
 
 fn string_at(value: &Value, path: &[&str]) -> Option<String> {
@@ -913,6 +992,67 @@ mod tests {
         assert!(runtime_requires_public_frontend_api_topology(
             &runtime, None, None, None
         ));
+    }
+
+    #[test]
+    fn redis_capability_durability_controls_volume_projection() {
+        let base = json!({
+            "status": "modified",
+            "runtimeKind": "python",
+            "commands": {"development": {"start": {"port": 8000}}},
+            "httpProbes": {"previewPath": "/", "expectedStatus": "2xx_or_3xx"},
+            "environment": {"required": [], "optional": []}
+        });
+        let mut ephemeral = base.clone();
+        ephemeral["runtimeDependencies"] = json!([{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "optional",
+            "capabilities": [{
+                "capabilityId": "redis_cache_0",
+                "purpose": "cache",
+                "durability": "ephemeral",
+                "startupRequirement": "optional"
+            }]
+        }]);
+        let ephemeral_contract =
+            runtime_contract_from_value_with_api_contract(&ephemeral, None, None)
+                .expect("ephemeral Redis runtime contract");
+        let ephemeral_redis = ephemeral_contract
+            .dependency_services
+            .iter()
+            .find(|service| service.kind == DependencyServiceKind::Redis)
+            .expect("ephemeral Redis service");
+        assert_eq!(ephemeral_redis.startup_requirement, "optional");
+        assert!(ephemeral_redis.volume_name.is_none());
+
+        let mut persistent = base;
+        persistent["runtimeDependencies"] = json!([{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "required",
+            "capabilities": [{
+                "capabilityId": "redis_session_0",
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
+        }]);
+        let persistent_contract =
+            runtime_contract_from_value_with_api_contract(&persistent, None, None)
+                .expect("persistent Redis runtime contract");
+        let persistent_redis = persistent_contract
+            .dependency_services
+            .iter()
+            .find(|service| service.kind == DependencyServiceKind::Redis)
+            .expect("persistent Redis service");
+        assert_eq!(persistent_redis.startup_requirement, "required");
+        assert_eq!(
+            persistent_redis.volume_name.as_deref(),
+            Some("loom_redis_data")
+        );
     }
 }
 

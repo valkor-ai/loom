@@ -699,7 +699,7 @@ fn technical_baseline_selection_guidance(
         },
         "confirmationRules": confirmation_rules(has_previous_baseline),
         "trackModel": {
-            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. When web is selected, also include qualityAutomation. Each track should include status, selection, source, and rationale.",
+            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. When web is selected, also include qualityAutomation. Each track should include status, selection, source, and rationale. A selected externalServices track must also include structured providers with confirmed capability roles.",
             "trackStatusValues": ["selected", "not_needed", "not_applicable", "user_custom"],
             "sourceValues": ["agent_recommended_user_confirmed", "user_adjusted", "user_specified", "previous_baseline", "not_applicable"],
             "coreTracks": ["web", "app", "backend", "persistence", "dataAccess", "externalServices"],
@@ -733,6 +733,8 @@ fn technical_baseline_selection_guidance(
                 "Do not omit the adjustable technology range.",
                 "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
                 "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
+                "When externalServices includes Redis, explain the business role in plain language, allow multiple roles, and ask only the persistence or startup questions needed by the selected roles.",
+                "Do not ask users to choose Redis data structures, TTL values, Lua scripts, or Compose settings during TechnicalBaseline confirmation; those decisions belong to Architecture.",
                 "Do not mention Loom internals, gates, submit permission, workflow blocking, or phrases like Loom allows, Loom requires, Loom is stuck, or Loom will not continue in user-facing text.",
                 "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess."
             ]
@@ -760,7 +762,16 @@ fn technical_baseline_selection_guidance(
             },
             "externalServices": {
                 "label": "External services",
-                "examples": ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"]
+                "examples": ["None", "Redis for cache, sessions, or background jobs", "User specified", "Only recommend services explicitly required by the confirmed requirement"],
+                "capabilityRoles": {
+                    "redis": [
+                        "Login state and shared sessions",
+                        "Background jobs and message processing",
+                        "Query result acceleration",
+                        "Atomic locks or rate limiting"
+                    ]
+                },
+                "confirmationRule": "Show only capability roles supported by the confirmed requirement. Allow multiple roles. Do not choose a Redis role from a keyword alone; ask the user when the role is ambiguous."
             },
             "qualityAutomation": {
                 "label": "Browser quality automation",
@@ -793,6 +804,7 @@ fn technical_baseline_selection_guidance(
             "acceptRecommendation": "确认推荐方案",
             "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, qualityAutomation=Playwright, app=不需要, externalServices=不需要",
             "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
+            "redisCapabilityExample": "externalServices=Redis，用于登录会话和后台任务；登录会话重启后保留，后台任务失败可重试",
             "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
         }
     }))
@@ -1088,6 +1100,7 @@ fn validate_candidate(
             "stack must be a JSON object that describes the selected technology baseline.",
         ));
     }
+    validate_external_services_track(&candidate.stack, &mut issues);
     if candidate.approval.r#type == TechnicalBaselineApprovalType::None
         && matches!(candidate.status, TechnicalBaselineStatus::Confirmed)
     {
@@ -1101,6 +1114,28 @@ fn validate_candidate(
         validate_new_project_candidate(candidate, &mut issues);
     }
     issues
+}
+
+fn validate_external_services_track(stack: &Value, issues: &mut Vec<delivery_core::RepairIssue>) {
+    let Some(track) = stack
+        .pointer("/tracks/externalServices")
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let status = track
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(status, "selected" | "user_custom")
+        && !external_services_track_complete(track, status)
+    {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_EXTERNAL_SERVICES_UNSTRUCTURED",
+            "stack.tracks.externalServices.providers",
+            "A selected externalServices track must include at least one provider with one or more structured capability roles, each declaring purpose, durability, and startupRequirement.",
+        ));
+    }
 }
 
 const NEW_PROJECT_CORE_TRACKS: [&str; 6] = [
@@ -1149,7 +1184,7 @@ fn validate_new_project_candidate(
         issues.push(issue(
             "NEW_PROJECT_BASELINE_TRACKS_INCOMPLETE",
             "stack.tracks",
-            "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
+            "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection. A selected externalServices track must provide structured providers and capability roles.",
         ));
     }
     if new_project_web_selected(&candidate.stack)
@@ -1181,8 +1216,63 @@ fn new_project_stack_tracks_complete(stack: &Value) -> bool {
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        NEW_PROJECT_TRACK_STATUSES.contains(&status) && !selection.is_empty()
+        let track_valid = NEW_PROJECT_TRACK_STATUSES.contains(&status) && !selection.is_empty();
+        track_valid
+            && (*track != "externalServices" || external_services_track_complete(value, status))
     })
+}
+
+fn external_services_track_complete(track: &serde_json::Map<String, Value>, status: &str) -> bool {
+    let Some(providers) = track.get("providers") else {
+        return !matches!(status, "selected" | "user_custom");
+    };
+    let Some(providers) = providers.as_array() else {
+        return false;
+    };
+    if !matches!(status, "selected" | "user_custom") {
+        return providers.is_empty();
+    }
+    !providers.is_empty()
+        && providers.iter().all(|provider| {
+            let Some(provider) = provider.as_object() else {
+                return false;
+            };
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) else {
+                return false;
+            };
+            !provider_name.is_empty()
+                && !capabilities.is_empty()
+                && capabilities.iter().all(|capability| {
+                    let Some(capability) = capability.as_object() else {
+                        return false;
+                    };
+                    let purpose = capability
+                        .get("purpose")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let durability = capability
+                        .get("durability")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let startup_requirement = capability
+                        .get("startupRequirement")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    matches!(
+                        purpose,
+                        "cache" | "session" | "queue" | "stream" | "lock_rate_limit"
+                    ) && matches!(durability, "ephemeral" | "persistent")
+                        && matches!(
+                            startup_requirement,
+                            "required" | "optional" | "not_applicable"
+                        )
+                })
+        })
 }
 
 fn new_project_web_selected(stack: &Value) -> bool {
@@ -1269,6 +1359,7 @@ struct StableStack {
     frameworks: BTreeSet<String>,
     package_managers: BTreeSet<String>,
     databases: BTreeSet<String>,
+    external_services: BTreeSet<String>,
     tracks: BTreeSet<String>,
 }
 
@@ -1287,8 +1378,54 @@ fn normalize_stack_for_comparison(stack: &Value) -> StableStack {
         ),
         package_managers: values_for_keys(stack, &["packageManager", "packageManagers"]),
         databases: values_for_keys(stack, &["database", "databases", "databaseProvider"]),
+        external_services: external_service_values(stack),
         tracks: stack_track_selections_for_comparison(stack),
     }
+}
+
+fn external_service_values(stack: &Value) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    let Some(track) = stack.pointer("/tracks/externalServices") else {
+        return values;
+    };
+    if let Some(providers) = track.get("providers").and_then(Value::as_array) {
+        for provider in providers {
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            for capability in provider
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let purpose = capability
+                    .get("purpose")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                let durability = capability
+                    .get("durability")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                let startup = capability
+                    .get("startupRequirement")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                values.insert(format!("{provider_name}:{purpose}:{durability}:{startup}"));
+            }
+        }
+    } else if let Some(selection) = track.get("selection").and_then(Value::as_str) {
+        let normalized = normalize_stack_token(selection);
+        if !normalized.is_empty() {
+            values.insert(normalized);
+        }
+    }
+    values
 }
 
 fn values_for_keys(value: &Value, keys: &[&str]) -> BTreeSet<String> {
