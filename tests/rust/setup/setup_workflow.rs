@@ -515,6 +515,9 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/frontend/{file}.md"))
                 .exists());
         }
+        assert!(root.join("skills/godot/SKILL.md").exists());
+        assert!(root.join("skills/godot/mcp-driver/SKILL.md").exists());
+        assert!(root.join("skills/godot/reviewer/physics/SKILL.md").exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -596,6 +599,14 @@ fn install_projects_shared_references_to_agent_read_paths() {
             .join(format!("references/loom/tech/frontend/{file}.md"))
             .exists());
     }
+    assert!(env
+        .opencode_home
+        .join("references/loom/skills/godot/SKILL.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/skills/godot/reviewer/ui/SKILL.md")
+        .exists());
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
     assert!(env
         .opencode_home
@@ -945,6 +956,12 @@ fn package_layout_copies_current_runtime_and_plugin_sources() {
         .is_file());
     assert!(package
         .join("plugins/shared/loom/references/uix/core.md")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom/skills/godot/SKILL.md")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom/skills/godot/reviewer/animation/SKILL.md")
         .is_file());
     assert!(package
         .join("plugins/shared/loom-deploy/references/compose.md")
@@ -2457,6 +2474,7 @@ impl Fixture {
         self.write_claude_template();
         self.write_opencode_template();
         self.write_shared_references();
+        self.write_shared_skills();
         let manifest = ReleaseManifest::for_platform(TargetPlatform::DarwinArm64);
         write_json(&self.package_root.join("manifest.json"), &manifest);
         self.write_checksums();
@@ -2682,6 +2700,36 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom-deploy/references/{name}.md")),
                 &format!("# {name} Reference\n"),
+            );
+        }
+    }
+
+    fn write_shared_skills(&self) {
+        for path in [
+            "godot/SKILL.md",
+            "godot/godot-api/SKILL.md",
+            "godot/godot-e2e/SKILL.md",
+            "godot/gdunit-driver/SKILL.md",
+            "godot/headless-build/SKILL.md",
+            "godot/input-mapper/SKILL.md",
+            "godot/mcp-driver/SKILL.md",
+            "godot/project-scaffold/SKILL.md",
+            "godot/screenshot/SKILL.md",
+            "godot/visual-qa/SKILL.md",
+            "godot/reviewer/animation/SKILL.md",
+            "godot/reviewer/audio/SKILL.md",
+            "godot/reviewer/navigation/SKILL.md",
+            "godot/reviewer/particles/SKILL.md",
+            "godot/reviewer/physics/SKILL.md",
+            "godot/reviewer/shader/SKILL.md",
+            "godot/reviewer/tilemap/SKILL.md",
+            "godot/reviewer/ui/SKILL.md",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/skills/{path}")),
+                &format!("# {path} Skill\n"),
             );
         }
     }

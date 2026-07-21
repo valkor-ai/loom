@@ -7,6 +7,8 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">技术报告</a>
     ·
+    <a href="./docs/godot.zh-CN.md">Godot</a>
+    ·
     <a href="./docs/use-cases.zh-CN.md">使用场景</a>
     ·
     <a href="#快速开始">快速开始</a>
@@ -43,6 +45,7 @@ Loom 会保存关键项目状态：需求、任务进度、测试结果、运行
 
 - **即将推出：** V-SEFM，一个面向软件交付的验证模型，正在准备中。细节后续公布。
 - **2026 年 7 月：** Loom 已将 MCP runtime 从 TypeScript 迁移到 Rust，让核心更小、更快。
+- **2026 年 7 月：** Loom 现已支持通过 Godot MCP 开发 Godot 项目。[安装指导](./docs/godot.zh-CN.md)
 
 ## 为什么需要 Harness？
 
