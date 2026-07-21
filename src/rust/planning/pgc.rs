@@ -112,6 +112,25 @@ where
             })),
         }));
     }
+    if !matches!(
+        brainstorm.security_requirement.applies,
+        contracts::SecurityRequirementApplicability::NotApplicable
+    ) && baseline.security_profiles.is_empty()
+    {
+        return Ok(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+            project_root: project_root.to_string(),
+            blockers: vec![
+                "The accepted security requirement is protected, but TechnicalBaseline has no complete security profile.".to_string(),
+            ],
+            recommended_tool: Some("loom.continue".to_string()),
+            details: Some(json!({
+                "deliveryId": delivery_id,
+                "phaseId": phase_id,
+                "securityRequirement": brainstorm.security_requirement,
+                "technicalBaselineRef": baseline_ref
+            })),
+        }));
+    }
     if matches!(baseline.project_kind, ProjectKind::ExistingProject)
         && repository_context_ref.is_none()
     {
@@ -241,7 +260,13 @@ where
             technical_baseline_id: baseline.technical_baseline_id.clone(),
             status: baseline.status,
             scope: baseline.scope,
-            summary: baseline.stack.clone(),
+            summary: json!({
+                "stack": baseline.stack,
+                "securityProfiles": baseline.security_profiles,
+                "securityRequirement": brainstorm.security_requirement
+            }),
+            security_profiles: baseline.security_profiles.clone(),
+            security_requirement: brainstorm.security_requirement.clone(),
             must_follow: true,
         },
         planning_inputs,

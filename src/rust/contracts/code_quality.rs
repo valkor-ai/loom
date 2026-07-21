@@ -2766,6 +2766,7 @@ mod tests {
             project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack,
+            security_profiles: vec![],
             constraints: vec![],
             evidence: vec![],
             approval: TechnicalBaselineApproval {

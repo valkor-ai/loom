@@ -257,6 +257,10 @@ pub struct ApiContractRequirement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interface_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_profile_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementation_obligations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,

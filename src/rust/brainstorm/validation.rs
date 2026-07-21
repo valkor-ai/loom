@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use contracts::{
     BrainstormCandidateAgentWritable, ClarificationBlockName, ClarificationProgress,
     FrontendExperience, GlossaryUpdateOperation, NextPhasePreview,
+    SecurityRequirementApplicability,
 };
 use delivery_core::RepairIssue;
 use serde_json::Value;
@@ -338,11 +339,57 @@ pub fn validate_candidate(
         ));
     }
     validate_glossary_updates(candidate, &mut issues);
+    validate_security_requirement(candidate, request_source_ids, &mut issues);
     if let Some(frontend) = &candidate.frontend_experience {
         validate_frontend_source_refs(frontend, request_source_ids, &mut issues);
     }
     validate_nested_source_refs(candidate, request_source_ids, &mut issues);
     issues
+}
+
+fn validate_security_requirement(
+    candidate: &BrainstormCandidateAgentWritable,
+    request_source_ids: &BTreeSet<String>,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let requirement = &candidate.security_requirement;
+    if requirement.rationale.trim().is_empty() {
+        issues.push(issue(
+            "SECURITY_REQUIREMENT_RATIONALE_REQUIRED",
+            "securityRequirement.rationale",
+            "securityRequirement must explain why authentication is or is not applicable to the confirmed scope.",
+        ));
+    }
+    if matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    ) && !requirement.client_trust_models.is_empty()
+    {
+        issues.push(issue(
+            "SECURITY_REQUIREMENT_TRUST_MODEL_INVALID",
+            "securityRequirement.clientTrustModels",
+            "A not_applicable security requirement must not declare a client trust model.",
+        ));
+    }
+    if !matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    ) && requirement.client_trust_models.is_empty()
+    {
+        issues.push(issue(
+            "SECURITY_REQUIREMENT_TRUST_MODEL_REQUIRED",
+            "securityRequirement.clientTrustModels",
+            "A protected or deferred security requirement must identify the client trust model that needs protection.",
+        ));
+    }
+    for source_ref in &requirement.source_refs {
+        validate_source_ref(
+            source_ref,
+            "securityRequirement.sourceRefs",
+            request_source_ids,
+            issues,
+        );
+    }
 }
 
 fn validate_glossary_updates(

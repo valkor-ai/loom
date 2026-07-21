@@ -532,7 +532,8 @@ fn build_execution_request(
     let mut source_context = json!({
         "technicalBaseline": {
             "projectKind": baseline.project_kind,
-            "stack": baseline.stack
+            "stack": baseline.stack,
+            "securityProfiles": baseline.security_profiles
         },
         "architectureArtifactProjection": architecture_projection,
         "acceptanceSnapshot": pgc.phase_scope.acceptance_candidates.iter()
@@ -858,6 +859,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     }
     if !task.api_contract_requirement_refs.is_empty() {
         rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+        rules.push("For a protected API requirement, use only the referenced securityProfileRefs and the matching sourceContext.technicalBaseline.securityProfiles entry. Read every file in the requirement referenceLoadPlan, including tech/api/jwt.md when selected; do not choose an algorithm, issuer, audience, or token transport in the task result.".to_string());
         rules.push("The apiContractEvidence template starts as not_verified. Set status=satisfied only after the assigned API behavior has concrete passed verification evidence; for completed or completed_with_notes results, keep knownGaps empty and explain non-applicable checks in summary instead of recording a gap.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
@@ -916,6 +918,7 @@ fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
         "implementationRules": [
             "Before editing API or client binding code, compare sourceContext.apiContractRequirements with the task-owned AAC interfaces.",
             "Keep method, path, request schema, response schema, status code categories, error schema, auth policy, and pagination policy aligned with the AAC interface.",
+            "For protected interfaces, keep securityProfileRef and the selected profile's mechanism, algorithm, key source, transport, issuer, audience, and claims aligned; do not widen or replace the canonical profile.",
             "Do not replace business errors with generic 500 responses or silent success.",
             "Do not add versioned paths or OpenAPI files unless the AAC interface or requirement explicitly declares them."
         ],

@@ -2,6 +2,8 @@
 
 Implement the authentication and authorization policy already owned by the current interfaces and architecture. Do not introduce JWT, OAuth2, sessions, roles, refresh tokens, or account management when protected operations are not part of the task.
 
+The accepted JWT algorithm, issuer, audience, token type, and key-source contract lives in `tech/api/jwt.md`. This file owns Spring Security wiring and framework-specific verification only.
+
 ## Security Mechanism Boundary
 
 Choose the mechanism from the accepted baseline and existing repository:
@@ -41,7 +43,7 @@ Do not disable CSRF by habit. Stateless bearer-token APIs that do not authentica
 
 - Store passwords with the repository's selected adaptive encoder; never plaintext or reversible encryption.
 - Externalize issuer, audience, JWK location, client credentials, signing material, token lifetime, and allowed clock skew.
-- Validate issuer, audience, expiry, signature, and token type required by the contract.
+- Map the selected `tech/api/jwt.md` contract into Spring's resource-server validation; do not widen algorithms or claims in framework configuration.
 - Never log bearer tokens, refresh tokens, passwords, authorization headers, or decoded sensitive claims.
 - Keep production credentials out of default application configuration; placeholders and environment bindings are allowed.
 

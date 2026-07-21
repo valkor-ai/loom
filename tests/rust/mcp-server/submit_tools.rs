@@ -13412,6 +13412,7 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
             "backend": "spring-boot",
             "database": "postgres"
         },
+        "securityProfiles": [],
         "constraints": [],
         "evidence": [{
             "path": if project_kind == "existing_project" { json!("package.json") } else { Value::Null },
@@ -13482,6 +13483,7 @@ fn new_project_technical_baseline_candidate_json() -> Value {
                 }
             }
         },
+        "securityProfiles": [],
         "constraints": [],
         "evidence": [{
             "path": Value::Null,
@@ -13675,6 +13677,12 @@ fn valid_candidate_json() -> Value {
                 "kind": "none",
                 "reason": "下一阶段在当前提交之外处理。"
             }
+        },
+        "securityRequirement": {
+            "applies": "not_applicable",
+            "clientTrustModels": [],
+            "sourceRefs": [],
+            "rationale": "当前阶段没有受保护接口。"
         },
         "acceptance": [{
             "id": "acc_1",

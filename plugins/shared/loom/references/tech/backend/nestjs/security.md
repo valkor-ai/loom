@@ -2,6 +2,8 @@
 
 Implement only the accepted identity and authorization model. NestJS guards, Passport strategies, JWT helpers, and metadata are mechanisms; they do not decide whether the product uses sessions, bearer tokens, gateway identity, API keys, or another trust boundary.
 
+The accepted JWT profile and API denial behavior live in `tech/api/jwt.md`; this file owns NestJS guards, Passport strategy wiring, and policy composition.
+
 ## Authentication Boundary
 
 Preserve the selected mechanism and repository conventions:
@@ -38,7 +40,7 @@ Role checks alone are insufficient for tenant, owner, relationship, or object-st
 
 ## JWT And Token Lifecycle
 
-Validate secret/key material and algorithm configuration at startup. For asymmetric tokens, use the trusted key source and define issuer, audience, clock tolerance, and key-rotation behavior. Never accept an algorithm or key from untrusted token headers without policy.
+Map the selected `tech/api/jwt.md` profile to validated startup configuration and the repository's Passport/resource-server strategy. Never accept an algorithm or key from untrusted token headers without policy.
 
 Keep access tokens short-lived according to the accepted security contract. Refresh tokens need explicit rotation, reuse detection, storage/hashing, revocation, device/session handling, and logout semantics. Do not issue a long-lived signed token and call it a refresh workflow.
 

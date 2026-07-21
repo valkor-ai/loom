@@ -2,7 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AcceptanceCandidate, FrontendExperience, ScopeItem, UserFacingLanguageConstraint};
+use crate::{
+    AcceptanceCandidate, FrontendExperience, ScopeItem, SecurityRequirement,
+    UserFacingLanguageConstraint,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +92,66 @@ pub struct TechnicalBaselineAlternative {
     pub tradeoff: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityMechanism {
+    None,
+    BearerJwt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum SecurityAlgorithm {
+    #[serde(rename = "RS256")]
+    Rs256,
+    #[serde(rename = "ES256")]
+    Es256,
+    #[serde(rename = "EdDSA")]
+    EdDsa,
+    #[serde(rename = "HS256")]
+    Hs256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityKeySource {
+    ExistingIdp,
+    EnvironmentSecret,
+    FileMountedKey,
+    Kms,
+    UserSpecified,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityTransport {
+    BearerHeader,
+    SameOriginCookie,
+    MutualTls,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityProfile {
+    pub profile_id: String,
+    pub name: String,
+    pub mechanism: SecurityMechanism,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<SecurityAlgorithm>,
+    pub key_source: SecurityKeySource,
+    pub transport: SecurityTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audiences: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
+    pub rationale: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TechnicalBaselineCandidateAgentWritable {
@@ -97,6 +160,8 @@ pub struct TechnicalBaselineCandidateAgentWritable {
     pub project_kind: ProjectKind,
     pub scope: TechnicalBaselineScope,
     pub stack: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_profiles: Vec<SecurityProfile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -123,6 +188,8 @@ pub struct TechnicalBaselineContract {
     pub project_kind: ProjectKind,
     pub scope: TechnicalBaselineScope,
     pub stack: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_profiles: Vec<SecurityProfile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -521,6 +588,9 @@ pub struct PlanningContractTechnicalBaseline {
     pub status: TechnicalBaselineStatus,
     pub scope: TechnicalBaselineScope,
     pub summary: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_profiles: Vec<SecurityProfile>,
+    pub security_requirement: SecurityRequirement,
     pub must_follow: bool,
 }
 

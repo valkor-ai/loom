@@ -1270,6 +1270,7 @@ importers:
             project_kind: contracts::ProjectKind::ExistingProject,
             scope: TechnicalBaselineScope::Project,
             stack,
+            security_profiles: vec![],
             constraints: vec![],
             evidence: vec![],
             approval: TechnicalBaselineApproval {

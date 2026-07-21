@@ -78,6 +78,7 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/api/contract.md",
     "plugins/shared/loom/references/tech/api/core.md",
     "plugins/shared/loom/references/tech/api/errors.md",
+    "plugins/shared/loom/references/tech/api/jwt.md",
     "plugins/shared/loom/references/tech/api/evolution.md",
     "plugins/shared/loom/references/tech/api/operations.md",
     "plugins/shared/loom/references/tech/api/pagination.md",

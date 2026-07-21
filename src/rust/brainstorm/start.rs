@@ -268,6 +268,13 @@ fn initial_contract(
                     .to_string(),
             },
         },
+        security_requirement: contracts::SecurityRequirement {
+            applies: contracts::SecurityRequirementApplicability::NotApplicable,
+            client_trust_models: vec![],
+            source_refs: vec![],
+            rationale: "Security applicability will be confirmed during requirement clarification."
+                .to_string(),
+        },
         concept_grounding: None,
         concept_confirmation: None,
         clarification_progress: None,

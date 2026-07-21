@@ -3859,6 +3859,8 @@ fn build_api_contract_review_matrix(
                     "taskId": task_id,
                     "taskResultId": result.map(|result| result.task_result_id.clone()),
                     "interfaceRefs": requirement.interface_refs,
+                    "securityProfileRefs": requirement.security_profile_refs,
+                    "referenceLoadPlan": requirement.reference_load_plan,
                     "implementationObligations": requirement.implementation_obligations,
                     "verificationObligations": requirement.verification_obligations,
                     "apiContractEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
@@ -3903,6 +3905,7 @@ fn compact_api_interface_for_review(interface: &Value) -> Value {
         "path": interface.get("path").cloned().unwrap_or(Value::Null),
         "operationKind": interface.get("operationKind").cloned().unwrap_or(Value::Null),
         "statusCodes": interface.get("statusCodes").cloned().unwrap_or(Value::Null),
+        "authPolicy": interface.get("authPolicy").cloned().unwrap_or(Value::Null),
         "requestFieldCount": interface
             .get("requestSchema")
             .and_then(Value::as_array)

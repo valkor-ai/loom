@@ -854,7 +854,7 @@ where
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements =
-        normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
+        normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs, &baseline);
     normalize_structured_verification_intents(&aac, &mut tasks);
     normalize_task_verification_detail_refs(&mut tasks, &pgc, &aac);
     let code_quality_requirements =
@@ -6272,6 +6272,7 @@ fn normalize_api_contract_requirements(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
     allowed_refs: &Value,
+    baseline: &contracts::TechnicalBaselineContract,
 ) -> Vec<ApiContractRequirement> {
     let http_api_refs = aac
         .interfaces
@@ -6348,7 +6349,27 @@ fn normalize_api_contract_requirements(
             requirement_id,
             kind: "api_contract".to_string(),
             applies_to_task_ids: vec![task.task_id.clone()],
-            interface_refs,
+            interface_refs: interface_refs.clone(),
+            security_profile_refs: interface_refs
+                .iter()
+                .filter_map(|interface_ref| {
+                    aac.interfaces
+                        .iter()
+                        .find(|interface| {
+                            string_at(interface, "interfaceId").as_deref() == Some(interface_ref)
+                        })
+                        .and_then(|interface| {
+                            interface
+                                .pointer("/authPolicy/securityProfileRef")
+                                .and_then(Value::as_str)
+                                .filter(|profile_ref| !profile_ref.trim().is_empty())
+                                .map(str::to_string)
+                        })
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            reference_load_plan: api_security_reference_load_plan(aac, &interface_refs, baseline),
             implementation_obligations: api_contract_implementation_obligations(),
             verification_obligations: api_contract_verification_obligations(),
         });
@@ -6359,6 +6380,60 @@ fn normalize_api_contract_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn api_security_reference_load_plan(
+    aac: &ArchitectureArtifactContract,
+    interface_refs: &[String],
+    baseline: &contracts::TechnicalBaselineContract,
+) -> Vec<ReferenceLoadPlanItem> {
+    let profile_mechanisms = baseline
+        .security_profiles
+        .iter()
+        .map(|profile| (profile.profile_id.as_str(), profile.mechanism))
+        .collect::<BTreeMap<_, _>>();
+    let protected_profiles = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| {
+            interface_refs
+                .iter()
+                .any(|interface_ref| {
+                    string_at(interface, "interfaceId").as_deref() == Some(interface_ref)
+                })
+                .then(|| {
+                    interface
+                        .pointer("/authPolicy/required")
+                        .and_then(Value::as_str)
+                        .filter(|required| {
+                            matches!(*required, "required" | "optional" | "deferred_with_risk")
+                        })
+                        .and_then(|_| interface.pointer("/authPolicy/securityProfileRef"))
+                        .and_then(Value::as_str)
+                        .and_then(|profile_ref| profile_mechanisms.get(profile_ref).copied())
+                })
+        })
+        .collect::<Vec<_>>();
+    if protected_profiles.is_empty() {
+        return vec![];
+    }
+    let mut plan = vec![ReferenceLoadPlanItem {
+        ref_id: "tech.api.security".to_string(),
+        path: "tech/api/security.md".to_string(),
+        reason: "Selected API security contract for protected interfaces.".to_string(),
+    }];
+    if protected_profiles
+        .iter()
+        .any(|mechanism| matches!(mechanism, Some(contracts::SecurityMechanism::BearerJwt)))
+    {
+        plan.push(ReferenceLoadPlanItem {
+            ref_id: "tech.api.jwt".to_string(),
+            path: "tech/api/jwt.md".to_string(),
+            reason: "Selected JWT API contract for interfaces bound to a bearer JWT profile."
+                .to_string(),
+        });
+    }
+    plan
 }
 
 fn normalize_structured_verification_intents(
@@ -6554,11 +6629,10 @@ fn interface_has_idempotency(interface: &Value) -> bool {
 }
 
 fn interface_requires_auth(interface: &Value) -> bool {
-    match interface.pointer("/authPolicy/required") {
-        Some(Value::Bool(value)) => *value,
-        Some(Value::String(value)) => !matches!(value.as_str(), "" | "not_applicable" | "none"),
-        _ => false,
-    }
+    interface
+        .pointer("/authPolicy/required")
+        .and_then(Value::as_str)
+        .is_some_and(|value| matches!(value, "required" | "optional" | "deferred_with_risk"))
 }
 
 fn is_mutating_interface(method: &str) -> bool {
@@ -6699,14 +6773,10 @@ fn task_has_implementation_action(task: &TaskDefinition, expected: Implementatio
 }
 
 fn interface_requires_security(interface: &Value) -> bool {
-    match interface.pointer("/authPolicy/required") {
-        Some(Value::Bool(required)) => *required,
-        Some(Value::String(required)) => !matches!(
-            required.as_str(),
-            "" | "none" | "not_applicable" | "not_required" | "false"
-        ),
-        _ => false,
-    }
+    interface
+        .pointer("/authPolicy/required")
+        .and_then(Value::as_str)
+        .is_some_and(|required| matches!(required, "required" | "optional" | "deferred_with_risk"))
 }
 
 fn interaction_requires_security(interaction: &Value) -> bool {
@@ -7775,7 +7845,12 @@ mod tests {
             "dataModel": {},
             "interfaces": [{
                 "interfaceId": "api-orders-create",
-                "authPolicy": {"required": true}
+                "authPolicy": {
+                    "required": "required",
+                    "securityProfileRef": "security-api-default",
+                    "actorRefs": [],
+                    "permissionRefs": []
+                }
             }, {
                 "interfaceId": "api-cache-hints-only",
                 "cachePolicy": {"strategy": "private", "validators": ["etag"]},

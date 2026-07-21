@@ -1,8 +1,10 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
-    BrainstormContract, ProjectKind, TechnicalBaselineApprovalType,
-    TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
+    BrainstormContract, ProjectKind, SecurityAlgorithm, SecurityKeySource, SecurityMechanism,
+    SecurityRequirement, SecurityRequirementApplicability, SecurityTransport,
+    TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
+    TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
@@ -189,6 +191,7 @@ fn build_request_root(
             "stack": previous.stack,
             "constraints": previous.constraints,
             "confidence": previous.confidence,
+            "securityProfiles": previous.security_profiles,
             "updatedAt": previous.updated_at
         })
     });
@@ -198,6 +201,13 @@ fn build_request_root(
     let baseline_context_fields =
         technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
     let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
+    let mut security_selection_fields = vec!["selectionGuidance"];
+    if !matches!(
+        brainstorm.security_requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    ) {
+        security_selection_fields.extend(["securityRequirement", "securityProfileGuidance"]);
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
@@ -258,6 +268,11 @@ fn build_request_root(
             "includedScopeRefs": brainstorm.phase_plan.current.scope_refs,
             "acceptanceRefs": brainstorm.phase_plan.current.acceptance_refs,
         },
+        "securityRequirement": brainstorm.security_requirement,
+        "securityProfileGuidance": security_profile_guidance(
+            &brainstorm.security_requirement.applies,
+            baseline_exists,
+        ),
         "decisionNeeds": technical_baseline_decision_needs(project_kind, baseline_exists),
         "previousBaselineContext": previous_baseline_context,
         "constraints": {
@@ -274,7 +289,11 @@ fn build_request_root(
             "source": ["user_specified", "user_confirmed", "detected_from_repo", "agent_inferred_from_repo_signals", "agent_recommended_for_new_project"],
             "scope": ["project", "roadmap", "phase_override"],
             "approvalType": ["user_confirmed", "policy_auto_accept", "manual_override", "none"],
-            "confidence": ["low", "medium", "high", "unknown"]
+            "confidence": ["low", "medium", "high", "unknown"],
+            "securityMechanism": ["none", "bearer_jwt"],
+            "securityAlgorithm": ["RS256", "ES256", "EdDSA", "HS256"],
+            "securityKeySource": ["existing_idp", "environment_secret", "file_mounted_key", "kms", "user_specified", "not_applicable"],
+            "securityTransport": ["bearer_header", "same_origin_cookie", "mutual_tls", "not_applicable"]
         },
         "rules": {
             "context": [
@@ -305,6 +324,7 @@ fn build_request_root(
                     "projectKind",
                     "scope",
                     "stack",
+                    "securityProfiles",
                     "approval",
                     "confidence"
                 ]
@@ -328,12 +348,14 @@ fn build_request_root(
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
-                    "required": selection_guidance.is_some(),
+                    "required": selection_guidance.is_some()
+                        || !matches!(
+                            brainstorm.security_requirement.applies,
+                            SecurityRequirementApplicability::NotApplicable
+                        ),
                     "purpose": "Read the new-project confirmation discipline before asking the user to confirm the baseline.",
                     "whenToRead": "Read only when the projectKind is new_project or the baseline still needs explicit user confirmation.",
-                    "selectors": read_selectors_value_from_paths([
-                        "selectionGuidance"
-                    ])
+                    "selectors": read_selectors_value_from_paths(security_selection_fields)
                 },
                 {
                     "groupId": "technical_baseline_write_contract",
@@ -349,12 +371,70 @@ fn build_request_root(
                         "enumRefs.source",
                         "enumRefs.scope",
                         "enumRefs.approvalType",
-                        "enumRefs.confidence"
+                        "enumRefs.confidence",
+                        "enumRefs.securityMechanism",
+                        "enumRefs.securityAlgorithm",
+                        "enumRefs.securityKeySource",
+                        "enumRefs.securityTransport"
                     ])
                 }
             ]
         }
     })
+}
+
+fn security_profile_guidance(
+    applicability: &SecurityRequirementApplicability,
+    has_previous_baseline: bool,
+) -> Value {
+    let protected_scope = !matches!(
+        applicability,
+        SecurityRequirementApplicability::NotApplicable
+    );
+    let mut guidance = json!({
+        "applies": protected_scope,
+        "authority": "securityRequirement from the accepted Brainstorm contract",
+        "profileRequired": protected_scope,
+        "agentFields": []
+    });
+    if protected_scope {
+        guidance["existingBaselineRule"] = json!(if has_previous_baseline {
+            "Reuse an existing accepted security profile when it satisfies the current requirement; do not change its algorithm without explicit user confirmation."
+        } else {
+            "Select one concrete profile during TechnicalBaseline confirmation when the requirement is protected."
+        });
+        guidance["newProjectDefault"] = json!({
+            "mechanism": SecurityMechanism::BearerJwt,
+            "algorithm": SecurityAlgorithm::Rs256,
+            "keySource": SecurityKeySource::EnvironmentSecret,
+            "transport": SecurityTransport::BearerHeader,
+            "rule": "RS256 is a recommendation for a new project only; the agent must present it for user confirmation and must not silently add alternatives."
+        });
+        guidance["algorithmPolicy"] = json!([
+            "Write only the algorithm selected by the accepted TechnicalBaseline profile.",
+            "Do not derive an algorithm from an incoming token header.",
+            "Do not treat HS256 as a default; use it only when the user or existing identity contract explicitly selects it.",
+            "Keep the algorithm closed to the profile selection; do not add a second algorithm for flexibility."
+        ]);
+        guidance["agentFields"] = json!([
+            "securityProfiles[].profileId",
+            "securityProfiles[].name",
+            "securityProfiles[].mechanism",
+            "securityProfiles[].algorithm",
+            "securityProfiles[].keySource",
+            "securityProfiles[].transport",
+            "securityProfiles[].issuer",
+            "securityProfiles[].audiences",
+            "securityProfiles[].claims",
+            "securityProfiles[].sourceRefs",
+            "securityProfiles[].rationale"
+        ]);
+    } else {
+        guidance["profilePolicy"] = json!(
+            "No authentication profile applies to the accepted scope; securityProfiles must remain an empty array."
+        );
+    }
+    guidance
 }
 
 fn scope_item_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
@@ -426,6 +506,8 @@ fn technical_baseline_context_fields(
         "currentPhaseLens.includedScopeRefs",
         "currentPhaseLens.acceptanceRefs",
         "decisionNeeds",
+        "securityRequirement",
+        "securityProfileGuidance",
         "constraints.mustUse",
         "constraints.mustAvoid",
         "constraints.userPreferences",
@@ -461,6 +543,7 @@ fn technical_baseline_context_fields(
             "previousBaselineContext.stack",
             "previousBaselineContext.constraints",
             "previousBaselineContext.confidence",
+            "previousBaselineContext.securityProfiles",
         ]);
     }
     fields
@@ -726,6 +809,7 @@ fn technical_baseline_selection_guidance(
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
                 "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
+                "When securityRequirement is protected, show the proposed mechanism, one selected algorithm, key source, transport, issuer/audience ownership, and the confirmation or adjustment needed before submitting the baseline.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
             ],
             "wordingRules": [
@@ -776,6 +860,11 @@ fn technical_baseline_selection_guidance(
             "qualityAutomation": {
                 "label": "Browser quality automation",
                 "examples": ["Playwright", "User-specified existing browser test stack"]
+            },
+            "securityProfile": {
+                "label": "Authentication profile when protected",
+                "examples": ["Bearer JWT with the explicitly selected algorithm and identity-provider key source", "Existing session or gateway identity contract"],
+                "rule": "Use the accepted requirement and repository identity evidence; do not ask the user to choose token claims or JWT data structures here."
             }
         },
         "shorthandNormalization": {
@@ -889,6 +978,16 @@ where
         return Ok(result);
     }
     let project_root = Path::new(&input.project_root);
+    let request_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+        fields: vec!["securityRequirement".to_string()],
+    })?;
+    let security_requirement = request_fields
+        .fields
+        .get("securityRequirement")
+        .and_then(|field| serde_json::from_value::<SecurityRequirement>(field.value.clone()).ok())
+        .unwrap_or_default();
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
     let mut candidate: TechnicalBaselineCandidateAgentWritable =
@@ -910,7 +1009,7 @@ where
 
     let now = state::store::now_string();
     normalize_user_confirmed_approval(&mut candidate, &now);
-    let issues = validate_candidate(&candidate);
+    let issues = validate_candidate(&candidate, &security_requirement);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
     }
@@ -932,6 +1031,22 @@ where
             "new_project_baseline_confirmation".to_string(),
         ));
     }
+    let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
+    let protected_requirement = !matches!(
+        security_requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    );
+    if protected_requirement
+        && !previous_baseline_file.exists()
+        && candidate.approval.r#type != TechnicalBaselineApprovalType::UserConfirmed
+    {
+        return Ok(technical_baseline_user_gate(
+            input,
+            authorized,
+            "The protected security profile is a technology decision and must be explicitly confirmed before the first baseline is accepted. Present the selected mechanism, one algorithm, key source, and transport, then rewrite the same candidate with approval.type=user_confirmed.".to_string(),
+            "security_profile_confirmation".to_string(),
+        ));
+    }
     if candidate.requires_user_confirmation.unwrap_or(false)
         || matches!(
             candidate.status,
@@ -945,7 +1060,6 @@ where
             "technical_baseline_confirmation".to_string(),
         ));
     }
-    let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
     if previous_baseline_file.exists() {
         let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
         let stack_or_baseline_changed = technical_baseline_conflicts(&previous, &candidate);
@@ -977,6 +1091,7 @@ where
         project_kind: candidate.project_kind,
         scope: candidate.scope,
         stack: candidate.stack,
+        security_profiles: candidate.security_profiles,
         constraints: candidate.constraints,
         evidence: candidate.evidence,
         approval: candidate.approval,
@@ -1091,6 +1206,7 @@ fn normalize_user_confirmed_approval(
 
 fn validate_candidate(
     candidate: &TechnicalBaselineCandidateAgentWritable,
+    security_requirement: &SecurityRequirement,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     if !candidate.stack.is_object() {
@@ -1101,6 +1217,7 @@ fn validate_candidate(
         ));
     }
     validate_external_services_track(&candidate.stack, &mut issues);
+    validate_security_profiles(candidate, security_requirement, &mut issues);
     if candidate.approval.r#type == TechnicalBaselineApprovalType::None
         && matches!(candidate.status, TechnicalBaselineStatus::Confirmed)
     {
@@ -1114,6 +1231,95 @@ fn validate_candidate(
         validate_new_project_candidate(candidate, &mut issues);
     }
     issues
+}
+
+fn validate_security_profiles(
+    candidate: &TechnicalBaselineCandidateAgentWritable,
+    requirement: &SecurityRequirement,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let protected = !matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    );
+    if !protected && !candidate.security_profiles.is_empty() {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_SECURITY_PROFILE_UNEXPECTED",
+            "securityProfiles",
+            "securityProfiles must be empty when the accepted security requirement is not_applicable.",
+        ));
+        return;
+    }
+    if protected && candidate.security_profiles.is_empty() {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_SECURITY_PROFILE_REQUIRED",
+            "securityProfiles",
+            "A protected requirement must select at least one canonical security profile before the TechnicalBaseline can be accepted.",
+        ));
+    }
+    let mut profile_ids = BTreeSet::new();
+    for (index, profile) in candidate.security_profiles.iter().enumerate() {
+        let path = format!("securityProfiles[{index}]");
+        if profile.profile_id.trim().is_empty() || !profile_ids.insert(profile.profile_id.clone()) {
+            issues.push(issue(
+                "TECHNICAL_BASELINE_SECURITY_PROFILE_ID_INVALID",
+                &format!("{path}.profileId"),
+                "Every security profile needs a unique non-empty profileId.",
+            ));
+        }
+        if profile.name.trim().is_empty() || profile.rationale.trim().is_empty() {
+            issues.push(issue(
+                "TECHNICAL_BASELINE_SECURITY_PROFILE_DESCRIPTION_REQUIRED",
+                &path,
+                "Every security profile needs a non-empty name and rationale.",
+            ));
+        }
+        match profile.mechanism {
+            SecurityMechanism::None => {
+                if profile.algorithm.is_some()
+                    || !matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || !matches!(profile.transport, SecurityTransport::NotApplicable)
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_PROFILE_NONE_INVALID",
+                        &path,
+                        "A none security profile must not declare an algorithm, key material, or a transport.",
+                    ));
+                }
+            }
+            SecurityMechanism::BearerJwt => {
+                if profile.algorithm.is_none() {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_ALGORITHM_REQUIRED",
+                        &format!("{path}.algorithm"),
+                        "A bearer JWT profile must explicitly select one signing algorithm.",
+                    ));
+                }
+                if matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || matches!(profile.transport, SecurityTransport::NotApplicable)
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_PROFILE_BOUNDARY_REQUIRED",
+                        &path,
+                        "A bearer JWT profile must declare a key source and transport.",
+                    ));
+                }
+                if profile
+                    .issuer
+                    .as_deref()
+                    .is_none_or(|issuer| issuer.trim().is_empty())
+                    || profile.audiences.is_empty()
+                    || !profile.claims.iter().any(|claim| claim.trim() == "sub")
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_JWT_CLAIMS_INCOMPLETE",
+                        &path,
+                        "A bearer JWT profile must declare issuer, at least one audience, and the subject claim before it can be used by an API contract.",
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn validate_external_services_track(stack: &Value, issues: &mut Vec<delivery_core::RepairIssue>) {
@@ -1346,6 +1552,7 @@ fn technical_baseline_conflicts(
         || previous.scope != candidate.scope
         || !stable_stack_equivalent(&previous.stack, &candidate.stack)
         || previous.constraints != candidate.constraints
+        || previous.security_profiles != candidate.security_profiles
 }
 
 fn stable_stack_equivalent(left: &Value, right: &Value) -> bool {

@@ -243,6 +243,10 @@ fn build_request_root(
         "uiQualitySeed": ui_quality_seed,
         "architectureQualitySeed": architecture_quality_seed,
         "runtimeDependencySeed": runtime_dependency_seed,
+        "securityProfileSeed": security_profile_seed(
+            &planning_contract.technical_baseline.security_requirement,
+            technical_baseline,
+        ),
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -406,6 +410,13 @@ pub(crate) fn architecture_read_groups(
             "allowedRefs.deferredScopeRefs",
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
+        ]);
+    }
+    if matches!(section, ArchitectureSectionGroup::DomainContract) {
+        core_fields.extend([
+            "securityProfileSeed.securityRequirement",
+            "securityProfileSeed.profiles",
+            "securityProfileSeed.algorithmPolicy",
         ]);
     }
     let mut contract_fields = vec![
@@ -745,6 +756,22 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
         value["repositoryContextRef"] = json!(repository_context_ref);
     }
     value
+}
+
+fn security_profile_seed(
+    requirement: &contracts::SecurityRequirement,
+    baseline: &TechnicalBaselineContract,
+) -> Value {
+    json!({
+        "securityRequirement": requirement,
+        "profiles": baseline.security_profiles,
+        "algorithmPolicy": [
+            "Use only the algorithm selected by the selected security profile.",
+            "Do not accept an algorithm from an incoming token header.",
+            "Do not add a second JWT profile or a second algorithm in Architecture.",
+            "Reference the selected profile by securityProfileRef from each protected interface."
+        ]
+    })
 }
 
 pub(crate) fn build_architecture_quality_seed(
@@ -1529,7 +1556,12 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
         },
         "errorSchema": ["object"],
         "paginationPolicy": "optional object for unbounded collection endpoints",
-        "authPolicy": "optional object for protected operations",
+        "authPolicy": {
+            "required": "not_applicable | required | optional | deferred_with_risk",
+            "securityProfileRef": "required when protected; must reference securityProfileSeed.profiles[].profileId",
+            "actorRefs": ["actor id"],
+            "permissionRefs": ["permission or capability id"]
+        },
         "contractFileRefs": ["string"],
         "idempotencyPolicy": "optional object for retry-sensitive or duplicate-sensitive operations",
         "cachePolicy": "optional object for cacheable reads",
@@ -2200,6 +2232,7 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
         },
         "authPolicy": {
             "required": "not_applicable",
+            "securityProfileRef": "",
             "actorRefs": [],
             "permissionRefs": []
         },
@@ -2342,6 +2375,7 @@ pub fn section_generation_rules(
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
+                    "Use securityProfileSeed as the authority for protected interface authPolicy. Write one canonical authPolicy object per HTTP interface with required, securityProfileRef, actorRefs, and permissionRefs; never use boolean, string, or inferred JWT policy shapes.".to_string(),
                     "Write content.apiContract.publicExposure and content.apiContract.browserBinding once for the current API surface. publicExposure.basePath is the externally served prefix, preservePath must describe proxy behavior, and browserBinding.pathOwnership must remain interface_path. Do not repeat these fields inside every interface.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);

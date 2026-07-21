@@ -5,8 +5,13 @@ use serde_json::{json, Value};
 pub fn build_api_quality_seed_from_foundation(
     foundation_content: &Value,
     project_api_contract: Option<&Value>,
+    security_profile_seed: Option<&Value>,
 ) -> Value {
-    let signals = collect_api_seed_signals(foundation_content, project_api_contract);
+    let signals = collect_api_seed_signals(
+        foundation_content,
+        project_api_contract,
+        security_profile_seed,
+    );
     if signals.http_interaction_ids.is_empty() {
         return Value::Null;
     }
@@ -17,6 +22,9 @@ pub fn build_api_quality_seed_from_foundation(
     ];
     if signals.security_required {
         api_groups.push("security".to_string());
+        if signals.jwt_required {
+            api_groups.push("jwt".to_string());
+        }
     }
     if signals.pagination_required {
         api_groups.push("pagination".to_string());
@@ -94,6 +102,7 @@ pub fn build_api_quality_seed_from_foundation(
             "Do not add versioned paths or deprecation policy unless techReferenceProfile.referenceLoadPlan selects tech/api/evolution.md.",
             "Do not require OpenAPI files unless techReferenceProfile.referenceLoadPlan selects tech/api/contract.md or the repository already owns one.",
             "Do not add authPolicy or authentication infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/security.md or the accepted interface already has an auth policy.",
+            "When the accepted security profile mechanism is bearer_jwt, read tech/api/jwt.md in addition to the general API security reference; do not copy JWT guidance into framework references or invent a second profile.",
             "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/operations.md or the repository already owns that convention."
         ]
     })
@@ -128,7 +137,7 @@ pub fn api_quality_seed_read_fields() -> [&'static str; 8] {
 pub fn api_quality_enum_refs() -> Value {
     json!({
         "knownReferenceGroups": {
-            "api": ["core", "resource", "errors", "pagination", "contract", "security", "evolution", "operations"]
+            "api": ["core", "resource", "errors", "pagination", "contract", "security", "jwt", "evolution", "operations"]
         },
         "interfaceType": ["http_api", "service_method", "external_adapter", "event", "job", "cli_command"],
         "httpMethod": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
@@ -148,11 +157,13 @@ struct ApiSeedSignals {
     contract_artifact_required: bool,
     compatibility_required: bool,
     operations_required: bool,
+    jwt_required: bool,
 }
 
 fn collect_api_seed_signals(
     foundation_content: &Value,
     project_api_contract: Option<&Value>,
+    security_profile_seed: Option<&Value>,
 ) -> ApiSeedSignals {
     let mut signals = ApiSeedSignals::default();
     let interactions = foundation_content
@@ -216,6 +227,20 @@ fn collect_api_seed_signals(
     }
     signals.http_interaction_ids.sort();
     signals.http_interaction_ids.dedup();
+    let security_requirement_applies = security_profile_seed
+        .and_then(|seed| seed.pointer("/securityRequirement/applies"))
+        .and_then(Value::as_str)
+        .is_some_and(|applies| matches!(applies, "required" | "optional" | "deferred_with_risk"));
+    signals.security_required |= security_requirement_applies;
+    signals.jwt_required = signals.security_required
+        && security_profile_seed
+            .and_then(|seed| seed.get("profiles"))
+            .and_then(Value::as_array)
+            .is_some_and(|profiles| {
+                profiles.iter().any(|profile| {
+                    profile.get("mechanism").and_then(Value::as_str) == Some("bearer_jwt")
+                })
+            });
     signals
 }
 
@@ -233,26 +258,14 @@ fn auth_requirement_selects_security(quality_traits: &Value) -> bool {
 }
 
 fn interface_auth_policy_applies(interface: &Value) -> bool {
-    let Some(policy) = interface.get("authPolicy") else {
-        return false;
-    };
-    match policy {
-        Value::Null => false,
-        Value::Bool(required) => *required,
-        Value::String(requirement) => !matches!(
-            requirement.as_str(),
-            "" | "none" | "not_applicable" | "not_required"
-        ),
-        Value::Object(policy) => match policy.get("required") {
-            Some(Value::Bool(required)) => *required,
-            Some(Value::String(requirement)) => !matches!(
-                requirement.as_str(),
-                "" | "none" | "not_applicable" | "not_required"
-            ),
-            _ => false,
-        },
-        _ => false,
-    }
+    interface
+        .get("authPolicy")
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("required"))
+        .and_then(Value::as_str)
+        .is_some_and(|requirement| {
+            matches!(requirement, "required" | "optional" | "deferred_with_risk")
+        })
 }
 
 #[cfg(test)]
@@ -276,7 +289,7 @@ mod tests {
                 }]
             }
         });
-        let seed = build_api_quality_seed_from_foundation(&foundation, None);
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, None);
         assert_eq!(seed["required"], json!(true));
         assert_eq!(
             seed["techReferenceProfile"]["groups"]["api"],
@@ -301,7 +314,7 @@ mod tests {
                 }]
             }
         });
-        let seed = build_api_quality_seed_from_foundation(&foundation, None);
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, None);
         assert_eq!(
             seed["techReferenceProfile"]["groups"]["api"],
             json!([
@@ -341,7 +354,7 @@ mod tests {
                 }]
             }
         });
-        let seed = build_api_quality_seed_from_foundation(&foundation, None);
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, None);
         assert!(!seed["techReferenceProfile"]["groups"]["api"]
             .as_array()
             .unwrap()
@@ -359,7 +372,7 @@ mod tests {
                 }]
             }
         });
-        assert!(build_api_quality_seed_from_foundation(&foundation, None).is_null());
+        assert!(build_api_quality_seed_from_foundation(&foundation, None, None).is_null());
     }
 
     #[test]
@@ -370,7 +383,7 @@ mod tests {
                 "interactionType": "http_api"
             }]
         });
-        assert!(build_api_quality_seed_from_foundation(&foundation, None).is_null());
+        assert!(build_api_quality_seed_from_foundation(&foundation, None, None).is_null());
     }
 
     #[test]
@@ -390,7 +403,9 @@ mod tests {
                 "type": "http_api"
             }]
         });
-        assert!(!build_api_quality_seed_from_foundation(&foundation, Some(&contract)).is_null());
+        assert!(
+            !build_api_quality_seed_from_foundation(&foundation, Some(&contract), None).is_null()
+        );
     }
 
     #[test]
@@ -414,7 +429,7 @@ mod tests {
                 }
             }]
         });
-        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract));
+        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract), None);
         assert!(seed["techReferenceProfile"]["groups"]["api"]
             .as_array()
             .unwrap()
@@ -423,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_boolean_auth_policy_selects_security_reference() {
+    fn legacy_boolean_auth_policy_does_not_select_security_reference() {
         let foundation = json!({
             "engineeringBoundary": {
                 "applicationInteractions": [{
@@ -440,11 +455,68 @@ mod tests {
                 "authPolicy": {"required": true}
             }]
         });
-        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract));
-        assert!(seed["techReferenceProfile"]["groups"]["api"]
+        let seed = build_api_quality_seed_from_foundation(&foundation, Some(&contract), None);
+        assert!(!seed["techReferenceProfile"]["groups"]["api"]
             .as_array()
             .unwrap()
             .iter()
             .any(|group| group == "security"));
+    }
+
+    #[test]
+    fn selected_bearer_jwt_profile_selects_jwt_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-secured",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "required",
+                        "paginationRequired": false,
+                        "contractArtifactRequired": false,
+                        "compatibilityRequired": false,
+                        "operationalPolicies": []
+                    }
+                }]
+            }
+        });
+        let profile_seed = json!({
+            "profiles": [{"mechanism": "bearer_jwt"}]
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, Some(&profile_seed));
+        assert!(seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group == "jwt"));
+    }
+
+    #[test]
+    fn accepted_security_requirement_selects_security_without_prose_or_quality_trait() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-secured",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "not_applicable",
+                        "paginationRequired": false,
+                        "contractArtifactRequired": false,
+                        "compatibilityRequired": false,
+                        "operationalPolicies": []
+                    }
+                }]
+            }
+        });
+        let security_seed = json!({
+            "securityRequirement": {"applies": "required"},
+            "profiles": [{"mechanism": "bearer_jwt"}]
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, Some(&security_seed));
+        let groups = seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .expect("api groups");
+        assert!(groups.iter().any(|group| group == "security"));
+        assert!(groups.iter().any(|group| group == "jwt"));
     }
 }

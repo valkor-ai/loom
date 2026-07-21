@@ -363,6 +363,7 @@ where
             let api_quality_seed = build_api_quality_seed_from_foundation(
                 &candidate.content,
                 existing_api_contract.as_ref(),
+                request_root.get("securityProfileSeed"),
             );
             apply_api_quality_seed(&mut request_root, &api_quality_seed);
             rebuild_domain_contract_output(
@@ -1748,6 +1749,13 @@ fn validate_http_interfaces(
         "cli_command",
     ]);
     let mut issues = Vec::new();
+    let security_profile_ids = request_root
+        .pointer("/securityProfileSeed/profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|profile| profile.get("profileId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
     for (index, interface) in interfaces.iter().enumerate() {
         let path = format!("content.interfaces[{index}]");
         let Some(object) = interface.as_object() else {
@@ -1790,9 +1798,69 @@ fn validate_http_interfaces(
                     ));
                 }
             }
+            validate_interface_auth_policy(object, &path, &security_profile_ids, &mut issues);
         }
     }
     issues
+}
+
+fn validate_interface_auth_policy(
+    interface: &serde_json::Map<String, Value>,
+    path: &str,
+    security_profile_ids: &BTreeSet<&str>,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(policy) = interface.get("authPolicy").and_then(Value::as_object) else {
+        issues.push(issue(
+            "HTTP_INTERFACE_AUTH_POLICY_REQUIRED",
+            &format!("{path}.authPolicy"),
+            "Every HTTP interface must declare one canonical authPolicy object, including not_applicable for intentionally public operations.",
+        ));
+        return;
+    };
+    let required = policy
+        .get("required")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        required,
+        "not_applicable" | "required" | "optional" | "deferred_with_risk"
+    ) {
+        issues.push(issue(
+            "HTTP_INTERFACE_AUTH_POLICY_INVALID",
+            &format!("{path}.authPolicy.required"),
+            "authPolicy.required must be not_applicable, required, optional, or deferred_with_risk; booleans and free-form strings are not accepted.",
+        ));
+    }
+    for key in ["actorRefs", "permissionRefs"] {
+        if !policy.get(key).is_some_and(Value::is_array) {
+            issues.push(issue(
+                "HTTP_INTERFACE_AUTH_POLICY_REFS_REQUIRED",
+                &format!("{path}.authPolicy.{key}"),
+                "Canonical authPolicy must include actorRefs and permissionRefs arrays, using empty arrays when the policy has no entries.",
+            ));
+        }
+    }
+    let profile_ref = policy
+        .get("securityProfileRef")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let protected = matches!(required, "required" | "optional" | "deferred_with_risk");
+    if protected {
+        if profile_ref.trim().is_empty() || !security_profile_ids.contains(profile_ref) {
+            issues.push(issue(
+                "HTTP_INTERFACE_SECURITY_PROFILE_REF_INVALID",
+                &format!("{path}.authPolicy.securityProfileRef"),
+                "A protected authPolicy must reference a selected securityProfileSeed.profiles[].profileId.",
+            ));
+        }
+    } else if !profile_ref.trim().is_empty() {
+        issues.push(issue(
+            "HTTP_INTERFACE_SECURITY_PROFILE_REF_UNEXPECTED",
+            &format!("{path}.authPolicy.securityProfileRef"),
+            "An unauthenticated interface must not reference a security profile.",
+        ));
+    }
 }
 
 fn validate_allowed_refs(content: &Value, allowed_refs: &Value) -> Vec<delivery_core::RepairIssue> {

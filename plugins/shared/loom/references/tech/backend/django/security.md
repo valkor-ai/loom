@@ -2,6 +2,8 @@
 
 Implement the accepted authentication and authorization model using Django/DRF's established mechanisms. Do not add SimpleJWT, registration, roles, API keys, or account workflows when the phase does not own them.
 
+The accepted JWT algorithm, claims, and HTTP behavior live in `tech/api/jwt.md`; this file owns Django/DRF authentication classes, permission wiring, and framework-specific settings.
+
 ## When To Use
 
 Use this reference for Django authentication, DRF authentication classes, sessions, SimpleJWT, password/account flows, permission classes, queryset/object ownership, CSRF/CORS, hosts/proxy security, or protected endpoint errors.
@@ -35,9 +37,7 @@ Choose a custom user model before initial migrations when the project requires o
 
 ### JWT And Refresh Tokens
 
-For SimpleJWT or another bearer contract, configure access/refresh lifetime, signing/verification key, issuer/audience, header type, token classes, rotation, blacklist/revocation, and custom claims deliberately.
-
-Do not put sensitive mutable profile data in long-lived claims or treat refresh tokens as access tokens. Logout must match the actual session, blacklist, rotation, or short-lived-token model.
+When the accepted profile selects JWT, map `tech/api/jwt.md` into SimpleJWT or the repository's existing verifier. Refresh, rotation, blacklist, and logout behavior remain separate capabilities and must not be added unless the API contract owns them.
 
 ### Permissions And Ownership
 

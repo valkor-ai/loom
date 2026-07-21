@@ -2,13 +2,15 @@
 
 Implement the accepted identity and authorization model. ASP.NET Core supports cookies, bearer tokens, Identity, external providers, certificates, and custom schemes; do not introduce JWT or Identity unless the architecture and client trust model select them.
 
+The accepted JWT algorithm and claim contract lives in `tech/api/jwt.md`; this file owns ASP.NET Core scheme, policy, middleware, and options wiring.
+
 ## Scheme Selection And Configuration
 
 Configure explicit default authenticate/challenge/forbid schemes when more than one scheme exists. Keep cookie and bearer endpoints separated through policy schemes or endpoint metadata where needed; do not let scheme forwarding accept weaker credentials accidentally.
 
 Bind issuer, audience, authority, keys, lifetimes, cookie settings, and provider credentials through validated options. Never commit signing secrets or log tokens. Place `UseAuthentication` before `UseAuthorization` and map protected endpoints after both.
 
-For JWT bearer validation, pin trusted issuer, audience, signing algorithms/keys, lifetime, and clock skew. Define key rotation and authority availability behavior. Do not generate local self-issued tokens when the accepted system trusts an external identity provider.
+For JWT bearer validation, bind the selected `tech/api/jwt.md` profile to explicit bearer options and policies. Do not generate local self-issued tokens when the accepted system trusts an external identity provider.
 
 ## Identity And Password Workflows
 
