@@ -64,13 +64,9 @@ Honor `stoppingToken`, handle partial failures, and define retry/dead-letter/ide
 
 Startup must not launch duplicate workers under test, design-time migrations, or hot reload. Shutdown should stop intake, finish/cancel bounded work, and close clients cleanly.
 
-## Logging, Metrics, And Tracing
+## Framework Instrumentation Boundary
 
-Use structured message templates with stable operation/resource identifiers and correlation. Log expected validation/not-found outcomes at an appropriate level and unexpected failures once at the boundary with context.
-
-Instrument accepted request, dependency, queue, and business-operation signals through `ILogger`, `ActivitySource`, `Meter`, or the repository's OpenTelemetry setup. Avoid high-cardinality labels such as raw URLs, user IDs, payloads, or exception messages.
-
-Never log tokens, cookies, connection strings, credentials, personal payloads, or raw provider responses. Diagnostics exporters must fail according to the accepted operability model and should not block business requests indefinitely.
+Use `ILogger`, `ActivitySource`, `Meter`, or the repository's OpenTelemetry setup as the ASP.NET adapter for the selected application observability contract. The cross-stack reference owns event fields, levels, correlation, redaction, cardinality, async logging, file rotation, and retention. Keep exporter failure behavior aligned with the accepted operability model and do not block business requests indefinitely.
 
 ## AOT, Trimming, And Serialization
 

@@ -34,6 +34,11 @@ This file is selected for every `language_implementation_quality` requirement. I
 - Use the current result contract and validator messages for exact evidence field names and required values.
 - Evidence summaries should state how changed files followed both repository style and the selected topic references.
 
+## Cross-Cutting Ownership
+
+- Load `tech/code/observability.md` only when the task owns a structured observability, request-tracing, async-processing, external-boundary, resilience, or sensitive-error concern. A word such as `log`, `logging`, `monitoring`, or `tracing` in task prose is not an ownership signal.
+- The observability reference owns application logging behavior and configuration, including structured events, redaction, async appenders, file output, rotation, compression, and retention. Deploy owns container topology and does not generate those settings.
+
 ## Common Anti-Patterns
 
 - Loading sibling language/topic files outside the task-selected reference set.

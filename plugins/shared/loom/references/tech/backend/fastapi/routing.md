@@ -64,7 +64,7 @@ async def order_conflict_handler(
     )
 ```
 
-Never return raw SQLAlchemy, JWT, provider, traceback, file-path, or class-name details. Do not catch every exception in every endpoint; unexpected failures should reach one correlation-aware boundary.
+Never return raw SQLAlchemy, JWT, provider, traceback, file-path, or class-name details. Do not catch every exception in every endpoint; unexpected failures should reach the one boundary selected by `tech/code/observability.md` when this task owns observability.
 
 ### Lifespan, Streaming, And WebSockets
 

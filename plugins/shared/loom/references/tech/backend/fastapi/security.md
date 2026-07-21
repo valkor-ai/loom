@@ -78,7 +78,7 @@ Use explicit CORS origins, methods, and headers. Wildcard origins cannot be comb
 
 ### Sensitive Data And Errors
 
-Never log authorization headers, bearer/refresh tokens, passwords, signing keys, raw credential payloads, or sensitive claims. Public errors remain stable while detailed diagnostics stay in protected correlation-aware logs.
+Never log authorization headers, bearer/refresh tokens, passwords, signing keys, raw credential payloads, or sensitive claims. Public errors remain stable; the selected application observability reference owns protected correlation-aware diagnostics.
 
 ## Verification Focus
 

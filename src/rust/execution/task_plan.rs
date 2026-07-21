@@ -6760,6 +6760,9 @@ fn code_reference_task_context(
                 && (task_quality_category_matches(aac, task, "integration")
                     || task_quality_category_matches(aac, task, "availability")
                     || task_quality_category_matches(aac, task, "reliability")));
+    let request_tracing = task_interfaces
+        .iter()
+        .any(|interface| interface_owns_operational_policy(interface, "request_id"));
     let observability =
         task_has_implementation_action(task, ImplementationAction::ImplementObservability)
             || task_quality_category_matches(aac, task, "observability")
@@ -6771,6 +6774,7 @@ fn code_reference_task_context(
         integration,
         resilience,
         observability,
+        request_tracing,
     }
 }
 
@@ -6799,6 +6803,14 @@ fn interaction_requires_security(interaction: &Value) -> bool {
 fn interaction_owns_operational_policy(interaction: &Value, policy: &str) -> bool {
     interaction
         .pointer("/qualityTraits/operationalPolicies")
+        .and_then(Value::as_array)
+        .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
+}
+
+fn interface_owns_operational_policy(interface: &Value, policy: &str) -> bool {
+    interface
+        .pointer("/qualityTraits/operationalPolicies")
+        .or_else(|| interface.pointer("/operationalPolicies"))
         .and_then(Value::as_array)
         .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
 }
@@ -7858,7 +7870,8 @@ mod tests {
                     "securityProfileRef": "security-api-default",
                     "actorRefs": [],
                     "permissionRefs": []
-                }
+                },
+                "qualityTraits": {"operationalPolicies": ["request_id"]}
             }, {
                 "interfaceId": "api-cache-hints-only",
                 "cachePolicy": {"strategy": "private", "validators": ["etag"]},
@@ -7973,7 +7986,9 @@ mod tests {
         assert!(context.integration);
         assert!(context.resilience);
         assert!(context.observability);
+        assert!(context.request_tracing);
         assert!(!api_policy_only_context.resilience);
+        assert!(!api_policy_only_context.request_tracing);
         assert!(!api_policy_only_context.application_architecture);
         assert_eq!(projected_interactions.len(), 2);
         assert_eq!(

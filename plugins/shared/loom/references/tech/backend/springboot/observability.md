@@ -1,6 +1,6 @@
 # Spring Boot Observability
 
-Observability must answer whether the accepted runtime surfaces and important business operations are healthy, failing, or degraded without exposing secrets or creating unbounded telemetry cost.
+This reference owns Spring Boot observability mechanics. Cross-stack event shape, redaction, correlation, async logging, file output, rotation, compression, retention, and verification rules live in `tech/code/observability.md` when that reference is selected.
 
 ## Actuator Exposure
 
@@ -19,18 +19,6 @@ Keep probe meanings distinct:
 Do not put slow external business calls in every health probe. A dependency health indicator must be bounded, cached or lightweight as appropriate, and consistent with whether the dependency is required at startup or per capability.
 
 Do not mark liveness down for a recoverable downstream outage; restart loops can amplify the outage.
-
-## Logs And Correlation
-
-Use structured fields or the repository's established pattern for request id, trace id, operation, stable error code, and owned business identity when safe.
-
-- log unexpected failures once with stack context
-- keep validation/business rejection at an appropriate level
-- redact credentials, tokens, secrets, personal data, and large payloads
-- do not rely on translated user messages as log categories
-- propagate correlation identifiers through supported servlet/reactive/async mechanisms
-
-Avoid duplicate logs at client, service, controller advice, and global handler for the same exception.
 
 ## Metrics
 
@@ -55,8 +43,7 @@ Useful observability evidence includes:
 - exact Actuator endpoints and access policy
 - liveness/readiness behavior for required and optional dependency outages
 - safe health detail exposure
-- request/trace correlation across the changed boundary
-- log redaction and stable error codes
+- Spring request/trace context propagation across the changed boundary
 - bounded metric tags and expected increments/timing
 - trace propagation across async/reactive/client calls when owned
 - startup without a collector when telemetry export is optional

@@ -62,6 +62,7 @@ Keep stable machine-readable `code` values even when visible messages are locali
 ## Operational Policy Link
 
 This reference owns error categories, codes, fields, and safe messages. When `tech/api/operations.md` is selected, use its request-id, retry, rate-limit, and availability policy without restating or inventing a second operational contract here.
+Application-side correlation, redaction, log levels, and diagnostic retention belong to `tech/code/observability.md` when the task owns that boundary.
 
 ## Must Not
 

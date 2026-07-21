@@ -47,6 +47,7 @@ pub struct CodeReferenceTaskContext {
     pub integration: bool,
     pub resilience: bool,
     pub observability: bool,
+    pub request_tracing: bool,
 }
 
 pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
@@ -69,7 +70,8 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
 pub fn code_quality_enum_refs() -> Value {
     json!({
         "knownReferenceGroups": {
-            "code": {
+                "code": {
+                    "common": ["observability"],
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
                 "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability"],
                 "django": ["models", "serializers", "views", "security", "testing"],
@@ -125,7 +127,14 @@ pub fn code_reference_selection_for_task_with_context(
 ) -> Option<CodeReferenceSelection> {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
     let redis_items = redis_reference_items_for_task(baseline, task);
-    if signals.is_empty() && redis_items.is_empty() {
+    let observability = task_has_action(task, ImplementationAction::ImplementObservability)
+        || context.observability
+        || context.request_tracing
+        || context.async_processing
+        || context.integration
+        || context.resilience
+        || context.security;
+    if signals.is_empty() && redis_items.is_empty() && !observability {
         return None;
     }
     let stack_frameworks = signals
@@ -134,6 +143,9 @@ pub fn code_reference_selection_for_task_with_context(
         .collect::<BTreeSet<_>>();
     let mut focus_tags = task_focus_tags(task);
     extend_focus_tags_from_context(&mut focus_tags, context);
+    if observability {
+        push_unique(&mut focus_tags, "observability");
+    }
     let mut selected_signals = Vec::new();
     let mut reference_groups = BTreeMap::<String, BTreeSet<String>>::new();
     let mut unmapped_signals = Vec::new();
@@ -177,6 +189,12 @@ pub fn code_reference_selection_for_task_with_context(
             .entry("redis".to_string())
             .or_default()
             .insert(item);
+    }
+    if observability {
+        reference_groups
+            .entry("common".to_string())
+            .or_default()
+            .insert("observability".to_string());
     }
 
     if reference_groups.is_empty() && unmapped_signals.is_empty() {
@@ -1221,6 +1239,7 @@ fn extend_focus_tags_from_context(tags: &mut Vec<String>, context: &CodeReferenc
         (context.integration, "integration"),
         (context.resilience, "resilience"),
         (context.observability, "observability"),
+        (context.request_tracing, "observability"),
     ] {
         if selected {
             push_unique(tags, tag);
@@ -1757,6 +1776,7 @@ fn backend_reference_items_for_signal(
             || context.integration
             || context.resilience
             || context.observability
+            || context.request_tracing
         {
             items.insert("runtime".to_string());
         }
@@ -1851,7 +1871,9 @@ fn extend_spring_boot_task_references(
     {
         items.insert("cloud".to_string());
     }
-    if context.observability || task_has_action(task, ImplementationAction::ImplementObservability)
+    if context.observability
+        || context.request_tracing
+        || task_has_action(task, ImplementationAction::ImplementObservability)
     {
         items.insert("observability".to_string());
     }
@@ -2171,6 +2193,14 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
             ref_id: format!("tech.code.redis.{group}"),
             path: format!("tech/code/redis/{group}.md"),
             reason: format!("Selected Redis {group} reference for this task-owned capability."),
+        };
+    }
+    if group_key == "common" && group == "observability" {
+        return ReferenceLoadPlanItem {
+            ref_id: "tech.code.observability".to_string(),
+            path: "tech/code/observability.md".to_string(),
+            reason: "Selected the task-owned cross-stack observability implementation reference."
+                .to_string(),
         };
     }
     ReferenceLoadPlanItem {
@@ -4388,6 +4418,7 @@ mod tests {
             integration: true,
             resilience: true,
             observability: true,
+            request_tracing: false,
         };
 
         let selection =
@@ -4403,6 +4434,7 @@ mod tests {
         ] {
             assert!(spring.contains(&expected.to_string()));
         }
+        assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
         assert!(!spring.contains(&"cloud".to_string()));
     }
 
@@ -5121,18 +5153,30 @@ mod tests {
             TaskKind::ConfigurationSupport,
             vec![ImplementationAction::ImplementObservability],
         );
-        let ordinary_config_task = task(
+        let mut ordinary_config_task = task(
             TaskKind::ConfigurationSupport,
             vec![ImplementationAction::AddOrUpdateConfig],
         );
+        ordinary_config_task.objective =
+            "Configure application logging and monitoring defaults.".to_string();
 
         let observability =
             code_reference_selection_for_task(&baseline, &observability_task).unwrap();
         let ordinary = code_reference_selection_for_task(&baseline, &ordinary_config_task).unwrap();
 
         assert!(observability.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(observability.reference_groups["common"].contains(&"observability".to_string()));
+        assert!(observability
+            .focus_tags
+            .contains(&"observability".to_string()));
         assert!(!ordinary.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(!ordinary.reference_groups.contains_key("common"));
+        assert!(!ordinary.focus_tags.contains(&"observability".to_string()));
         assert!(ordinary.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&observability.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.observability" && item.path == "tech/code/observability.md"
+        }));
     }
 
     #[test]

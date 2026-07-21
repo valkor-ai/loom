@@ -62,7 +62,7 @@ Bearer tokens in browser storage have a different threat model. Do not switch st
 
 Preserve `401` for missing/invalid authentication and `403` for authenticated-but-disallowed operations according to the accepted disclosure policy. Wrong-owner lookup may intentionally map to not found; apply that policy consistently.
 
-Use `ConfigModule` or the repository's typed configuration boundary for secrets, lifetimes, issuer/audience, cookie, and hashing settings. Redact credentials and tokens from logs, traces, exception metadata, and Swagger examples.
+Use `ConfigModule` or the repository's typed configuration boundary for secrets, lifetimes, issuer/audience, cookie, and hashing settings. Redact credentials and tokens from logs, traces, exception metadata, and Swagger examples. The selected application observability reference owns the cross-stack redaction and correlation contract.
 
 ## Verification
 
