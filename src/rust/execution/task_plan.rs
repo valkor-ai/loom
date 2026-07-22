@@ -7,11 +7,10 @@ use contracts::{
     architecture::ArchitectureDetailCoverageEntry, build_code_quality_seed, code_quality_enum_refs,
     code_reference_load_plan, code_reference_selection_for_task_with_context,
     execution::TaskArtifactRefs, package_naming_policy_for_reference_groups,
-    planning::RequirementDetailItem, task_owns_logging_infrastructure,
-    ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
-    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
-    CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
+    planning::RequirementDetailItem, ui_surface_decision_enum_refs, AcceptancePriority,
+    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
+    BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
+    BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
     EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
     TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
     TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
@@ -6043,7 +6042,6 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "kind": "language_implementation_quality",
         "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
         "derivationAuthority": "loom.taskPlanAcceptFile derives reference groups and referenceLoadPlan from codeStackSignals plus accepted task ownership.",
-        "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
         "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
     })
@@ -6079,7 +6077,6 @@ fn api_contract_requirement_template(interfaces: &[Value]) -> Value {
         "requirementId": "api-contract-current-001",
         "kind": "api_contract",
         "interfaceRefs": interface_refs,
-        "implementationObligations": api_contract_implementation_obligations(),
         "verificationObligations": api_contract_verification_obligations(),
         "taskRefRule": "Loom attaches generated requirements through apiContractRequirementRefs during accept for API implementation, client binding, integration, and verification tasks; agents must not write that field or duplicate full API requirements inside every task."
     })
@@ -6151,13 +6148,6 @@ fn normalize_architecture_quality_requirements(
             decision_refs,
             nfr_refs,
             risk_refs,
-            implementation_obligations: vec![
-                "Respect referenced architecture decisions in the task-owned implementation."
-                    .to_string(),
-                "Implement referenced risk mitigations when the task owns affected code or configuration."
-                    .to_string(),
-                "Keep referenced NFRs verifiable through task verification evidence.".to_string(),
-            ],
             verification_obligations: vec![
                 "Use task.verificationIntents as verification id source.".to_string(),
                 "Record architectureQualityEvidence for every referenced architecture quality requirement."
@@ -6380,7 +6370,6 @@ fn normalize_api_contract_requirements(
                 .into_iter()
                 .collect(),
             reference_load_plan: api_security_reference_load_plan(aac, &interface_refs, baseline),
-            implementation_obligations: api_contract_implementation_obligations(),
             verification_obligations: api_contract_verification_obligations(),
         });
     }
@@ -6682,10 +6671,6 @@ fn normalize_code_quality_requirements(
             ),
             reference_groups: selection.reference_groups.clone(),
             focus_tags: selection.focus_tags.clone(),
-            implementation_obligations: code_quality_implementation_obligations_for_selection(
-                &selection,
-                task_owns_logging_infrastructure(task, &context),
-            ),
             verification_obligations: code_quality_verification_obligations(),
         });
     }
@@ -6876,41 +6861,6 @@ fn task_quality_category_matches(
     })
 }
 
-fn code_quality_implementation_obligations() -> Vec<String> {
-    vec![
-        "Load only the files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan for this task; do not scan the whole tech/code or tech/backend trees or infer group-to-file mappings.".to_string(),
-        "Follow existing repository structure and style before introducing new language or framework patterns.".to_string(),
-        "Keep API, UI, architecture, and persistence obligations in their own dedicated quality contracts; use code quality only for language and framework implementation discipline.".to_string(),
-    ]
-}
-
-fn code_quality_implementation_obligations_for_selection(
-    selection: &contracts::CodeReferenceSelection,
-    owns_logging_infrastructure: bool,
-) -> Vec<String> {
-    let mut obligations = code_quality_implementation_obligations();
-    if package_naming_policy_for_reference_groups(&selection.reference_groups).is_some() {
-        obligations.push("For JVM production source, choose a professional base package from existing package roots, build group metadata, or confirmed organization/project identity; if none exists, use app.<project_slug> and only fall back to app.generated when no stable project slug can be derived.".to_string());
-        obligations.push("Do not create or keep placeholder package roots such as com.example, org.example, com.company, com.demo, org.demo, com.sample, or org.sample in production source.".to_string());
-    }
-    if selection.reference_groups.contains_key("mybatisplus") {
-        obligations.push("For MyBatis-Plus persistence work, preserve the accepted Mapper, Service, transaction, migration, tenant, and audit boundaries; use only the MCP-selected MyBatis-Plus references and do not introduce JPA, MyBatis-Flex, or a second data-access abstraction.".to_string());
-    }
-    let owns_observability_boundary = selection
-        .reference_groups
-        .get("common")
-        .is_some_and(|groups| groups.iter().any(|group| group == "observability"));
-    if owns_observability_boundary {
-        obligations.push("Implement diagnostic events in source code only at task-owned boundaries: critical state transitions, external dependency outcomes, async job or consumer outcomes, retries and terminal failures, and the single owning boundary for unexpected errors. Do not add entry/exit logs to every method, duplicate one exception across layers, or emit sensitive payloads.".to_string());
-    }
-    if owns_logging_infrastructure {
-        obligations.push("Implement the task-owned logging infrastructure using the repository's existing provider first, then a selected framework logging reference, otherwise the cross-stack reference's deterministic language default. Own dependency and provider setup, structured output, correlation middleware or filters, lifecycle-safe async output, and accepted file rotation or retention requirements; do not introduce a second logger stack.".to_string());
-    } else if owns_observability_boundary {
-        obligations.push("Use the repository's existing logger for task-owned events. This task does not own global logger dependencies, provider replacement, or application-wide logging configuration unless a selected framework logging reference explicitly assigns that responsibility.".to_string());
-    }
-    obligations
-}
-
 fn code_quality_verification_obligations() -> Vec<String> {
     vec![
         "Use task.verificationIntents as verification id source.".to_string(),
@@ -6963,16 +6913,6 @@ fn task_can_consume_api_contract(task: &TaskDefinition) -> bool {
         .implementation_actions
         .iter()
         .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
-}
-
-fn api_contract_implementation_obligations() -> Vec<String> {
-    vec![
-        "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs or task-owned client/test bindings.".to_string(),
-        "Return actionable validation or business-blocking errors instead of silent success or generic server errors.".to_string(),
-        "Apply pagination, filtering, auth, and contract file obligations only when the AAC interface declares them.".to_string(),
-        "Apply each accepted request normalization rule before validation at the declared boundary.".to_string(),
-        "Keep frontend/client bindings aligned with the declared API response and error shapes when the task owns the binding.".to_string(),
-    ]
 }
 
 fn api_contract_verification_obligations() -> Vec<String> {
@@ -8078,62 +8018,10 @@ mod tests {
     }
 
     #[test]
-    fn code_quality_obligations_separate_logging_infrastructure_from_boundary_events() {
-        let boundary_selection = contracts::CodeReferenceSelection {
-            reference_groups: BTreeMap::from([(
-                "common".to_string(),
-                vec!["observability".to_string()],
-            )]),
-            ..contracts::CodeReferenceSelection::default()
-        };
-        let infrastructure_selection = contracts::CodeReferenceSelection {
-            reference_groups: BTreeMap::from([(
-                "common".to_string(),
-                vec!["observability".to_string()],
-            )]),
-            ..contracts::CodeReferenceSelection::default()
-        };
-
-        let boundary =
-            code_quality_implementation_obligations_for_selection(&boundary_selection, false);
-        let infrastructure =
-            code_quality_implementation_obligations_for_selection(&infrastructure_selection, true);
-
-        assert!(boundary
-            .iter()
-            .any(|item| item.contains("diagnostic events in source code")));
-        assert!(boundary
-            .iter()
-            .any(|item| item.contains("does not own global logger dependencies")));
-        assert!(!boundary
-            .iter()
-            .any(|item| item.contains("Implement the task-owned logging infrastructure")));
-        assert!(infrastructure
-            .iter()
-            .any(|item| item.contains("Implement the task-owned logging infrastructure")));
-        assert!(infrastructure
-            .iter()
-            .any(|item| item.contains("deterministic language default")));
-        assert!(!infrastructure
-            .iter()
-            .any(|item| item.contains("does not own global logger dependencies")));
-    }
-
-    #[test]
-    fn mybatis_plus_selection_adds_a_task_scoped_execution_obligation() {
-        let selection = contracts::CodeReferenceSelection {
-            reference_groups: BTreeMap::from([(
-                "mybatisplus".to_string(),
-                vec!["mapping".to_string(), "crud".to_string()],
-            )]),
-            ..contracts::CodeReferenceSelection::default()
-        };
-
-        let obligations = code_quality_implementation_obligations_for_selection(&selection, false);
-
-        assert!(obligations.iter().any(|item| {
-            item.contains("MyBatis-Plus") && item.contains("do not introduce JPA")
-        }));
+    fn quality_requirements_do_not_duplicate_task_implementation_scope() {
+        let requirement = code_quality_requirement_template(&json!({"required": true}));
+        assert!(requirement.get("implementationObligations").is_none());
+        assert!(requirement.get("verificationObligations").is_some());
     }
 
     #[test]

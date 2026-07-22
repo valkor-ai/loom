@@ -17,7 +17,6 @@ use delivery_core::{
     LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
     TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
-use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicability};
 use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
@@ -1908,56 +1907,26 @@ fn validate_review_signals(
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
     let signals = array_field(fields, "outputContract.reviewSignals.items");
-    let unsatisfied_detail = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("requirement_detail_evidence")
-            && item.get("detailSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_frontend = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
-            && item.get("closureSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_frontend_quality = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_ui_quality")
-            && item.get("uiQualitySatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_architecture_quality = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
-            && item
-                .get("architectureQualitySatisfied")
-                .and_then(Value::as_bool)
-                == Some(false)
-    });
-    let unsatisfied_api_contract = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("api_contract")
-            && item.get("apiContractSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
-            && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
-            && item.get("recommendedNextAction").and_then(Value::as_str) == Some("taskplan_repair")
-    });
-    let missing_architecture_quality_task_assignment =
-        signals.as_array().into_iter().flatten().any(|item| {
-            item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
-                && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
-                && item.get("recommendedNextAction").and_then(Value::as_str)
-                    == Some("taskplan_repair")
-        });
-    if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
-        && (unsatisfied_detail
-            || unsatisfied_frontend
-            || unsatisfied_frontend_quality
-            || unsatisfied_architecture_quality
-            || unsatisfied_api_contract)
+    let unsatisfied_signal = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(review_signal_requires_follow_up);
+    if matches!(result.decision.as_str(), "approved" | "approved_with_notes") && unsatisfied_signal
     {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
+            "ReviewResult cannot approve while any MCP review signal declares a non-terminal recommendedNextAction.",
         ));
     }
     validate_execution_repair_signal_targets(result, &signals, issues);
-    if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
+    let taskplan_repair_signal = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|signal| signal_recommends_action(signal, "taskplan_repair"));
+    if taskplan_repair_signal {
         let has_higher_priority_blocker = result.findings.iter().any(|finding| {
             is_blocking_finding(finding)
                 && [
@@ -1981,10 +1950,21 @@ fn validate_review_signals(
             issues.push(issue(
                 "REVIEW_RESULT_STATUS_INCONSISTENT",
                 "findings",
-                "Missing workflow closure or architecture quality task assignment requires a blocking taskplan_repair finding.",
+                "A review signal routed to taskplan_repair requires a blocking taskplan_repair finding.",
             ));
         }
     }
+}
+
+fn signal_recommends_action(signal: &Value, action: &str) -> bool {
+    signal.get("recommendedNextAction").and_then(Value::as_str) == Some(action)
+}
+
+fn review_signal_requires_follow_up(signal: &Value) -> bool {
+    signal
+        .get("recommendedNextAction")
+        .and_then(Value::as_str)
+        .is_some_and(|action| action != "none")
 }
 
 fn validate_execution_repair_signal_targets(
@@ -3642,25 +3622,18 @@ fn build_engineering_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
                 let passed_verifications = result
                     .map(passed_verification_summaries)
                     .unwrap_or_default();
-                let satisfied = applicability.engineering_quality_evidence
-                    && result
-                        .map(|result| {
-                            matches!(
-                                result.status,
-                                contracts::TaskResultStatus::Completed
-                                    | contracts::TaskResultStatus::CompletedWithNotes
-                            ) && !passed_verifications.is_empty()
-                        })
-                        .unwrap_or(false);
+                let satisfied = result
+                    .map(|result| {
+                        matches!(
+                            result.status,
+                            contracts::TaskResultStatus::Completed
+                                | contracts::TaskResultStatus::CompletedWithNotes
+                        ) && !passed_verifications.is_empty()
+                    })
+                    .unwrap_or(false);
                 json!({
                     "requirementId": requirement.requirement_id,
                     "kind": requirement.kind,
@@ -3694,20 +3667,12 @@ fn build_code_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
-                let evidence = result
-                    .filter(|_| applicability.code_quality_evidence)
-                    .and_then(|result| {
-                        result
-                            .code_quality_evidence
-                            .iter()
-                            .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                    });
+                let evidence = result.and_then(|result| {
+                    result
+                        .code_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3745,7 +3710,6 @@ fn build_code_quality_review_matrix(
                     "referenceGroups": requirement.reference_groups,
                     "referenceLoadPlan": requirement.reference_load_plan,
                     "focusTags": requirement.focus_tags,
-                    "implementationObligations": requirement.implementation_obligations,
                     "verificationObligations": requirement.verification_obligations,
                     "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "referenceGroupsChecked": evidence
@@ -3836,20 +3800,12 @@ fn build_architecture_quality_review_matrix(
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == *task_id);
-            let applicability = task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *task_id)
-                .map(task_evidence_applicability)
-                .unwrap_or_default();
-            let evidence = result
-                .filter(|_| applicability.architecture_quality_evidence)
-                .and_then(|result| {
-                    result
-                        .architecture_quality_evidence
-                        .iter()
-                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                });
+            let evidence = result.and_then(|result| {
+                result
+                    .architecture_quality_evidence
+                    .iter()
+                    .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+            });
             let passed_verification_ids = result
                 .map(|result| {
                     result
@@ -3878,7 +3834,6 @@ fn build_architecture_quality_review_matrix(
                 "decisionRefs": requirement.decision_refs,
                 "nfrRefs": requirement.nfr_refs,
                 "riskRefs": requirement.risk_refs,
-                "implementationObligations": requirement.implementation_obligations,
                 "verificationObligations": requirement.verification_obligations,
                 "architectureQualityEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                 "verificationSupported": verification_supported,
@@ -3903,13 +3858,7 @@ fn build_api_contract_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
-                let evidence = result.filter(|_| applicability.api_contract_evidence).and_then(|result| {
+                let evidence = result.and_then(|result| {
                     result
                         .api_contract_evidence
                         .iter()
@@ -3947,7 +3896,6 @@ fn build_api_contract_review_matrix(
                     "interfaceRefs": requirement.interface_refs,
                     "securityProfileRefs": requirement.security_profile_refs,
                     "referenceLoadPlan": requirement.reference_load_plan,
-                    "implementationObligations": requirement.implementation_obligations,
                     "verificationObligations": requirement.verification_obligations,
                     "apiContractEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "verificationSupported": verification_supported,
@@ -4060,10 +4008,6 @@ fn build_frontend_quality_review_matrix(
         .iter()
         .filter_map(|task| {
             let requirement = task.frontend_experience_requirement.as_ref()?;
-            let applicability = task_evidence_applicability(task);
-            if !applicability.frontend_quality_self_check {
-                return None;
-            }
             let surface_contract = task_scoped_surface_contract_for_review(requirement);
             if !surface_contract.is_object() {
                 return None;
@@ -4878,13 +4822,7 @@ fn build_review_signals(
         }
     }
     for result in task_results {
-        let applicability = task_plan
-            .tasks
-            .iter()
-            .find(|task| task.task_id == result.task_id)
-            .map(task_evidence_applicability)
-            .unwrap_or_default();
-        if applicability.runtime_delivery_evidence && result.runtime_delivery_evidence.is_some() {
+        if result.runtime_delivery_evidence.is_some() {
             let runtime_evidence = compact_runtime_delivery_evidence(result);
             signals.push(json!({
                 "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
@@ -4895,7 +4833,7 @@ fn build_review_signals(
                 "runtimeEvidence": runtime_evidence
             }));
         }
-        if applicability.frontend_self_check && result.frontend_experience_self_check.is_some() {
+        if result.frontend_experience_self_check.is_some() {
             let frontend_evidence = result
                 .frontend_experience_self_check
                 .as_ref()
@@ -4910,8 +4848,7 @@ fn build_review_signals(
                 "evidenceRefCount": frontend_evidence
             }));
         }
-        if applicability.frontend_quality_self_check && result.frontend_quality_self_check.is_some()
-        {
+        if result.frontend_quality_self_check.is_some() {
             let frontend_quality_evidence = compact_frontend_quality_self_check(result);
             signals.push(json!({
                 "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
@@ -4951,13 +4888,6 @@ fn compact_runtime_delivery_evidence(result: &TaskResult) -> Value {
         "codeLevelCheckStatuses": check_statuses,
         "runtimeProbeCleanup": evidence.runtime_probe_cleanup.as_deref().map(compact_summary)
     })
-}
-
-fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
-    serde_json::to_value(task)
-        .ok()
-        .map(|value| task_evidence_applicability_from_value(&value))
-        .unwrap_or_default()
 }
 
 fn value_string_array(value: &Value, key: &str) -> Vec<String> {

@@ -564,7 +564,7 @@ fn build_execution_request(
     if let Some(browser_verification_context) = browser_verification_context {
         source_context["browserVerificationContext"] = browser_verification_context;
     }
-    Ok(json!({
+    let request = json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
         "requestId": request_id,
@@ -616,7 +616,81 @@ fn build_execution_request(
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
-    }))
+    });
+    validate_task_execution_request_coverage(&request)?;
+    Ok(request)
+}
+
+fn validate_task_execution_request_coverage(
+    request: &Value,
+) -> Result<(), state::store::StateError> {
+    let task = request.get("task").ok_or_else(|| {
+        state::store::StateError::InvalidArgument(
+            "task execution request is missing task context".to_string(),
+        )
+    })?;
+    let groups = request
+        .pointer("/requestReadPlan/groups")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "task execution request is missing requestReadPlan.groups".to_string(),
+            )
+        })?;
+    let covered = groups
+        .iter()
+        .filter_map(|group| group.get("selectors"))
+        .filter_map(|selectors| {
+            serde_json::from_value::<Vec<delivery_core::ReadSelector>>(selectors.clone()).ok()
+        })
+        .flat_map(|selectors| delivery_core::expand_read_selectors(&selectors))
+        .collect::<BTreeSet<_>>();
+
+    let mut required = vec![
+        "task.objective".to_string(),
+        "task.writeBoundary".to_string(),
+    ];
+    for field in ["implementationActions", "verificationIntents"] {
+        if task
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            required.push(format!("task.{field}"));
+        }
+    }
+    if let Some(projection) = request
+        .pointer("/sourceContext/architectureArtifactProjection")
+        .and_then(Value::as_object)
+    {
+        for (field, value) in projection {
+            if field != "compaction" && json_value_has_content(value) {
+                required.push(format!(
+                    "sourceContext.architectureArtifactProjection.{field}"
+                ));
+            }
+        }
+    }
+    for path in required {
+        if !covered.iter().any(|covered_path| {
+            covered_path == &path || covered_path.starts_with(&format!("{path}."))
+        }) {
+            return Err(state::store::StateError::InvalidArgument(format!(
+                "task execution request read plan does not cover authoritative field {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn json_value_has_content(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => fields.values().any(json_value_has_content),
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
 }
 
 pub(crate) fn task_execution_rules(
@@ -865,7 +939,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
-        rules.push("Treat sourceContext.codeQualityExecutionContext[].implementationObligations as source implementation requirements, not evidence-writing prompts. Reading references, running a build, or describing an obligation does not satisfy it unless the task-owned source or configuration change is implemented and verified.".to_string());
+        rules.push("Treat task.implementationActions, task.objective, task.writeBoundary, and the selected reference plan as the implementation contract. Do not invent a second obligation list inside TaskResult; codeQualityEvidence records how the completed task followed the selected references.".to_string());
         rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
@@ -945,7 +1019,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
             "opencodeHint": "Resolve as ../references/loom/<path> from the active OpenCode loom command/plugin files."
         },
         "implementationRules": [
-            "Treat every sourceContext.codeQualityExecutionContext[].implementationObligations entry as a required source-edit decision within this task's write boundary; codeQualityEvidence reports the completed implementation and cannot replace it.",
+            "Use task.implementationActions and task.objective as the source-edit decisions within this task's write boundary; code quality references constrain implementation choices but do not create a second task scope.",
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
             "When the selected reference plan contains tech/backend/springboot/mybatis-plus, use that plan as the only MyBatis-Plus guidance for the task; do not load JPA, MyBatis-Flex, plain MyBatis, or unlisted external persistence references.",
@@ -3137,7 +3211,7 @@ mod tests {
     }
 
     #[test]
-    fn task_execute_treats_code_quality_obligations_as_source_work() {
+    fn task_execute_uses_task_scope_as_the_implementation_contract() {
         let task = code_quality_task();
         let execution_rules = code_quality_execution_rules(&task);
         let result_rules = task_result_rules(&task, false);
@@ -3148,10 +3222,10 @@ mod tests {
             .iter()
             .any(|rule| rule
                 .as_str()
-                .is_some_and(|text| text.contains("required source-edit decision"))));
+                .is_some_and(|text| text.contains("task.implementationActions"))));
         assert!(result_rules.as_array().unwrap().iter().any(|rule| rule
             .as_str()
-            .is_some_and(|text| text.contains("not evidence-writing prompts"))));
+            .is_some_and(|text| text.contains("task.implementationActions"))));
     }
 
     #[test]
@@ -3165,6 +3239,56 @@ mod tests {
             .any(|item| item
                 .as_str()
                 .is_some_and(|text| text.contains("mybatis-plus"))));
+    }
+
+    #[test]
+    fn task_execution_request_requires_authoritative_fields_in_read_plan() {
+        let request = json!({
+            "task": {
+                "objective": "Implement the task",
+                "implementationActions": ["create_or_update_interface"],
+                "writeBoundary": {"forbiddenPaths": []},
+                "verificationIntents": [{"verificationId": "verify-1"}]
+            },
+            "sourceContext": {
+                "architectureArtifactProjection": {
+                    "modules": [{"moduleId": "module-1"}]
+                }
+            },
+            "requestReadPlan": {"groups": [
+                {"selectors": read_selectors_value_from_paths([
+                    "task.objective",
+                    "task.implementationActions",
+                    "task.writeBoundary.forbiddenPaths",
+                    "task.verificationIntents"
+                ])},
+                {"selectors": read_selectors_value_from_paths([
+                    "sourceContext.architectureArtifactProjection.modules"
+                ])}
+            ]}
+        });
+
+        assert!(validate_task_execution_request_coverage(&request).is_ok());
+    }
+
+    #[test]
+    fn task_execution_request_rejects_read_plan_that_drops_implementation_actions() {
+        let request = json!({
+            "task": {
+                "objective": "Implement the task",
+                "implementationActions": ["create_or_update_interface"],
+                "writeBoundary": {"forbiddenPaths": []},
+                "verificationIntents": []
+            },
+            "sourceContext": {"architectureArtifactProjection": {}},
+            "requestReadPlan": {"groups": [{"selectors": read_selectors_value_from_paths([
+                "task.objective",
+                "task.writeBoundary.forbiddenPaths"
+            ])}]}
+        });
+
+        let error = validate_task_execution_request_coverage(&request).unwrap_err();
+        assert!(error.to_string().contains("task.implementationActions"));
     }
 
     #[test]

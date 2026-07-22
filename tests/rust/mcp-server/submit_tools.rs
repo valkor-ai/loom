@@ -258,7 +258,7 @@ fn brainstorm_submit_ignores_agent_authored_confirmation_metadata() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["state"], "user_gate", "{result:#}");
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
     let contract = read_json_value(
         &fixture
@@ -599,7 +599,7 @@ fn brainstorm_submit_derives_glossary_update_ids_instead_of_repairing_agent_outp
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["state"], "user_gate", "{result:#}");
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
     let contract = read_json_value(
         &fixture
@@ -5673,13 +5673,11 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
             .expect("forbidden package prefixes")
             .contains(&json!("com.example"))
     );
-    assert!(backend_data_code_requirement["implementationObligations"]
-        .as_array()
-        .expect("implementation obligations")
-        .iter()
-        .any(|obligation| obligation
-            .as_str()
-            .is_some_and(|text| text.contains("app.<project_slug>"))));
+    assert!(backend_data_code_requirement
+        .get("implementationObligations")
+        .is_none(),
+        "task implementation scope must not be duplicated in the quality requirement: {backend_data_code_requirement:#}"
+    );
 
     let execution_request_ref = accepted["next"]["requestRef"]
         .as_str()

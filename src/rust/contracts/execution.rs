@@ -242,8 +242,6 @@ pub struct ArchitectureQualityRequirement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risk_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
 
@@ -260,8 +258,6 @@ pub struct ApiContractRequirement {
     pub security_profile_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
@@ -291,8 +287,6 @@ pub struct CodeQualityRequirement {
     pub package_naming_policy: Option<CodePackageNamingPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub focus_tags: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
