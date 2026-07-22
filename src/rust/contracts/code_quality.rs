@@ -73,11 +73,11 @@ pub fn code_quality_enum_refs() -> Value {
                 "code": {
                     "common": ["observability"],
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
-                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability"],
-                "django": ["models", "serializers", "views", "security", "testing"],
-                "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
-                "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
-                "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration"],
+                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability", "logging"],
+                "django": ["models", "serializers", "views", "security", "testing", "logging"],
+                "fastapi": ["schemas", "data", "routing", "security", "testing", "migration", "logging"],
+                "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime", "logging"],
+                "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration", "logging"],
                 "react": ["core", "hooks", "state", "performance", "testing", "server-components", "react19", "migration"],
                 "nextjs": ["core", "app-router", "data", "actions", "server-components", "runtime", "testing"],
                 "vue": ["core", "components", "state", "typescript", "nuxt", "build", "mobile", "testing"],
@@ -1705,6 +1705,9 @@ fn backend_reference_items_for_signal(
         {
             items.insert("security".to_string());
         }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
+        }
         if !items.is_empty() {
             groups.insert("django".to_string(), items);
         }
@@ -1731,6 +1734,9 @@ fn backend_reference_items_for_signal(
         }
         if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("fastapi".to_string(), items);
@@ -1780,6 +1786,9 @@ fn backend_reference_items_for_signal(
         {
             items.insert("runtime".to_string());
         }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
+        }
         if !items.is_empty() {
             groups.insert("aspnetcore".to_string(), items);
         }
@@ -1807,6 +1816,9 @@ fn backend_reference_items_for_signal(
         }
         if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("nestjs".to_string(), items);
@@ -1871,12 +1883,19 @@ fn extend_spring_boot_task_references(
     {
         items.insert("cloud".to_string());
     }
-    if context.observability
-        || context.request_tracing
-        || task_has_action(task, ImplementationAction::ImplementObservability)
-    {
+    if task_owns_logging_infrastructure(task, context) {
         items.insert("observability".to_string());
+        items.insert("logging".to_string());
     }
+}
+
+pub fn task_owns_logging_infrastructure(
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) -> bool {
+    task_has_action(task, ImplementationAction::ImplementObservability)
+        || context.observability
+        || context.request_tracing
 }
 
 fn task_has_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
@@ -4431,6 +4450,7 @@ mod tests {
             "integration",
             "resilience",
             "observability",
+            "logging",
         ] {
             assert!(spring.contains(&expected.to_string()));
         }
@@ -5165,11 +5185,13 @@ mod tests {
         let ordinary = code_reference_selection_for_task(&baseline, &ordinary_config_task).unwrap();
 
         assert!(observability.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(observability.reference_groups["springboot"].contains(&"logging".to_string()));
         assert!(observability.reference_groups["common"].contains(&"observability".to_string()));
         assert!(observability
             .focus_tags
             .contains(&"observability".to_string()));
         assert!(!ordinary.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(!ordinary.reference_groups["springboot"].contains(&"logging".to_string()));
         assert!(!ordinary.reference_groups.contains_key("common"));
         assert!(!ordinary.focus_tags.contains(&"observability".to_string()));
         assert!(ordinary.reference_groups["springboot"].contains(&"runtime".to_string()));
@@ -5177,6 +5199,134 @@ mod tests {
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "tech.code.observability" && item.path == "tech/code/observability.md"
         }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.logging" && item.path == "tech/backend/springboot/logging.md"
+        }));
+    }
+
+    #[test]
+    fn framework_logging_references_require_logging_infrastructure_ownership() {
+        let frameworks = [
+            ("Java + Spring Boot", "springboot", "bk.spring.logging"),
+            (".NET 8 + ASP.NET Core", "aspnetcore", "bk.aspnet.logging"),
+            ("Python + FastAPI", "fastapi", "bk.fastapi.logging"),
+            ("Python + Django", "django", "bk.django.logging"),
+            ("TypeScript + NestJS", "nestjs", "bk.nest.logging"),
+        ];
+
+        for (stack, framework, ref_id) in frameworks {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let infrastructure_task = task(
+                TaskKind::ConfigurationSupport,
+                vec![ImplementationAction::ImplementObservability],
+            );
+            let ordinary_task = task(
+                TaskKind::ConfigurationSupport,
+                vec![ImplementationAction::AddOrUpdateConfig],
+            );
+            let infrastructure =
+                code_reference_selection_for_task(&baseline, &infrastructure_task).unwrap();
+            let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+
+            assert!(infrastructure.reference_groups[framework].contains(&"logging".to_string()));
+            assert!(!ordinary
+                .reference_groups
+                .get(framework)
+                .is_some_and(|groups| groups.contains(&"logging".to_string())));
+            assert!(code_reference_load_plan(&infrastructure.reference_groups)
+                .iter()
+                .any(|item| item.ref_id == ref_id
+                    && item.path == format!("tech/backend/{framework}/logging.md")));
+        }
+    }
+
+    #[test]
+    fn boundary_observability_does_not_install_framework_logging() {
+        let frameworks = [
+            ("Java + Spring Boot", "springboot"),
+            (".NET 8 + ASP.NET Core", "aspnetcore"),
+            ("Python + FastAPI", "fastapi"),
+            ("Python + Django", "django"),
+            ("TypeScript + NestJS", "nestjs"),
+        ];
+        let context = CodeReferenceTaskContext {
+            security: true,
+            async_processing: true,
+            integration: true,
+            resilience: true,
+            ..CodeReferenceTaskContext::default()
+        };
+
+        for (stack, framework) in frameworks {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let task = task(
+                TaskKind::RefactorSupport,
+                vec![ImplementationAction::RefactorSupportingCode],
+            );
+            let selection =
+                code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+
+            assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
+            assert!(!task_owns_logging_infrastructure(&task, &context));
+            assert!(!selection
+                .reference_groups
+                .get(framework)
+                .is_some_and(|groups| groups.contains(&"logging".to_string())));
+        }
+    }
+
+    #[test]
+    fn request_tracing_owns_framework_logging_infrastructure() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Python + FastAPI"}}
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let context = CodeReferenceTaskContext {
+            request_tracing: true,
+            ..CodeReferenceTaskContext::default()
+        };
+
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+
+        assert!(task_owns_logging_infrastructure(&task, &context));
+        assert!(selection.reference_groups["fastapi"].contains(&"logging".to_string()));
+        assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
+    }
+
+    #[test]
+    fn framework_logging_references_define_provider_and_verification_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("workspace root");
+        for framework in ["springboot", "aspnetcore", "fastapi", "django", "nestjs"] {
+            let path = root.join(format!(
+                "plugins/shared/loom/references/tech/backend/{framework}/logging.md"
+            ));
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            for section in [
+                "## Provider Decision",
+                "## Correlation And Boundaries",
+                "## Async And File Output",
+                "## Verification Focus",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]

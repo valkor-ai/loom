@@ -7,10 +7,11 @@ use contracts::{
     architecture::ArchitectureDetailCoverageEntry, build_code_quality_seed, code_quality_enum_refs,
     code_reference_load_plan, code_reference_selection_for_task_with_context,
     execution::TaskArtifactRefs, package_naming_policy_for_reference_groups,
-    planning::RequirementDetailItem, ui_surface_decision_enum_refs, AcceptancePriority,
-    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
-    BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
-    BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
+    planning::RequirementDetailItem, task_owns_logging_infrastructure,
+    ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
+    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
+    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
+    CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
     EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
     TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
     TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
@@ -6682,6 +6683,7 @@ fn normalize_code_quality_requirements(
             focus_tags: selection.focus_tags.clone(),
             implementation_obligations: code_quality_implementation_obligations_for_selection(
                 &selection,
+                task_owns_logging_infrastructure(task, &context),
             ),
             verification_obligations: code_quality_verification_obligations(),
         });
@@ -6883,11 +6885,24 @@ fn code_quality_implementation_obligations() -> Vec<String> {
 
 fn code_quality_implementation_obligations_for_selection(
     selection: &contracts::CodeReferenceSelection,
+    owns_logging_infrastructure: bool,
 ) -> Vec<String> {
     let mut obligations = code_quality_implementation_obligations();
     if package_naming_policy_for_reference_groups(&selection.reference_groups).is_some() {
         obligations.push("For JVM production source, choose a professional base package from existing package roots, build group metadata, or confirmed organization/project identity; if none exists, use app.<project_slug> and only fall back to app.generated when no stable project slug can be derived.".to_string());
         obligations.push("Do not create or keep placeholder package roots such as com.example, org.example, com.company, com.demo, org.demo, com.sample, or org.sample in production source.".to_string());
+    }
+    let owns_observability_boundary = selection
+        .reference_groups
+        .get("common")
+        .is_some_and(|groups| groups.iter().any(|group| group == "observability"));
+    if owns_observability_boundary {
+        obligations.push("Implement diagnostic events in source code only at task-owned boundaries: critical state transitions, external dependency outcomes, async job or consumer outcomes, retries and terminal failures, and the single owning boundary for unexpected errors. Do not add entry/exit logs to every method, duplicate one exception across layers, or emit sensitive payloads.".to_string());
+    }
+    if owns_logging_infrastructure {
+        obligations.push("Implement the task-owned logging infrastructure using the repository's existing provider first, then a selected framework logging reference, otherwise the cross-stack reference's deterministic language default. Own dependency and provider setup, structured output, correlation middleware or filters, lifecycle-safe async output, and accepted file rotation or retention requirements; do not introduce a second logger stack.".to_string());
+    } else if owns_observability_boundary {
+        obligations.push("Use the repository's existing logger for task-owned events. This task does not own global logger dependencies, provider replacement, or application-wide logging configuration unless a selected framework logging reference explicitly assigns that responsibility.".to_string());
     }
     obligations
 }
@@ -8056,6 +8071,48 @@ mod tests {
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["runtimePerformance"],
             json!(["optimize_runtime_performance"])
         );
+    }
+
+    #[test]
+    fn code_quality_obligations_separate_logging_infrastructure_from_boundary_events() {
+        let boundary_selection = contracts::CodeReferenceSelection {
+            reference_groups: BTreeMap::from([(
+                "common".to_string(),
+                vec!["observability".to_string()],
+            )]),
+            ..contracts::CodeReferenceSelection::default()
+        };
+        let infrastructure_selection = contracts::CodeReferenceSelection {
+            reference_groups: BTreeMap::from([(
+                "common".to_string(),
+                vec!["observability".to_string()],
+            )]),
+            ..contracts::CodeReferenceSelection::default()
+        };
+
+        let boundary =
+            code_quality_implementation_obligations_for_selection(&boundary_selection, false);
+        let infrastructure =
+            code_quality_implementation_obligations_for_selection(&infrastructure_selection, true);
+
+        assert!(boundary
+            .iter()
+            .any(|item| item.contains("diagnostic events in source code")));
+        assert!(boundary
+            .iter()
+            .any(|item| item.contains("does not own global logger dependencies")));
+        assert!(!boundary
+            .iter()
+            .any(|item| item.contains("Implement the task-owned logging infrastructure")));
+        assert!(infrastructure
+            .iter()
+            .any(|item| item.contains("Implement the task-owned logging infrastructure")));
+        assert!(infrastructure
+            .iter()
+            .any(|item| item.contains("deterministic language default")));
+        assert!(!infrastructure
+            .iter()
+            .any(|item| item.contains("does not own global logger dependencies")));
     }
 
     #[test]

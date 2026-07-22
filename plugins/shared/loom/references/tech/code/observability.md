@@ -6,8 +6,14 @@ Use this reference only when the task owns a structured observability concern: r
 
 - Keep business state and audit records in the domain/persistence boundary. Logs, metrics, and traces explain execution; they are not the source of truth for business history.
 - Keep transport error shape in the selected API error reference. Log the server-side diagnostic once at the boundary that has operation and correlation context.
-- Keep framework mechanics in the selected framework reference. This file defines cross-stack behavior; it does not prescribe Logback, Serilog, Python logging, or a vendor exporter when the repository already has a convention.
+- Keep framework-specific provider wiring, middleware, async handlers, and file appenders in a selected framework `logging.md` reference. When no overlay exists, this file provides the ecosystem-native fallback, but the repository's established provider still takes precedence.
 - Do not add a logger, collector, sidecar, container volume, or external service unless the accepted task owns that behavior and its failure policy.
+
+## Provider Decision
+
+Preserve the repository's existing logging abstraction, provider, and configuration first. When the task owns logging infrastructure and no selected framework `logging.md` applies, use the ecosystem-native boundary: Python `logging`, Java/Kotlin SLF4J, .NET `ILogger`, Go `slog`, a repository-established Rust `tracing`/`log` facade, a PSR-3 logger for PHP, or the existing Node logger. For a greenfield Node service that requires structured JSON, prefer Pino. Do not introduce multiple providers or make business modules depend on provider-specific APIs.
+
+Provider selection does not imply file logging, asynchronous buffering, or an external collector. Those mechanics require an accepted operability requirement or an existing repository contract.
 
 ## Structured Events
 
@@ -19,6 +25,8 @@ Use stable event names and structured fields rather than interpolated prose. A u
 - dependency, attempt, duration, or queue metadata when it explains a controlled boundary
 
 Keep levels meaningful: expected validation, not-found, conflict, and cancellation outcomes should not be emitted as unexpected server errors. Unexpected failures should carry the exception cause and stack at one owning boundary. Do not log the same failure at controller, service, adapter, and global-handler layers.
+
+A business implementation task adds events only for boundaries it owns: critical state transitions, external dependency outcomes, async job or consumer outcomes, retries and terminal failures, and unexpected errors at the single layer with enough context. Loading this reference does not grant ownership of global logger setup; that requires structured logging-infrastructure ownership, plus the selected framework `logging.md` when an overlay exists.
 
 ## Redaction And Cardinality
 

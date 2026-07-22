@@ -865,6 +865,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
+        rules.push("Treat sourceContext.codeQualityExecutionContext[].implementationObligations as source implementation requirements, not evidence-writing prompts. Reading references, running a build, or describing an obligation does not satisfy it unless the task-owned source or configuration change is implemented and verified.".to_string());
         rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
@@ -944,6 +945,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
             "opencodeHint": "Resolve as ../references/loom/<path> from the active OpenCode loom command/plugin files."
         },
         "implementationRules": [
+            "Treat every sourceContext.codeQualityExecutionContext[].implementationObligations entry as a required source-edit decision within this task's write boundary; codeQualityEvidence reports the completed implementation and cannot replace it.",
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
             "When a code quality requirement contains packageNamingPolicy, production source package declarations must follow that policy; placeholder package roots are not acceptable deliverable code.",
@@ -3103,6 +3105,53 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn code_quality_task() -> TaskDefinition {
+        TaskDefinition {
+            task_id: "task-observability".to_string(),
+            group_id: "group-backend".to_string(),
+            title: "Implement application observability".to_string(),
+            task_kind: TaskKind::ConfigurationSupport,
+            implementation_actions: vec![ImplementationAction::ImplementObservability],
+            objective: "Configure logging and implement owned diagnostic boundaries.".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            requirement_detail_refs: vec![],
+            write_boundary: contracts::TaskWriteBoundary {
+                forbidden_paths: vec![".loom".to_string()],
+                artifact_refs: contracts::TaskArtifactRefs::default(),
+            },
+            verification_intents: vec![],
+            concept_refs: vec![],
+            concept_responsibilities: vec![],
+            concept_verification_intents: vec![],
+            frontend_experience_requirement: None,
+            runtime_delivery_requirement: None,
+            engineering_quality_requirement_refs: vec![],
+            architecture_quality_requirement_refs: vec![],
+            api_contract_requirement_refs: vec![],
+            code_quality_requirement_refs: vec!["code-quality-task-observability".to_string()],
+        }
+    }
+
+    #[test]
+    fn task_execute_treats_code_quality_obligations_as_source_work() {
+        let task = code_quality_task();
+        let execution_rules = code_quality_execution_rules(&task);
+        let result_rules = task_result_rules(&task, false);
+
+        assert!(execution_rules["implementationRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule
+                .as_str()
+                .is_some_and(|text| text.contains("required source-edit decision"))));
+        assert!(result_rules.as_array().unwrap().iter().any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("not evidence-writing prompts"))));
+    }
 
     #[test]
     fn architecture_projection_links_structured_happy_path_refs() {

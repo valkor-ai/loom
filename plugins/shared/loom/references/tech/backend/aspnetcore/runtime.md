@@ -64,10 +64,6 @@ Honor `stoppingToken`, handle partial failures, and define retry/dead-letter/ide
 
 Startup must not launch duplicate workers under test, design-time migrations, or hot reload. Shutdown should stop intake, finish/cancel bounded work, and close clients cleanly.
 
-## Framework Instrumentation Boundary
-
-Use `ILogger`, `ActivitySource`, `Meter`, or the repository's OpenTelemetry setup as the ASP.NET adapter for the selected application observability contract. The cross-stack reference owns event fields, levels, correlation, redaction, cardinality, async logging, file rotation, and retention. Keep exporter failure behavior aligned with the accepted operability model and do not block business requests indefinitely.
-
 ## AOT, Trimming, And Serialization
 
 Enable native AOT/trimming only when the selected runtime and dependencies support it. Verify reflection-heavy serializers, DI scanning, validators, EF provider behavior, OpenAPI generation, dynamic proxies, and configuration binding.

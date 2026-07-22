@@ -37,7 +37,7 @@ This file is selected for every `language_implementation_quality` requirement. I
 ## Cross-Cutting Ownership
 
 - Load `tech/code/observability.md` only when the task owns a structured observability, request-tracing, async-processing, external-boundary, resilience, or sensitive-error concern. A word such as `log`, `logging`, `monitoring`, or `tracing` in task prose is not an ownership signal.
-- The observability reference owns application logging behavior and configuration, including structured events, redaction, async appenders, file output, rotation, compression, and retention. Deploy owns container topology and does not generate those settings.
+- The observability reference owns cross-stack event behavior, task-owned diagnostic boundaries, and deterministic language fallback when no framework overlay applies. A selected framework `logging.md` owns framework provider wiring and configuration mechanics, including async appenders, file output, rotation, compression, and retention. Deploy owns container topology and does not generate those settings.
 
 ## Common Anti-Patterns
 

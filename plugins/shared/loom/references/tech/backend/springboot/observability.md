@@ -1,6 +1,6 @@
 # Spring Boot Observability
 
-This reference owns Spring Boot observability mechanics. Cross-stack event shape, redaction, correlation, async logging, file output, rotation, compression, retention, and verification rules live in `tech/code/observability.md` when that reference is selected.
+This reference owns Spring Boot health, metrics, and tracing mechanics. Cross-stack event behavior lives in `tech/code/observability.md`; SLF4J provider wiring, logging configuration, async appenders, and rolling files live in `tech/backend/springboot/logging.md` when that reference is selected.
 
 ## Actuator Exposure
 
