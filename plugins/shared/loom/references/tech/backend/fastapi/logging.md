@@ -1,8 +1,10 @@
 # FastAPI Logging
 
+## When To Use
+
 Use this reference only when the task owns FastAPI logging infrastructure. Route and service tasks that only emit owned events use the configured logger and do not redesign global logging.
 
-## Provider Decision
+## Implementation Focus
 
 1. Preserve the repository's existing Python logging provider and configuration.
 2. For greenfield FastAPI applications, use the standard `logging` API configured through `dictConfig`.
@@ -28,12 +30,31 @@ When buffered logging is accepted, use `QueueHandler` and a lifecycle-owned `Que
 
 Use console output by default. Application-owned files require an accepted requirement, a stable path, process-safe handler choice, size/time rotation, compression/retention policy, and destination failure behavior. Standard rotating handlers are not automatically safe for multiple worker processes.
 
+## Ownership And Failure Policy
+
+The task must identify whether it owns provider setup, event instrumentation, queue buffering, file output, or only verification. Optional logging or exporter failure must not change the business result; required security and recovery events follow the accepted overload policy.
+
+Keep handler lifecycle in the application lifespan and keep deployment, secrets, and external collectors outside this reference.
+
+## Evidence Focus
+
+Record the provider and configuration boundary, owned event, correlation and redaction rules, worker assumptions, and focused runtime evidence for the selected output behavior.
+
 ## Verification Focus
 
 - Start the ASGI application through its real lifespan and capture one task-owned event.
 - Verify stable fields, correlation propagation, level selection, redaction, and no duplicate Uvicorn/application error.
 - Exercise concurrent requests to prove correlation values do not leak between contexts.
 - When queue or file output is owned, verify saturation, listener shutdown, multiprocess assumptions, rotation, retention, and unavailable paths.
+
+## Configuration Review
+
+- Derive levels, handlers, and destinations from validated runtime configuration.
+- Keep one authoritative configuration path for application and Uvicorn logging.
+- Verify process and worker assumptions before selecting file or queue handlers.
+- Exercise startup with missing required settings and confirm the failure is actionable.
+- Keep redaction and correlation behavior stable across request and worker boundaries.
+- Record the selected policy before changing global logging behavior.
 
 ## Unsafe Defaults
 

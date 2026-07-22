@@ -1,5 +1,11 @@
 # MyBatis-Plus SQL Safety
 
+## When To Use
+
+Use this reference when a task builds or reviews MyBatis-Plus Wrapper, XML, annotation, or SQL-fragment behavior that can affect query scope, sorting, filtering, or writes.
+
+## Implementation Focus
+
 Treat SQL-fragment APIs as high-risk boundaries.
 
 - `apply`, `last`, `inSql`, `notInSql`, `exists`, `notExists`, and `setSql` accept SQL fragments; use them only with fixed templates or validated allowlists.
@@ -21,3 +27,7 @@ Test accepted and rejected sort/filter inputs, malicious fragment attempts, tena
 - Verify that authorization and tenant filters cannot be removed by an alternate Mapper method.
 - Keep security-sensitive SQL changes visible in the task's existing review evidence.
 - Do not use SQL interception as a substitute for an explicit application policy.
+
+## Evidence Focus
+
+Record the accepted input allowlists, affected Mapper or XML statements, authorization and tenant conditions, rejected-input behavior, and security-focused verification results.

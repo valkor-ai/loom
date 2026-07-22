@@ -2,14 +2,14 @@
 
 Use this reference only when the task owns a structured observability concern: request tracing, an async or scheduled flow, an external dependency boundary, a resilience decision, sensitive error handling, or an explicit `implement_observability` action. It is an application implementation reference, not a deployment or infrastructure logging contract.
 
-## Ownership Boundary
+## When To Use
 
 - Keep business state and audit records in the domain/persistence boundary. Logs, metrics, and traces explain execution; they are not the source of truth for business history.
 - Keep transport error shape in the selected API error reference. Log the server-side diagnostic once at the boundary that has operation and correlation context.
 - Keep framework-specific provider wiring, middleware, async handlers, and file appenders in a selected framework `logging.md` reference. When no overlay exists, this file provides the ecosystem-native fallback, but the repository's established provider still takes precedence.
 - Do not add a logger, collector, sidecar, container volume, or external service unless the accepted task owns that behavior and its failure policy.
 
-## Provider Decision
+## Implementation Focus
 
 Preserve the repository's existing logging abstraction, provider, and configuration first. When the task owns logging infrastructure and no selected framework `logging.md` applies, use the ecosystem-native boundary: Python `logging`, Java/Kotlin SLF4J, .NET `ILogger`, Go `slog`, a repository-established Rust `tracing`/`log` facade, a PSR-3 logger for PHP, or the existing Node logger. For a greenfield Node service that requires structured JSON, prefer Pino. Do not introduce multiple providers or make business modules depend on provider-specific APIs.
 
@@ -45,6 +45,10 @@ An async logger must use a bounded queue and an explicit overload policy. It mus
 When the application explicitly owns file logging, configure the repository's logging framework with a stable directory, format, size/time rotation, compression policy, and retention limit. The policy must bound disk use and define what happens when the directory is unavailable or the disk is full. Do not write logs into source, build output, or a path that is silently lost on the intended runtime.
 
 Async file appenders must preserve the same redaction, ordering expectations, backpressure policy, and shutdown behavior as console or structured output. Rotation and retention are application configuration concerns; do not ask Deploy to invent Logback/Serilog settings, log volumes, or retention values.
+
+## Evidence Focus
+
+Name the selected logging provider, owned execution boundaries, event fields, redaction rules, correlation policy, and any async or file-output behavior. Evidence should identify the implementation and verification that prove the accepted logging contract rather than treating a successful build as sufficient.
 
 ## Verification Focus
 

@@ -37,7 +37,7 @@ Record the adapter, capability, key examples, configuration source, unavailable-
 
 Evidence should point to changed files and concrete test cases. A successful Redis ping does not prove application-level key isolation or recovery behavior.
 
-## Anti-Patterns
+## Unsafe Defaults
 
 - Treating Redis package detection as a reason to add a service.
 - Using `localhost` for a container-to-container Redis URL.

@@ -28,6 +28,26 @@ Use an async appender only when the accepted operability requirement calls for i
 
 When application-owned file logging is required, configure a rolling policy with an explicit directory, time and/or size trigger, compression, history, and total-size cap. Keep console-only output when file ownership is not accepted. Do not ask Deploy to generate Logback settings or invent a log volume.
 
+## Runtime Failure Policy
+
+- Logging must not become a hidden correctness dependency for request handling, persistence, or message consumption.
+- If the appender, encoder, or destination is unavailable, follow the accepted overload policy and keep the business outcome explicit.
+- Preserve error events needed for security, recovery, and incident diagnosis when applying queue limits or discard rules.
+- Keep logger configuration failures visible during startup without leaking secrets or environment credentials.
+
+## Structured Event Contract
+
+- Use stable event names and bounded fields such as operation, outcome, error code, dependency, duration, and correlation id.
+- Do not use raw request URLs, arbitrary exception messages, user input, or unbounded identifiers as metric or log dimensions.
+- Redact authorization headers, cookies, tokens, passwords, connection strings, and sensitive payloads before serialization.
+- Keep the event schema aligned with the repository's API error and tracing contracts so one operation can be followed across boundaries.
+
+## Selection Boundary
+
+The task must state whether it owns provider selection, event instrumentation, async buffering, file output, or only verification. A logging reference does not authorize changes to unrelated business modules, deployment topology, or external collectors.
+
+Record that ownership decision in the task evidence and keep unowned logging behavior unchanged.
+
 ## Verification Focus
 
 - Start the application and assert exactly one SLF4J provider is active.

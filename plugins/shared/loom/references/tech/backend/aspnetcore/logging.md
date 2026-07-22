@@ -28,12 +28,33 @@ Do not add an async queue merely because logging exists. When an accepted requir
 
 The built-in console provider remains the greenfield default. Application-managed rolling files require an accepted file-output requirement and an existing or deliberately selected Serilog/NLog sink with size/time limits, retention, and unavailable-path behavior. Deploy does not choose the provider or create retention policy.
 
-## Verification Focus
+## Ownership And Failure Policy
+
+The task must identify whether it owns provider selection, event instrumentation, buffering, file output, or only verification. Optional logger or exporter failure must not change business correctness; required security and recovery events follow the accepted overload policy.
+
+Keep provider registration and lifecycle in the host composition root. Feature services use `ILogger<T>` or the repository abstraction and do not configure sinks independently.
+
+## Verification
 
 - Host the application with the real provider registration and assert duplicate providers are absent.
 - Capture owned events and verify level, event id/name, structured properties, scope correlation, and redaction.
 - Exercise one expected failure and one unexpected failure to prove level choice and single-boundary logging.
 - When buffered or file output is owned, verify overflow, shutdown flush, rotation, retention, and destination failure.
+
+## Configuration Review
+
+- Derive provider options from validated host configuration and environment overrides.
+- Keep provider registration, scopes, redaction, and lifecycle in one composition boundary.
+- Verify hosted-service and request pipeline assumptions separately.
+- Exercise startup with missing required settings and confirm secrets are not printed.
+- Keep correlation and event fields stable across provider adapters.
+- Record the selected policy before changing host-wide logging behavior.
+- Keep deployment topology and collector selection outside the application logging contract.
+- Preserve the repository's existing error and trace identifiers when adding fields.
+
+## Delivery Evidence
+
+Record the selected provider, host registration, owned event boundary, correlation and redaction assertions, and focused host or integration evidence. A successful `dotnet build` does not prove provider uniqueness, structured fields, or sink lifecycle.
 
 ## Unsafe Defaults
 

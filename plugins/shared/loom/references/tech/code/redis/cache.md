@@ -36,7 +36,7 @@ Use a Set only when the feature needs a bounded index of related cache keys for 
 
 Name the source-of-truth method, cache adapter, key format, TTL configuration, invalidation trigger, fallback behavior, and the test proving each owned rule.
 
-## Anti-Patterns
+## Unsafe Defaults
 
 - Caching a database entity whose authorization is checked only before the first write.
 - Using an implicit argument serialization key for a security-sensitive query.

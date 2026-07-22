@@ -1,5 +1,13 @@
 # MyBatis-Plus Configuration
 
+## When To Use
+
+Use this reference when the accepted Spring Boot persistence design selects MyBatis-Plus and the task owns dependency, mapper scanning, session-factory, or interceptor configuration.
+
+## Implementation Focus
+
+Keep configuration changes aligned with the repository's selected Spring Boot and database providers. Do not broaden a mapper configuration task into an ORM or migration change.
+
 ## Dependency And Scanning
 
 - Use the starter and MyBatis-Plus version compatible with the accepted Spring Boot major version and the repository's build file.
@@ -24,3 +32,7 @@ Verify interceptor order when combining pagination, tenant, data permission, dyn
 ## Verification Focus
 
 Check dependency resolution, mapper discovery, XML namespace/path alignment, interceptor registration, provider configuration, and startup behavior for the active profile.
+
+## Evidence Focus
+
+Record the selected starter, scan roots, session factories, active plugins, and the focused startup or persistence checks that prove the configuration is effective.

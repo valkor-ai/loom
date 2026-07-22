@@ -37,7 +37,7 @@ Define the behavior when Redis is unavailable or a session is missing. A require
 
 Record the session namespace, identity fields, expiration policy, renewal and invalidation triggers, runtime URL, unavailable-provider behavior, and focused authentication tests.
 
-## Anti-Patterns
+## Unsafe Defaults
 
 - Using `user:{id}` as a bearer session key.
 - Treating Redis availability as proof that a session is authenticated.

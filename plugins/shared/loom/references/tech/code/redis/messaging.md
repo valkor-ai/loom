@@ -36,7 +36,7 @@ Name the selected List or Stream boundary, message identity, acknowledgment poin
 
 Include the worker shutdown and redelivery evidence when those lifecycle rules are owned by the task. A producer-only test does not prove delivery or retry safety.
 
-## Anti-Patterns
+## Unsafe Defaults
 
 - Treating `LPUSH`/`RPOP` as a reliable acknowledged queue without recovery design.
 - Acknowledging before the database or external effect commits.

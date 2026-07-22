@@ -33,7 +33,7 @@ Record the key scope, owner token, expiration, atomic command boundary, failure 
 
 Show the command or script boundary in evidence. Do not claim a distributed guarantee from a unit test that never runs two competing workers or exercises expiration.
 
-## Anti-Patterns
+## Unsafe Defaults
 
 - Treating a Redis lock as a replacement for a database constraint.
 - Using `SETNX` without expiration.

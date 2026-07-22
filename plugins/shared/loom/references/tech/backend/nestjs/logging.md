@@ -29,13 +29,32 @@ Use Pino transports or the selected provider's async mechanism only when accepte
 
 Console JSON is the structured greenfield default. Application-owned files require an accepted requirement; use the selected provider's proven rotating transport with size/time limits, compression, retention, disk bounds, and destination failure behavior. Deploy does not select or configure this transport.
 
-## Verification Focus
+## Ownership And Failure Policy
+
+The task must identify whether it owns provider selection, event instrumentation, async buffering, file output, or only verification. Logger or exporter failure must not silently change a business result unless the accepted contract makes telemetry a required dependency.
+
+Keep provider lifecycle at bootstrap and shutdown boundaries. Feature modules receive the repository logger abstraction and do not configure transports independently.
+
+## Verification
 
 - Bootstrap the real Nest application or testing module with the selected logger provider.
 - Capture one owned event and assert level, stable fields, correlation, and redaction.
 - Verify one unexpected exception is emitted once rather than by provider, controller, and filter.
 - Exercise non-HTTP context propagation when a consumer, scheduler, or gateway is owned.
 - When transport buffering or files are owned, verify saturation, shutdown flush, rotation, retention, and unavailable destinations.
+
+## Configuration Review
+
+- Derive provider options from validated configuration at bootstrap.
+- Keep transport registration and redaction policy in one composition boundary.
+- Verify HTTP, consumer, scheduler, and shutdown lifecycle assumptions separately.
+- Exercise startup with missing required settings and confirm secrets are not printed.
+- Keep correlation and event fields stable across provider adapters.
+- Record the selected policy before changing the application-wide logger.
+
+## Delivery Evidence
+
+Record the selected provider, bootstrap configuration, owned event boundary, correlation and redaction assertions, and the runtime command or focused test proving the selected logger behavior. A successful Nest compile does not prove transport lifecycle or event safety.
 
 ## Unsafe Defaults
 

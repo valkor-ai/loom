@@ -1,5 +1,11 @@
 # MyBatis-Plus Interceptors And Plugins
 
+## When To Use
+
+Use this reference when the task owns MyBatis-Plus pagination, tenant, data-permission, optimistic-lock, dynamic-table, block-attack, illegal-SQL, or SQL-diagnostic interception.
+
+## Implementation Focus
+
 Configure only the plugins required by the accepted architecture and task ownership.
 
 | Capability | Required boundary |
@@ -25,3 +31,7 @@ Test permitted and denied tenant contexts, scoped and unscoped writes, stale ver
 - Register a plugin only on the factory and statements that own the capability.
 - Document intentional bypasses for system jobs or administrative operations and test them separately.
 - Keep provider-specific pagination and SQL rewriting evidence in the selected SQL reference.
+
+## Evidence Focus
+
+Record the active session factories, plugin order, excluded statements, bypass policy, provider assumptions, and focused permitted and denied-path results.

@@ -1,5 +1,7 @@
 # MyBatis-Plus Reference Routing
 
+## When To Use
+
 This profile applies only when the accepted TechnicalBaseline selects MyBatis-Plus, or an existing-project scan has high-confidence MyBatis-Plus evidence such as `com.baomidou.mybatisplus`, `mybatis-plus-boot-starter`, `BaseMapper`, or `MybatisPlusInterceptor`.
 
 Do not apply it to MyBatis-Flex, plain MyBatis, JPA, Hibernate, Spring Data, or an arbitrary class named `Mapper`.
@@ -18,7 +20,7 @@ Do not apply it to MyBatis-Flex, plain MyBatis, JPA, Hibernate, Spring Data, or 
 
 Generic Spring Boot runtime, web, security, logging, and testing rules remain in their existing Spring Boot references. SQL dialect behavior remains in the selected `tech/code/sql` references.
 
-## Execution Rules
+## Implementation Focus
 
 - Follow the accepted backend and data-access selections; do not choose another ORM during execution.
 - Reuse the repository's existing Mapper, Service, transaction, migration, permission, tenant, and audit conventions.
@@ -28,3 +30,7 @@ Generic Spring Boot runtime, web, security, logging, and testing rules remain in
 ## Verification Focus
 
 Prove the task-owned mapping, query/update semantics, transaction boundary, tenant or permission boundary, provider behavior, and failure path. A compile pass alone does not prove SQL, interceptor, or persistence behavior.
+
+## Evidence Focus
+
+Record why this profile was selected, which child references were loaded, and which task-owned persistence behavior each verification result covers.

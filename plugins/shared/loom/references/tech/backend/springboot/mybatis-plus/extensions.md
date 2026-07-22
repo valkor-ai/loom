@@ -1,5 +1,13 @@
 # MyBatis-Plus Extensions And High-Impact Features
 
+## When To Use
+
+Use this reference only when the task owns a generator, custom ID strategy, SQL injector, ActiveRecord or Db Kit usage, multiple data sources, or migration-sensitive extension.
+
+## Implementation Focus
+
+Treat each extension as an explicit repository-wide or module-local contract. Prefer the smallest scope that satisfies the accepted architecture.
+
 ## Generators And IDs
 
 - Confirm package, module, table-prefix, parent class, naming, XML output, and overwrite policy before using `FastAutoGenerator` or `AutoGenerator`.
@@ -20,6 +28,10 @@
 ## Verification Focus
 
 Review generated diffs, ID uniqueness, extension scope, migration startup, per-data-source registration, transaction behavior, and rollback or recovery boundaries.
+
+## Evidence Focus
+
+Identify the generated or custom extension files, affected modules and data sources, selected ID contract, migration evidence, and rollback or recovery result.
 
 ## Non-Selection Rule
 

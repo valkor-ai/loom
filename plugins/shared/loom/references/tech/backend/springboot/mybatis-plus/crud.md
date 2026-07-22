@@ -1,6 +1,10 @@
 # MyBatis-Plus Mapper And Service CRUD
 
-## Layer Boundary
+## When To Use
+
+Use this reference when a task implements or changes MyBatis-Plus Mapper, Service, list, detail, batch, paging, or stream-query behavior.
+
+## Implementation Focus
 
 - Keep controllers and transport adapters out of direct Mapper calls when the repository has a Service/application layer.
 - `BaseMapper` is a persistence primitive; `IService` and `ServiceImpl` are optional project conventions, not mandatory boilerplate.
@@ -24,3 +28,7 @@ Prove cardinality, not-found and duplicate behavior, pagination totals, batch ro
 - Do not make a passing Mapper unit test stand in for provider-specific SQL or migration evidence.
 - Keep batch operations idempotent when the task can be retried by the execution or runtime workflow.
 - Preserve deterministic ordering for every paged or streamed collection.
+
+## Evidence Focus
+
+Record the owned Mapper or Service methods, query bounds, transaction boundary, and evidence for pagination, failure, authorization, and retry behavior.

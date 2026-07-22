@@ -1,6 +1,10 @@
 # MyBatis-Plus Query And Update Wrappers
 
-## Query Rules
+## When To Use
+
+Use this reference when a task owns MyBatis-Plus Wrapper construction for queries, sorting, filtering, partial updates, deletes, or provider-specific query boundaries.
+
+## Implementation Focus
 
 - Prefer `LambdaQueryWrapper` or `Wrappers.lambdaQuery` for entity-backed columns.
 - Use wrapper condition parameters for optional filters instead of duplicating branches.
@@ -24,3 +28,7 @@ Cover omitted versus null fields, empty filters, sort allowlists, scoped writes,
 - Use projections for list paths and keep selected columns aligned with the API contract.
 - Keep large result sets bounded before materializing them in memory.
 - Prove empty-condition behavior explicitly; an absent filter must not become an unscoped write or an accidental full-table read.
+
+## Evidence Focus
+
+Record the wrapper methods, input-to-column allowlists, scope conditions, omitted-versus-null behavior, and generated-query or integration evidence for the changed path.

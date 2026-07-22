@@ -36,6 +36,12 @@ Sampling probability is an environment decision, not a hardcoded `1.0` productio
 
 Emit a stable observable signal for critical state transitions and terminal failures when the architecture NFR/risk requires it. Telemetry is not the source of truth; business audit records belong in durable domain storage when required.
 
+## Ownership And Failure Policy
+
+The task must identify whether it owns endpoint exposure, probe behavior, metrics, tracing, or only evidence collection. Optional telemetry exporter failure must not fail business requests; required readiness dependencies must follow the accepted startup and recovery policy.
+
+Keep Actuator configuration environment-specific and review management exposure separately from the public API surface.
+
 ## Verification Focus
 
 Useful observability evidence includes:

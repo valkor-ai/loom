@@ -1,6 +1,10 @@
 # MyBatis-Plus Entity Mapping
 
-## Entity Contract
+## When To Use
+
+Use this reference when a task owns MyBatis-Plus entity annotations, column mapping, IDs, logical deletion, optimistic locking, enum or JSON fields, or automatic audit fill.
+
+## Implementation Focus
 
 - Use `@TableName` only when the table, schema, result-map, or excluded-property behavior differs from the repository defaults.
 - Use `@TableId` with an explicit `IdType` when the ID generation contract is not obvious from the database and existing configuration.
@@ -24,3 +28,7 @@ Test persisted round trips for IDs, field names, enums, JSON, nulls, defaults, l
 
 - Do not return persistence entities directly as API response models when the repository uses DTOs.
 - Keep field strategies and fill handlers consistent for `updateById`, `update(Wrapper)`, imports, jobs, and administrative actions.
+
+## Evidence Focus
+
+Name the affected entities, table and field contracts, handlers, migration dependency, and round-trip or concurrency evidence for the changed mapping.
