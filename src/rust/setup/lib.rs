@@ -30,7 +30,28 @@ const PLAYWRIGHT_LOCK_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 const PLAYWRIGHT_LOCK_POLL: Duration = Duration::from_millis(250);
 const INSTALL_STAMP: &str = ".loom-mcp-install.json";
 const SHARED_LOOM_REFERENCES: &str = "plugins/shared/loom/references";
+const SHARED_LOOM_SKILLS: &str = "plugins/shared/loom/skills";
 const SHARED_DEPLOY_REFERENCES: &str = "plugins/shared/loom-deploy/references";
+const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
+    "plugins/shared/loom/skills/godot/SKILL.md",
+    "plugins/shared/loom/skills/godot/godot-api/SKILL.md",
+    "plugins/shared/loom/skills/godot/godot-e2e/SKILL.md",
+    "plugins/shared/loom/skills/godot/gdunit-driver/SKILL.md",
+    "plugins/shared/loom/skills/godot/headless-build/SKILL.md",
+    "plugins/shared/loom/skills/godot/input-mapper/SKILL.md",
+    "plugins/shared/loom/skills/godot/mcp-driver/SKILL.md",
+    "plugins/shared/loom/skills/godot/project-scaffold/SKILL.md",
+    "plugins/shared/loom/skills/godot/screenshot/SKILL.md",
+    "plugins/shared/loom/skills/godot/visual-qa/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/animation/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/audio/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/navigation/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/particles/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/physics/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/shader/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/tilemap/SKILL.md",
+    "plugins/shared/loom/skills/godot/reviewer/ui/SKILL.md",
+];
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/uix/anti-patterns.md",
     "plugins/shared/loom/references/uix/content.md",
@@ -2079,6 +2100,10 @@ pub fn write_package_layout(
         &package_dir.join(SHARED_LOOM_REFERENCES),
     )?;
     copy_required(
+        &repo.join(SHARED_LOOM_SKILLS),
+        &package_dir.join(SHARED_LOOM_SKILLS),
+    )?;
+    copy_required(
         &repo.join(SHARED_DEPLOY_REFERENCES),
         &package_dir.join(SHARED_DEPLOY_REFERENCES),
     )?;
@@ -2159,6 +2184,7 @@ fn validate_package(package_root: &Path, manifest: &ReleaseManifest) -> Result<(
         manifest.plugins.claude_code.as_str(),
         manifest.plugins.opencode.as_str(),
         SHARED_LOOM_REFERENCES,
+        SHARED_LOOM_SKILLS,
         SHARED_DEPLOY_REFERENCES,
     ];
     for relative in required {
@@ -2168,6 +2194,12 @@ fn validate_package(package_root: &Path, manifest: &ReleaseManifest) -> Result<(
         }
     }
     for relative in REQUIRED_SHARED_REFERENCE_FILES {
+        let path = package_root.join(relative);
+        if !path.is_file() {
+            return Err(SetupError::MissingPackageEntry(path));
+        }
+    }
+    for relative in REQUIRED_SHARED_SKILL_FILES {
         let path = package_root.join(relative);
         if !path.is_file() {
             return Err(SetupError::MissingPackageEntry(path));
@@ -2492,6 +2524,13 @@ fn install_opencode_plugin(
     )?;
     install_standalone_references(
         env,
+        SHARED_LOOM_SKILLS,
+        &env.opencode_home.join("references/loom/skills"),
+        AgentKind::Opencode,
+        version,
+    )?;
+    install_standalone_references(
+        env,
         SHARED_DEPLOY_REFERENCES,
         &env.opencode_home.join("references/loom-deploy"),
         AgentKind::Opencode,
@@ -2521,7 +2560,8 @@ fn install_skill_references(env: &SetupEnvironment, plugin_root: &Path) -> Resul
         env,
         SHARED_DEPLOY_REFERENCES,
         &plugin_root.join("skills/loom-deploy/references"),
-    )
+    )?;
+    copy_shared_references(env, SHARED_LOOM_SKILLS, &plugin_root.join("skills"))
 }
 
 fn install_standalone_references(

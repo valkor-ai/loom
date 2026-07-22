@@ -7,6 +7,8 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">Technical Report</a>
     ·
+    <a href="./docs/godot.md">Godot</a>
+    ·
     <a href="./docs/use-cases.md">Use Cases</a>
     ·
     <a href="#quick-start">Quick Start</a>
@@ -41,6 +43,7 @@ Use Loom when a task is too big for a single prompt: feature work, deployment, r
 
 - **Upcoming:** V-SEFM, a verifier model for software delivery, is in progress. Details later.
 - **Jul 2026:** Loom moved its MCP runtime from TypeScript to Rust to make the core smaller and faster.
+- **Jul 2026:** Loom now supports Godot projects through Godot MCP. [Setup guide](./docs/godot.md)
 
 ## Why a Harness?
 
