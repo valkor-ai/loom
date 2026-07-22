@@ -948,6 +948,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
             "Treat every sourceContext.codeQualityExecutionContext[].implementationObligations entry as a required source-edit decision within this task's write boundary; codeQualityEvidence reports the completed implementation and cannot replace it.",
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
+            "When the selected reference plan contains tech/backend/springboot/mybatis-plus, use that plan as the only MyBatis-Plus guidance for the task; do not load JPA, MyBatis-Flex, plain MyBatis, or unlisted external persistence references.",
             "When a code quality requirement contains packageNamingPolicy, production source package declarations must follow that policy; placeholder package roots are not acceptable deliverable code.",
             "When a selected language or framework reference is not applicable to a changed file but the requirement is still satisfied, explain the non-applicability in the summary without adding knownGaps.",
             "If a selected Loom reference cannot be loaded from the installed reference root, do not mark codeQualityEvidence satisfied; report the unresolved reference as a blocking contract problem instead of treating the project workspace as missing source files."
@@ -3151,6 +3152,19 @@ mod tests {
         assert!(result_rules.as_array().unwrap().iter().any(|rule| rule
             .as_str()
             .is_some_and(|text| text.contains("not evidence-writing prompts"))));
+    }
+
+    #[test]
+    fn task_execute_restricts_mybatis_plus_guidance_to_selected_reference_plan() {
+        let rules = code_quality_execution_rules(&code_quality_task());
+
+        assert!(rules["implementationRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item
+                .as_str()
+                .is_some_and(|text| text.contains("mybatis-plus"))));
     }
 
     #[test]

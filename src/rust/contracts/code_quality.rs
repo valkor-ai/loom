@@ -74,6 +74,7 @@ pub fn code_quality_enum_refs() -> Value {
                     "common": ["observability"],
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
                 "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability", "logging"],
+                "mybatisplus": ["configuration", "mapping", "crud", "wrappers", "plugins", "security", "extensions"],
                 "django": ["models", "serializers", "views", "security", "testing", "logging"],
                 "fastapi": ["schemas", "data", "routing", "security", "testing", "migration", "logging"],
                 "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime", "logging"],
@@ -408,9 +409,21 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         ) {
             push_unique(&mut roles, "backend");
         }
-    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"])
-        && !contains_any(&haystack, &["kotlin", "ktor", "android", "kmp"])
-    {
+    } else if contains_any(
+        &haystack,
+        &[
+            "java",
+            "spring",
+            "jpa",
+            "hibernate",
+            "mybatis plus",
+            "mybatisplus",
+            "com.baomidou.mybatisplus",
+        ],
+    ) && !contains_any(
+        &haystack,
+        &["kotlin", "ktor", "android", "kmp", "mybatis flex"],
+    ) {
         language = Some("java".to_string());
         push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
         push_backend_unless_persistence_track(&mut roles);
@@ -1685,6 +1698,16 @@ fn backend_reference_items_for_signal(
             groups.insert("springboot".to_string(), items);
         }
     }
+    if stack_frameworks.contains("mybatis_plus")
+        && (signal.language.as_deref() == Some("java")
+            || signal.frameworks.iter().any(|item| item == "mybatis_plus"))
+    {
+        let mut items = BTreeSet::new();
+        extend_mybatis_plus_task_references(&mut items, task);
+        if !items.is_empty() {
+            groups.insert("mybatisplus".to_string(), items);
+        }
+    }
     if signal.frameworks.iter().any(|item| item == "django") {
         let mut items = BTreeSet::new();
         if task_owns_test_implementation(task) {
@@ -1886,6 +1909,58 @@ fn extend_spring_boot_task_references(
     if task_owns_logging_infrastructure(task, context) {
         items.insert("observability".to_string());
         items.insert("logging".to_string());
+    }
+}
+
+fn extend_mybatis_plus_task_references(items: &mut BTreeSet<String>, task: &TaskDefinition) {
+    let owns_persistence = task_owns_persistence(task);
+    let owns_query = task_owns_sql_query(task);
+    let owns_transaction = task_owns_sql_transaction(task);
+
+    if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || (owns_persistence && task_has_action(task, ImplementationAction::AddOrUpdateConfig))
+    {
+        items.insert("configuration".to_string());
+        items.insert("plugins".to_string());
+    }
+    if owns_persistence
+        && task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::ImplementEntityLifecycle
+            )
+        })
+    {
+        items.insert("mapping".to_string());
+    }
+    if task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityRepository | ImplementationAction::CreateEntityCrud
+        )
+    }) {
+        items.insert("crud".to_string());
+    }
+    if owns_query
+        || owns_transaction
+        || task_has_action(task, ImplementationAction::CreateEntityCrud)
+    {
+        items.insert("wrappers".to_string());
+    }
+    if owns_query || owns_transaction {
+        items.insert("security".to_string());
+    }
+    if task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityMigration
+                | ImplementationAction::MigrateFrameworkImplementation
+        )
+    }) {
+        items.insert("extensions".to_string());
     }
 }
 
@@ -2150,6 +2225,26 @@ fn frontend_reference_items_for_signal(
 }
 
 fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanItem {
+    if group_key == "mybatisplus"
+        && matches!(
+            group,
+            "configuration"
+                | "mapping"
+                | "crud"
+                | "wrappers"
+                | "plugins"
+                | "security"
+                | "extensions"
+        )
+    {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("bk.spring.mybatisplus.{group}"),
+            path: format!("tech/backend/springboot/mybatis-plus/{group}.md"),
+            reason: format!(
+                "Selected MyBatis-Plus {group} reference for this task-owned persistence capability."
+            ),
+        };
+    }
     if let Some((ref_prefix, path_group, label)) = match group_key {
         "springboot" => Some(("bk.spring", "springboot", "Spring Boot")),
         "django" => Some(("bk.django", "django", "Django")),
@@ -2696,6 +2791,17 @@ fn push_spring_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<Str
         frameworks,
         "spring_data_jpa",
         &["spring data jpa", "spring-data-jpa"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "mybatis_plus",
+        &[
+            "mybatis plus",
+            "mybatis-plus",
+            "mybatisplus",
+            "com.baomidou.mybatisplus",
+        ],
     );
     push_if_contains(
         haystack,
@@ -4567,6 +4673,88 @@ mod tests {
             .reference_groups
             .get("springboot")
             .is_some_and(|items| items.contains(&"data".to_string())));
+    }
+
+    #[test]
+    fn mybatis_plus_routes_persistence_references_without_jpa_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "MyBatis Plus"},
+                "persistence": {"selection": "PostgreSQL"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityRepository,
+            ],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let mybatis = selection
+            .reference_groups
+            .get("mybatisplus")
+            .expect("MyBatis-Plus references");
+
+        assert!(mybatis.contains(&"mapping".to_string()));
+        assert!(mybatis.contains(&"crud".to_string()));
+        assert!(mybatis.contains(&"wrappers".to_string()));
+        assert!(mybatis.contains(&"security".to_string()));
+        assert!(!selection
+            .reference_groups
+            .get("java")
+            .is_some_and(|items| items.contains(&"persistence".to_string())));
+        assert!(!selection
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| { item.path == "tech/backend/springboot/mybatis-plus/mapping.md" }));
+        assert!(load_plan
+            .iter()
+            .any(|item| { item.path == "tech/backend/springboot/mybatis-plus/crud.md" }));
+    }
+
+    #[test]
+    fn mybatis_plus_route_is_not_selected_for_plain_mybatis_or_mybatis_flex() {
+        for data_access in ["MyBatis", "MyBatis-Flex"] {
+            let baseline = baseline(json!({
+                "tracks": {
+                    "backend": {"selection": "Java + Spring Boot"},
+                    "dataAccess": {"selection": data_access},
+                    "persistence": {"selection": "PostgreSQL"}
+                }
+            }));
+            let task = task(
+                TaskKind::DataModelIncrement,
+                vec![ImplementationAction::CreateEntityRepository],
+            );
+
+            let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+            assert!(!selection.reference_groups.contains_key("mybatisplus"));
+        }
+    }
+
+    #[test]
+    fn mybatis_plus_references_are_not_loaded_for_api_only_tasks() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "MyBatis Plus"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(!selection.reference_groups.contains_key("mybatisplus"));
     }
 
     #[test]

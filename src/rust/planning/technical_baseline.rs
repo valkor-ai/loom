@@ -816,7 +816,13 @@ const BACKEND_ECOSYSTEMS: &[BackendEcosystemDefinition] = &[
         backend_options: &["Java + Spring Boot"],
         backend_matchers: &["java", "kotlin", "spring boot"],
         data_access_options: &["Spring Data JPA", "MyBatis Plus", "jOOQ"],
-        data_access_matchers: &["spring data jpa", "mybatis", "jooq"],
+        data_access_matchers: &[
+            "spring data jpa",
+            "mybatis plus",
+            "mybatis-plus",
+            "mybatisplus",
+            "jooq",
+        ],
     },
     BackendEcosystemDefinition {
         ecosystem_id: "dotnet_aspnetcore",

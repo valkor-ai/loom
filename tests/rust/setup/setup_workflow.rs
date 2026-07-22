@@ -132,6 +132,14 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "springboot/security",
     "springboot/testing",
     "springboot/web",
+    "springboot/mybatis-plus/index",
+    "springboot/mybatis-plus/configuration",
+    "springboot/mybatis-plus/mapping",
+    "springboot/mybatis-plus/crud",
+    "springboot/mybatis-plus/wrappers",
+    "springboot/mybatis-plus/plugins",
+    "springboot/mybatis-plus/security",
+    "springboot/mybatis-plus/extensions",
 ];
 
 const FRONTEND_REFERENCE_FILES: &[&str] = &[

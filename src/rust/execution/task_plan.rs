@@ -5997,6 +5997,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "persistenceTest": ["add_or_update_persistence_tests"]
             },
             "dialectRule": "When the accepted persistence provider is MySQL or PostgreSQL, MCP adds only the provider overlay matching the assigned persistence subject. MariaDB is not silently treated as MySQL.",
+            "mybatisPlusRule": "When the accepted dataAccess selection is MyBatis Plus, MCP emits the mybatisplus reference group only for task-owned persistence capabilities. Agents must not select MyBatis-Plus references, JPA references, MyBatis-Flex, or plain MyBatis guidance themselves.",
             "nonSelectionRule": "Do not attach framework references solely because a language or framework is present in TechnicalBaseline. Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
         },
         "architectureQualityRules": {
@@ -6891,6 +6892,9 @@ fn code_quality_implementation_obligations_for_selection(
     if package_naming_policy_for_reference_groups(&selection.reference_groups).is_some() {
         obligations.push("For JVM production source, choose a professional base package from existing package roots, build group metadata, or confirmed organization/project identity; if none exists, use app.<project_slug> and only fall back to app.generated when no stable project slug can be derived.".to_string());
         obligations.push("Do not create or keep placeholder package roots such as com.example, org.example, com.company, com.demo, org.demo, com.sample, or org.sample in production source.".to_string());
+    }
+    if selection.reference_groups.contains_key("mybatisplus") {
+        obligations.push("For MyBatis-Plus persistence work, preserve the accepted Mapper, Service, transaction, migration, tenant, and audit boundaries; use only the MCP-selected MyBatis-Plus references and do not introduce JPA, MyBatis-Flex, or a second data-access abstraction.".to_string());
     }
     let owns_observability_boundary = selection
         .reference_groups
@@ -8113,6 +8117,23 @@ mod tests {
         assert!(!infrastructure
             .iter()
             .any(|item| item.contains("does not own global logger dependencies")));
+    }
+
+    #[test]
+    fn mybatis_plus_selection_adds_a_task_scoped_execution_obligation() {
+        let selection = contracts::CodeReferenceSelection {
+            reference_groups: BTreeMap::from([(
+                "mybatisplus".to_string(),
+                vec!["mapping".to_string(), "crud".to_string()],
+            )]),
+            ..contracts::CodeReferenceSelection::default()
+        };
+
+        let obligations = code_quality_implementation_obligations_for_selection(&selection, false);
+
+        assert!(obligations.iter().any(|item| {
+            item.contains("MyBatis-Plus") && item.contains("do not introduce JPA")
+        }));
     }
 
     #[test]
