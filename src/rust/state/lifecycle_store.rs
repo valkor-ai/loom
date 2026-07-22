@@ -185,6 +185,25 @@ impl TransitionStore for FileTransitionStore {
         let paths = project_paths(project_root)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
         let latest = transition_decision_latest_file(&paths.root, &diagnostic.delivery_id);
+        if path_exists(&latest) {
+            if let Ok(summary) = read_json::<serde_json::Value>(&latest) {
+                if let Some(decision_ref) = summary.get("decisionRef").and_then(|v| v.as_str()) {
+                    if let Ok(previous_file) = from_project_relative(&paths.root, decision_ref) {
+                        if let Ok(previous) = read_json::<TransitionDiagnostic>(&previous_file) {
+                            let same_decision = previous.delivery_id == diagnostic.delivery_id
+                                && previous.phase_id == diagnostic.phase_id
+                                && previous.source == diagnostic.source
+                                && previous.route_action == diagnostic.route_action
+                                && previous.result_state == diagnostic.result_state
+                                && previous.target_batch == diagnostic.target_batch;
+                            if same_decision {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let file = transition_decision_file(
             &paths.root,
             &diagnostic.delivery_id,

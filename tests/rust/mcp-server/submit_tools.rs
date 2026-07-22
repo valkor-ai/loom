@@ -299,15 +299,10 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "auto_runnable", "{result:#}");
-    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(result["state"], "user_gate", "{result:#}");
     assert_eq!(
-        result["next"]["artifactKind"],
-        "technical_baseline_candidate"
-    );
-    assert_eq!(
-        result["next"]["submitTool"],
-        "loom.technicalBaselineAcceptFile"
+        result["gate"]["gateId"],
+        "new_project_baseline_confirmation"
     );
 
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
@@ -323,7 +318,7 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .join(&delivery_id)
         .join("brainstorm/phases/phase-1/decision-snapshot.json")
         .exists());
-    let technical_baseline_request_ref = result["next"]["requestRef"]
+    let technical_baseline_request_ref = result["requestRef"]
         .as_str()
         .expect("technical baseline requestRef");
     let inspected = state::inspect_request(InspectRequestInput {
@@ -427,27 +422,44 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
             .get("statement")
             .is_none()
     );
-    let selection_group = inspected
+    let recommendation_group = inspected
         .read_groups
         .iter()
-        .find(|group| group.group_id == "technical_baseline_selection_guidance")
-        .expect("technical baseline selection guidance group");
-    assert!(selection_group.required);
+        .find(|group| group.group_id == "technical_baseline_recommendation")
+        .expect("technical baseline recommendation group");
+    assert!(recommendation_group.required);
     assert_eq!(
-        selection_group.expanded_fields(),
-        vec!["selectionGuidance".to_string()]
+        recommendation_group.expanded_fields(),
+        vec!["recommendationContext".to_string()]
     );
-    let selection = state::read_field_group(ReadFieldGroupInput {
+    let recommendation = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: technical_baseline_request_ref.to_string(),
-        group_id: "technical_baseline_selection_guidance".to_string(),
+        group_id: "technical_baseline_recommendation".to_string(),
     })
-    .expect("read technical baseline selection guidance");
-    let guidance = &selection.fields["selectionGuidance"].value;
-    assert!(guidance["trackModel"]["coreTracks"]
+    .expect("read technical baseline recommendation");
+    let recommendation = &recommendation.fields["recommendationContext"].value;
+    assert!(recommendation["trackModel"]["coreTracks"]
         .as_array()
         .expect("core tracks")
         .contains(&json!("backend")));
+    let confirmation_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "technical_baseline_user_confirmation")
+        .expect("technical baseline user confirmation group");
+    assert!(confirmation_group.required);
+    assert_eq!(
+        confirmation_group.expanded_fields(),
+        vec!["userConfirmationView".to_string()]
+    );
+    let confirmation = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: technical_baseline_request_ref.to_string(),
+        group_id: "technical_baseline_user_confirmation".to_string(),
+    })
+    .expect("read technical baseline user confirmation");
+    let guidance = &confirmation.fields["userConfirmationView"].value;
     let ecosystem_bundles = guidance["backendEcosystems"]["bundles"]
         .as_array()
         .expect("backend ecosystem bundles");
@@ -476,10 +488,10 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         json!("Playwright")
     );
     assert_eq!(
-        guidance["trackModel"]["conditionalTracks"]["qualityAutomation"],
+        recommendation["trackModel"]["conditionalTracks"]["qualityAutomation"],
         json!("Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline.")
     );
-    assert!(guidance["shorthandNormalization"]["backend"]
+    assert!(recommendation["shorthandNormalization"]["backend"]
         .as_array()
         .expect("backend shorthand rules")
         .iter()
@@ -512,6 +524,14 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
             .as_str()
             .unwrap_or_default()
             .contains("Do not mention Loom internals")));
+    assert_eq!(
+        guidance["userFacingConfirmationProtocol"]["responseContract"]["mode"],
+        json!("single_user_message")
+    );
+    assert_eq!(
+        guidance["userFacingConfirmationProtocol"]["responseContract"]["maxMessages"],
+        json!(1)
+    );
 }
 
 #[test]
@@ -662,18 +682,64 @@ fn continue_reuses_same_technical_baseline_request_after_brainstorm_accept() {
         &request_ref,
         fixture.root_str(),
     );
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let decision_dir = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("transition-decisions");
+    let before_repeat = std::fs::read_dir(&decision_dir)
+        .expect("transition decision directory")
+        .count();
     let continued = continue_delivery(fixture.root_str());
+    let repeated = continue_delivery(fixture.root_str());
+    let after_repeat = std::fs::read_dir(&decision_dir)
+        .expect("transition decision directory")
+        .count();
 
-    assert_eq!(submitted["state"], "auto_runnable");
-    assert_eq!(continued["state"], "auto_runnable");
+    assert_eq!(submitted["state"], "user_gate");
+    assert_eq!(continued["state"], "user_gate");
+    assert_eq!(continued["requestRef"], submitted["requestRef"]);
+    assert_eq!(repeated["requestRef"], submitted["requestRef"]);
+    assert_eq!(after_repeat, before_repeat);
     assert_eq!(
-        continued["next"]["requestRef"],
-        submitted["next"]["requestRef"]
+        continued["gate"]["gateId"],
+        "new_project_baseline_confirmation"
     );
-    assert_eq!(
-        continued["next"]["artifactKind"],
-        "technical_baseline_candidate"
+}
+
+#[test]
+fn continue_refreshes_a_technical_baseline_request_when_protocol_fingerprint_is_stale() {
+    let fixture = Fixture::new("continue-refreshes-stale-technical-baseline");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+    let submitted = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
     );
+    let old_request_ref = technical_baseline_request_ref(&submitted);
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let mut index = read_json_value(&index_path).expect("read delivery index");
+    index["phases"][0]["latestRefs"]
+        .as_object_mut()
+        .expect("latest refs")
+        .remove("technicalBaselineRequestProtocolFingerprint");
+    write_json_atomic(&index_path, &index).expect("write stale delivery index");
+
+    let refreshed = continue_delivery(fixture.root_str());
+
+    assert_eq!(refreshed["state"], "user_gate", "{refreshed:#}");
+    let new_request_ref = technical_baseline_request_ref(&refreshed);
+    assert_ne!(new_request_ref, old_request_ref);
+    let root = read_request_root_value(fixture.root_str(), &new_request_ref);
+    assert_eq!(root["requestProtocol"]["version"], json!("2.0"));
+    assert!(root["requestProtocol"]["fingerprint"].is_string());
 }
 
 #[test]
@@ -711,10 +777,7 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let inspected_baseline = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: baseline_request_ref.clone(),
@@ -974,10 +1037,7 @@ fn repository_context_accept_normalizes_repairable_schema_metadata() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     write_candidate_target(
         &fixture,
         &baseline_request_ref,
@@ -1093,10 +1153,7 @@ fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let previous = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: baseline_request_ref.clone(),
@@ -1161,10 +1218,7 @@ fn technical_baseline_ignores_derived_command_changes_for_previous_stack() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = technical_baseline_candidate_json("existing_project", "policy_auto_accept");
     candidate["stack"] = json!({
         "frontend": "plain-html",
@@ -1246,10 +1300,7 @@ fn technical_baseline_repo_signal_conflict_with_previous_stack_requires_user_gat
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = technical_baseline_candidate_json("existing_project", "policy_auto_accept");
     candidate["stack"] = json!({
         "runtime": "node",
@@ -1284,7 +1335,7 @@ fn technical_baseline_request_treats_later_phase_without_repo_markers_as_existin
         fixture.root_str(),
     );
     assert_eq!(
-        phase_1_brainstorm_result["next"]["artifactKind"], "technical_baseline_candidate",
+        phase_1_brainstorm_result["state"], "user_gate",
         "{phase_1_brainstorm_result:#}"
     );
     write_previous_technical_baseline(&fixture, &delivery_id);
@@ -1358,10 +1409,7 @@ fn new_project_technical_baseline_needing_confirmation_uses_user_gate() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["status"] = json!("needs_user_confirmation");
     candidate["approval"] = json!({
@@ -1394,10 +1442,7 @@ fn new_project_technical_baseline_autofills_confirmed_at() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["approval"]
         .as_object_mut()
@@ -1434,10 +1479,7 @@ fn technical_baseline_accepts_legacy_greenfield_project_kind_alias() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["projectKind"] = json!("greenfield");
     candidate["source"] = json!("agent_recommended_for_greenfield");
@@ -1473,10 +1515,7 @@ fn new_project_technical_baseline_requires_complete_track_model() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["stack"] = json!({
         "frontend": "vite-react",
@@ -1513,10 +1552,7 @@ fn new_project_web_baseline_requires_quality_automation_track() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["stack"]["tracks"]
         .as_object_mut()
@@ -1552,10 +1588,7 @@ fn new_project_baseline_rejects_known_cross_runtime_data_access() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["stack"]["tracks"]["dataAccess"]["selection"] = json!("Prisma");
     candidate["stack"]["tracks"]["dataAccess"]["rationale"] =
@@ -1590,10 +1623,7 @@ fn selected_external_services_require_structured_capabilities() {
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["stack"]["tracks"]["externalServices"] = json!({
         "status": "selected",
@@ -1668,10 +1698,7 @@ fn planning_contract_create_reroutes_existing_project_without_repository_context
         fixture.root_str(),
     );
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     write_candidate_target(
         &fixture,
         &baseline_request_ref,
@@ -9454,6 +9481,15 @@ fn continue_delivery(project_root: &str) -> serde_json::Value {
         .expect("structured content")
 }
 
+fn technical_baseline_request_ref(result: &Value) -> String {
+    result
+        .get("requestRef")
+        .or_else(|| result.pointer("/next/requestRef"))
+        .and_then(Value::as_str)
+        .expect("technical baseline requestRef")
+        .to_string()
+}
+
 fn start_brainstorm_request(fixture: &Fixture) -> String {
     let server = LoomMcpServer::default();
     let arguments = json!({
@@ -9878,10 +9914,7 @@ fn build_existing_project_architecture_flow(fixture: &Fixture, candidate: &Value
         &request_ref,
         fixture.root_str(),
     );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
     write_candidate_target(
         fixture,
         &baseline_request_ref,

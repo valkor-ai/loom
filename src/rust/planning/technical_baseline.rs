@@ -28,6 +28,13 @@ use crate::{
     write_artifact_result,
 };
 
+const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.0";
+
+struct TechnicalBaselineSelectionProjections {
+    recommendation_context: Value,
+    user_confirmation_view: Value,
+}
+
 pub fn materialize_request(
     project_root: &str,
     delivery_id: &str,
@@ -73,27 +80,6 @@ fn materialize_request_inner(
                 phase_id, delivery_id
             ))
         })?;
-    if let Some(existing_request_ref) = phase
-        .latest_refs
-        .get("technicalBaselineRequestRef")
-        .cloned()
-    {
-        let inspected = state::inspect_request(delivery_core::InspectRequestInput {
-            project_root: project_root.to_string(),
-            request_ref: existing_request_ref.clone(),
-        });
-        if inspected
-            .as_ref()
-            .map(|request| request.request_kind == "technical_baseline_request")
-            .unwrap_or(false)
-        {
-            return write_artifact_result(
-                project_root,
-                &existing_request_ref,
-                ArtifactKind::TechnicalBaselineCandidate,
-            );
-        }
-    }
     let brainstorm_ref = phase
         .latest_refs
         .get("brainstormContract")
@@ -104,15 +90,6 @@ fn materialize_request_inner(
         })?
         .clone();
     let brainstorm = read_brainstorm_contract(root, &brainstorm_ref)?;
-    let request_id = format!("tbr_{}", state::store::now_millis());
-    let candidate_file = to_project_relative(
-        root,
-        &technical_baseline_candidate_file(root, &locator, &request_id),
-    )?;
-    let request_file = to_project_relative(
-        root,
-        &technical_baseline_request_file(root, &locator, &request_id),
-    )?;
     let previous_baseline_file = technical_baseline_file(root, delivery_id);
     let previous_baseline = if previous_baseline_file.exists() {
         let previous_baseline_ref = to_project_relative(root, &previous_baseline_file)?;
@@ -123,6 +100,59 @@ fn materialize_request_inner(
     };
     let project_kind =
         infer_project_kind_for_baseline(root, &delivery, phase_id, previous_baseline.is_some());
+    let selection_projections =
+        technical_baseline_selection_projections(project_kind, previous_baseline.is_some());
+    let protocol_fingerprint = technical_baseline_protocol_fingerprint(
+        project_kind,
+        previous_baseline.is_some(),
+        &brainstorm,
+        selection_projections.as_ref(),
+    );
+
+    if let Some(existing_request_ref) = phase
+        .latest_refs
+        .get("technicalBaselineRequestRef")
+        .cloned()
+    {
+        let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+            project_root: project_root.to_string(),
+            request_ref: existing_request_ref.clone(),
+        });
+        let request_is_current = phase
+            .latest_refs
+            .get("technicalBaselineRequestProtocolFingerprint")
+            .is_some_and(|fingerprint| fingerprint == &protocol_fingerprint);
+        if request_is_current
+            && inspected
+                .as_ref()
+                .map(|request| request.request_kind == "technical_baseline_request")
+                .unwrap_or(false)
+        {
+            if matches!(project_kind, ProjectKind::NewProject) && previous_baseline.is_none() {
+                return Ok(technical_baseline_recommendation_gate(
+                    project_root,
+                    &existing_request_ref,
+                    delivery_id,
+                    phase_id,
+                ));
+            }
+            return write_artifact_result(
+                project_root,
+                &existing_request_ref,
+                ArtifactKind::TechnicalBaselineCandidate,
+            );
+        }
+    }
+
+    let request_id = format!("tbr_{}", state::store::now_millis());
+    let candidate_file = to_project_relative(
+        root,
+        &technical_baseline_candidate_file(root, &locator, &request_id),
+    )?;
+    let request_file = to_project_relative(
+        root,
+        &technical_baseline_request_file(root, &locator, &request_id),
+    )?;
     let request_root = build_request_root(
         root,
         &brainstorm,
@@ -132,6 +162,8 @@ fn materialize_request_inner(
         &candidate_file,
         project_kind,
         previous_baseline.as_ref(),
+        selection_projections.as_ref(),
+        &protocol_fingerprint,
     );
     let stored = state::write_native_request(
         project_root,
@@ -156,16 +188,29 @@ fn materialize_request_inner(
             "technicalBaselineRequestRef".to_string(),
             stored.request_ref.clone(),
         );
+        active_phase.latest_refs.insert(
+            "technicalBaselineRequestProtocolFingerprint".to_string(),
+            protocol_fingerprint,
+        );
     }
     delivery.updated_at = state::store::now_string();
     store
         .save_delivery_index(project_root, &delivery)
         .map_err(to_state_error)?;
-    write_artifact_result(
-        project_root,
-        &stored.request_ref,
-        ArtifactKind::TechnicalBaselineCandidate,
-    )
+    if matches!(project_kind, ProjectKind::NewProject) && previous_baseline.is_none() {
+        Ok(technical_baseline_recommendation_gate(
+            project_root,
+            &stored.request_ref,
+            delivery_id,
+            phase_id,
+        ))
+    } else {
+        write_artifact_result(
+            project_root,
+            &stored.request_ref,
+            ArtifactKind::TechnicalBaselineCandidate,
+        )
+    }
 }
 
 fn build_request_root(
@@ -177,6 +222,8 @@ fn build_request_root(
     candidate_file: &str,
     project_kind: ProjectKind,
     previous_baseline: Option<&(String, TechnicalBaselineContract)>,
+    selection_projections: Option<&TechnicalBaselineSelectionProjections>,
+    protocol_fingerprint: &str,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(TechnicalBaselineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -195,13 +242,12 @@ fn build_request_root(
             "updatedAt": previous.updated_at
         })
     });
-    let selection_guidance = technical_baseline_selection_guidance(project_kind, baseline_exists);
     let repo_evidence =
         technical_baseline_repo_evidence(project_root, project_kind, baseline_exists);
     let baseline_context_fields =
         technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
     let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
-    let mut security_selection_fields = vec!["selectionGuidance"];
+    let mut security_selection_fields = vec!["userConfirmationView"];
     if !matches!(
         brainstorm.security_requirement.applies,
         SecurityRequirementApplicability::NotApplicable
@@ -214,6 +260,10 @@ fn build_request_root(
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "requestId": request_id,
+        "requestProtocol": {
+            "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
+            "fingerprint": protocol_fingerprint
+        },
         "projectKind": project_kind,
         "operation": if matches!(project_kind, ProjectKind::ExistingProject) {
             "infer_existing_project_baseline"
@@ -282,7 +332,10 @@ fn build_request_root(
             "deploymentPreference": "local_first"
         },
         "repoEvidence": repo_evidence,
-        "selectionGuidance": selection_guidance,
+        "recommendationContext": selection_projections
+            .map(|projections| projections.recommendation_context.clone()),
+        "userConfirmationView": selection_projections
+            .map(|projections| projections.user_confirmation_view.clone()),
         "enumRefs": {
             "projectKind": ["new_project", "existing_project", "unknown"],
             "status": ["draft", "needs_user_confirmation", "auto_accepted", "confirmed", "blocked", "superseded"],
@@ -347,14 +400,21 @@ fn build_request_root(
                     "selectors": read_selectors_value_from_paths(repo_evidence_fields)
                 },
                 {
-                    "groupId": "technical_baseline_selection_guidance",
-                    "required": selection_guidance.is_some()
+                    "groupId": "technical_baseline_recommendation",
+                    "required": selection_projections.is_some(),
+                    "purpose": "Read the full-scope recommendation basis and track ownership before presenting a baseline recommendation.",
+                    "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
+                    "selectors": read_selectors_value_from_paths(["recommendationContext"])
+                },
+                {
+                    "groupId": "technical_baseline_user_confirmation",
+                    "required": selection_projections.is_some()
                         || !matches!(
                             brainstorm.security_requirement.applies,
                             SecurityRequirementApplicability::NotApplicable
                         ),
-                    "purpose": "Read the new-project confirmation discipline before asking the user to confirm the baseline.",
-                    "whenToRead": "Read only when the projectKind is new_project or the baseline still needs explicit user confirmation.",
+                    "purpose": "Read the exact user-facing option matrix and single-message confirmation contract before presenting the baseline.",
+                    "whenToRead": "Read before presenting the baseline recommendation or asking for user confirmation.",
                     "selectors": read_selectors_value_from_paths(security_selection_fields)
                 },
                 {
@@ -865,6 +925,7 @@ fn backend_ecosystem_guidance() -> Value {
     json!({
         "sourceOfTruth": "This catalog is the single source for backend/dataAccess recommendation relationships and known runtime-family compatibility checks.",
         "renderingRule": "Render backend and dataAccess as one grouped choice. Do not present an independent flat dataAccess option list.",
+        "optionEnumerationRule": "When presenting an ecosystem in the adjustable range, enumerate every backendOptions entry and every recommendedDataAccessOptions entry from that ecosystem. Do not collapse the list to a single default or show only a representative option.",
         "coverageRule": "When backend choice is open and no confirmed constraint excludes an ecosystem, keep the adjustable range diverse across TypeScript/Node, Python, JVM/Spring, and .NET. Do not truncate by catalog order; include Go when requirement or user preference makes it relevant.",
         "customTechnologyPolicy": "Bundles are mainstream recommendations, not a whitelist. Keep user-specified backend and data-access technologies when their relationship is intentional and explain the custom pairing in the final confirmation summary.",
         "portableDataAccessOptions": PORTABLE_DATA_ACCESS_OPTIONS,
@@ -940,10 +1001,23 @@ fn technical_baseline_selection_guidance(
             "recommendationRule": "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs."
         },
         "userFacingConfirmationProtocol": {
+            "responseContract": {
+                "responseId": "technical_baseline_confirmation",
+                "mode": "single_user_message",
+                "maxMessages": 1,
+                "requiredSections": [
+                    "recommendation_basis",
+                    "recommended_final_baseline",
+                    "adjustable_technology_range",
+                    "confirmation_or_adjustment_prompt"
+                ],
+                "backendDataAccessRendering": "Render every backendEcosystems bundle with its label, every backendOptions entry, and every recommendedDataAccessOptions entry. Do not abbreviate, collapse, or repeat the matrix.",
+                "deduplicationRule": "Emit the confirmation response once. Do not repeat the same recommendation in commentary and final output."
+            },
             "mandatorySections": [
                 "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
-                "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems.",
+                "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems. For every displayed ecosystem, list every compatible backend and dataAccess option supplied by that bundle; the JVM/Spring bundle must include Java + Spring Boot with Spring Data JPA, MyBatis Plus, and jOOQ.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
                 "When securityRequirement is protected, show the proposed mechanism, one selected algorithm, key source, transport, issuer/audience ownership, and the confirmation or adjustment needed before submitting the baseline.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
@@ -953,6 +1027,7 @@ fn technical_baseline_selection_guidance(
                 "Do not omit the adjustable technology range.",
                 "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
                 "Do not present backend and dataAccess as unrelated option lists. Keep every displayed data-access choice under its compatible backend ecosystem.",
+                "Do not replace a compatible dataAccess list with only its most familiar default. Preserve every catalog option, including MyBatis Plus and jOOQ under Java + Spring Boot.",
                 "Do not truncate backend alternatives by catalog order. When no confirmed constraint excludes them, preserve mainstream ecosystem coverage including Java + Spring Boot.",
                 "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
                 "When externalServices includes Redis, explain the business role in plain language, allow multiple roles, and ask only the persistence or startup questions needed by the selected roles.",
@@ -1022,6 +1097,48 @@ fn technical_baseline_selection_guidance(
             "redisCapabilityExample": "externalServices=Redis，用于登录会话和后台任务；登录会话重启后保留，后台任务失败可重试",
             "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
         }
+    }))
+}
+
+fn technical_baseline_selection_projections(
+    project_kind: ProjectKind,
+    has_previous_baseline: bool,
+) -> Option<TechnicalBaselineSelectionProjections> {
+    let guidance = technical_baseline_selection_guidance(project_kind, has_previous_baseline)?;
+    Some(TechnicalBaselineSelectionProjections {
+        recommendation_context: json!({
+            "schemaVersion": guidance["schemaVersion"],
+            "purpose": guidance["purpose"],
+            "runtimeBoundary": guidance["runtimeBoundary"],
+            "confirmationRules": guidance["confirmationRules"],
+            "trackModel": guidance["trackModel"],
+            "recommendationBasis": guidance["recommendationBasis"],
+            "recommendationPrinciples": guidance["recommendationPrinciples"],
+            "shorthandNormalization": guidance["shorthandNormalization"]
+        }),
+        user_confirmation_view: json!({
+            "schemaVersion": guidance["schemaVersion"],
+            "userFacingConfirmationProtocol": guidance["userFacingConfirmationProtocol"],
+            "independentTrackOptions": guidance["independentTrackOptions"],
+            "backendEcosystems": guidance["backendEcosystems"],
+            "replyProtocolForUser": guidance["replyProtocolForUser"]
+        }),
+    })
+}
+
+fn technical_baseline_protocol_fingerprint(
+    project_kind: ProjectKind,
+    has_previous_baseline: bool,
+    brainstorm: &BrainstormContract,
+    projections: Option<&TechnicalBaselineSelectionProjections>,
+) -> String {
+    delivery_core::contract_fingerprint(&json!({
+        "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
+        "projectKind": project_kind,
+        "hasPreviousBaseline": has_previous_baseline,
+        "securityApplicability": brainstorm.security_requirement.applies,
+        "recommendationContext": projections.map(|item| &item.recommendation_context),
+        "userConfirmationView": projections.map(|item| &item.user_confirmation_view)
     }))
 }
 
@@ -2177,18 +2294,68 @@ fn technical_baseline_user_gate(
     prompt: String,
     gate_id: String,
 ) -> LoomMcpActionResult {
+    technical_baseline_confirmation_gate(
+        &input.project_root,
+        &input.request_ref,
+        authorized.delivery_id.as_deref().unwrap_or_default(),
+        authorized.phase_id.as_deref().unwrap_or_default(),
+        prompt,
+        gate_id,
+    )
+}
+
+fn technical_baseline_recommendation_gate(
+    project_root: &str,
+    request_ref: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> LoomMcpActionResult {
+    technical_baseline_confirmation_gate(
+        project_root,
+        request_ref,
+        delivery_id,
+        phase_id,
+        "Present the recommended technology baseline and complete adjustable option matrix to the user. Wait for explicit confirmation or adjustments; after confirmation, write and submit the same TechnicalBaseline candidate request.".to_string(),
+        "new_project_baseline_confirmation".to_string(),
+    )
+}
+
+fn technical_baseline_confirmation_gate(
+    project_root: &str,
+    request_ref: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    prompt: String,
+    gate_id: String,
+) -> LoomMcpActionResult {
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
-        input.project_root.clone(),
+        project_root.to_string(),
         prompt,
         vec!["reply_in_chat".to_string()],
-        Some(input.request_ref.clone()),
-        authorized.delivery_id.clone(),
-        authorized.phase_id.clone(),
-        Some(json!({
-            "gateId": gate_id,
-            "kind": "technical_baseline_confirmation"
-        })),
+        Some(request_ref.to_string()),
+        Some(delivery_id.to_string()),
+        Some(phase_id.to_string()),
+        Some(technical_baseline_gate_details(&gate_id)),
     ))
+}
+
+fn technical_baseline_gate_details(gate_id: &str) -> Value {
+    json!({
+        "gateId": gate_id,
+        "kind": "technical_baseline_confirmation",
+        "responseContract": {
+            "responseId": "technical_baseline_confirmation",
+            "mode": "single_user_message",
+            "maxMessages": 1,
+            "doNotRepeatInFinal": true,
+            "requiredSections": [
+                "recommendation_basis",
+                "recommended_final_baseline",
+                "adjustable_technology_range",
+                "confirmation_or_adjustment_prompt"
+            ]
+        }
+    })
 }
 
 fn repairable(
@@ -2288,6 +2455,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Do not present an independent flat dataAccess option list"));
+        assert!(guidance["optionEnumerationRule"]
+            .as_str()
+            .unwrap()
+            .contains("every recommendedDataAccessOptions entry"));
     }
 
     #[test]
