@@ -175,6 +175,26 @@ pub struct TaskWriteBoundary {
     pub artifact_refs: TaskArtifactRefs,
 }
 
+/// MCP-owned implementation closure for one task. TaskPlan acceptance derives
+/// this from accepted architecture facts and normalized task ownership; agents
+/// only report evidence against these stable ids.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskImplementationObligation {
+    pub obligation_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
+    pub artifact_refs: TaskArtifactRefs,
+    pub required_outcome: String,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptable_evidence: Vec<VerificationEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    pub defer_policy: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeCodeLevelCheck {
@@ -311,6 +331,12 @@ pub struct TaskDefinition {
     pub task_kind: TaskKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementation_actions: Vec<ImplementationAction>,
+    /// Materialized by Loom during TaskPlan acceptance. This field is omitted
+    /// from the agent-writable TaskPlan schema and is authoritative in the
+    /// persisted TaskPlan and TaskExecute request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub implementation_obligations: Vec<TaskImplementationObligation>,
     pub objective: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
@@ -651,6 +677,18 @@ pub struct VerificationProvenance {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskImplementationObligationResult {
+    pub obligation_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelfRepairSummary {
@@ -880,6 +918,8 @@ pub struct TaskResult {
     pub no_change_reason: Option<TaskResultNoChangeReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_results: Vec<VerificationResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_obligation_results: Vec<TaskImplementationObligationResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_repair_summary: Option<SelfRepairSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]

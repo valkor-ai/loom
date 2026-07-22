@@ -493,7 +493,8 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
-    validate_verification_provenance(result, &mut issues);
+    validate_verification_provenance(project_root, result, &mut issues);
+    validate_implementation_obligation_results(result, task, &mut issues);
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -729,6 +730,7 @@ fn normalize_task_result_machine_fields(
     object.insert("updatedAt".to_string(), json!(now));
 
     normalize_verification_result_machine_fields(object, task, browser_profile);
+    normalize_implementation_obligation_results(object, task);
     normalize_browser_environment_blocked_result(object, browser_profile);
 
     let detail_ids = required_requirement_detail_ids(task);
@@ -766,6 +768,79 @@ fn normalize_task_result_machine_fields(
     raw_result
 }
 
+fn normalize_implementation_obligation_results(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    let existing = object
+        .get("implementationObligationResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut unkeyed = Vec::new();
+    let mut by_id = BTreeMap::new();
+    for value in existing {
+        let Some(item) = value.as_object() else {
+            unkeyed.push(serde_json::Map::new());
+            continue;
+        };
+        let Some(id) = item.get("obligationId").and_then(Value::as_str) else {
+            unkeyed.push(item.clone());
+            continue;
+        };
+        if by_id.insert(id.to_string(), item.clone()).is_some() {
+            unkeyed.push(item.clone());
+        }
+    }
+    let normalized = task
+        .implementation_obligations
+        .iter()
+        .map(|obligation| {
+            let mut item = by_id
+                .remove(&obligation.obligation_id)
+                .or_else(|| {
+                    if unkeyed.is_empty() {
+                        None
+                    } else {
+                        Some(unkeyed.remove(0))
+                    }
+                })
+                .unwrap_or_default();
+            item.insert("obligationId".to_string(), json!(obligation.obligation_id));
+            item.insert(
+                "verificationIds".to_string(),
+                json!(obligation.verification_ids),
+            );
+            if !matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("satisfied" | "partial" | "blocked" | "not_verified")
+            ) {
+                item.insert("status".to_string(), json!("not_verified"));
+            }
+            normalize_string_array_field(&mut item, "verificationIds");
+            normalize_string_array_field(&mut item, "evidenceRefs");
+            if !item.get("summary").is_some_and(Value::is_string) {
+                item.insert("summary".to_string(), json!(""));
+            }
+            retain_object_fields(
+                &mut item,
+                &[
+                    "obligationId",
+                    "status",
+                    "verificationIds",
+                    "evidenceRefs",
+                    "summary",
+                ],
+            );
+            Value::Object(item)
+        })
+        .collect::<Vec<_>>();
+    object.insert(
+        "implementationObligationResults".to_string(),
+        Value::Array(normalized),
+    );
+}
+
 fn project_task_result_to_canonical_fields(object: &mut serde_json::Map<String, Value>) {
     retain_object_fields(
         object,
@@ -778,6 +853,7 @@ fn project_task_result_to_canonical_fields(object: &mut serde_json::Map<String, 
             "changedFiles",
             "noChangeReason",
             "verificationResults",
+            "implementationObligationResults",
             "selfRepairSummary",
             "failure",
             "executionContinuity",
@@ -2126,6 +2202,7 @@ fn validate_verification_results(
 }
 
 fn validate_verification_provenance(
+    project_root: &Path,
     result: &TaskResult,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
@@ -2152,6 +2229,35 @@ fn validate_verification_provenance(
                 "verificationResults[].provenance",
                 "Passed verification must cite a concrete evidence ref, test case, browser artifact, or command with exit code.",
             ));
+        }
+        if verification.evidence_type == Some(VerificationEvidence::AutomatedTest)
+            && verification
+                .provenance
+                .as_ref()
+                .is_none_or(|provenance| provenance.test_case_refs.is_empty())
+        {
+            issues.push(issue(
+                "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                "verificationResults[].provenance.testCaseRefs",
+                "Automated test evidence must identify the test file, test case, or check id that produced the result; a build command alone is not test evidence.",
+            ));
+        }
+        if let Some(provenance) = verification.provenance.as_ref() {
+            for reference in &provenance.test_case_refs {
+                if reference.contains('/') || reference.contains('\\') {
+                    if !is_safe_project_relative_path(reference)
+                        || !from_project_relative(project_root, reference)
+                            .ok()
+                            .is_some_and(|path| path.exists())
+                    {
+                        issues.push(issue(
+                            "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                            "verificationResults[].provenance.testCaseRefs",
+                            "Test case file references must point to existing project files.",
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -2318,6 +2424,173 @@ fn validate_browser_verification_results(
             "verificationResults[].browserChecks[].status",
             "completed must pass every required browser check. completed_with_notes may carry required checks only when they are explicitly environment-blocked; failed and not_run required checks remain incomplete product verification.",
         ));
+    }
+}
+
+fn validate_implementation_obligation_results(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if task.implementation_obligations.is_empty() {
+        if !result.implementation_obligation_results.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults",
+                "This task has no implementation obligations in its canonical TaskPlan.",
+            ));
+        }
+        return;
+    }
+
+    let intent_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let passed_by_id = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| (verification.verification_id.as_str(), verification))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    for obligation in &task.implementation_obligations {
+        let Some(evidence) = result
+            .implementation_obligation_results
+            .iter()
+            .find(|item| item.obligation_id == obligation.obligation_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults",
+                &format!(
+                    "Missing implementation result for required obligation {}.",
+                    obligation.obligation_id
+                ),
+            ));
+            continue;
+        };
+        if !seen.insert(evidence.obligation_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].obligationId",
+                "Each implementation obligation must have exactly one result.",
+            ));
+        }
+        if !matches!(
+            evidence.status.as_str(),
+            "satisfied" | "partial" | "blocked" | "not_verified"
+        ) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].status",
+                "Implementation obligation status must be satisfied, partial, blocked, or not_verified.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !intent_ids.contains(verification_id.as_str())
+                || (!obligation.verification_ids.is_empty()
+                    && !obligation
+                        .verification_ids
+                        .iter()
+                        .any(|expected| expected == verification_id))
+            {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].verificationIds",
+                    "Implementation evidence must reference verification ids assigned to the same obligation.",
+                ));
+            }
+        }
+        if evidence.status == "satisfied" {
+            if evidence.evidence_refs.is_empty() {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].evidenceRefs",
+                    "Satisfied implementation obligations must cite concrete evidence references.",
+                ));
+            }
+            let requires_behavioral_proof = matches!(
+                obligation.kind.as_str(),
+                "persistence_mapping"
+                    | "persistence_implementation"
+                    | "data_access_framework"
+                    | "interface_contract"
+                    | "api_binding"
+                    | "state_transition"
+                    | "state_machine"
+                    | "business_rule"
+                    | "authentication_authorization"
+                    | "async_processing"
+                    | "cache_policy"
+                    | "external_integration"
+                    | "resilience_policy"
+                    | "entity_lifecycle"
+            );
+            if requires_behavioral_proof
+                && !evidence.verification_ids.iter().any(|verification_id| {
+                    passed_by_id
+                        .get(verification_id.as_str())
+                        .and_then(|verification| verification.evidence_type)
+                        .is_some_and(|evidence_type| {
+                            matches!(
+                                evidence_type,
+                                VerificationEvidence::AutomatedTest
+                                    | VerificationEvidence::RuntimeApiCheck
+                                    | VerificationEvidence::BrowserAutomation
+                            )
+                        })
+                })
+            {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].verificationIds",
+                    "This obligation requires passed behavioral evidence; a build or reference-read result cannot satisfy it.",
+                ));
+            }
+        }
+    }
+
+    for evidence in &result.implementation_obligation_results {
+        if !task
+            .implementation_obligations
+            .iter()
+            .any(|obligation| obligation.obligation_id == evidence.obligation_id)
+        {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].obligationId",
+                "TaskResult must not invent implementation obligation ids.",
+            ));
+        }
+    }
+
+    if matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        for obligation in task
+            .implementation_obligations
+            .iter()
+            .filter(|item| item.required)
+        {
+            let satisfied = result
+                .implementation_obligation_results
+                .iter()
+                .find(|item| item.obligation_id == obligation.obligation_id)
+                .is_some_and(|item| item.status == "satisfied");
+            if !satisfied {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INCOMPLETE",
+                    "status",
+                    &format!(
+                        "Task cannot be completed while required obligation {} is not satisfied.",
+                        obligation.obligation_id
+                    ),
+                ));
+            }
+        }
     }
 }
 
@@ -4318,6 +4591,7 @@ fn materialize_task_result_repair(
         "taskProjection.objective",
         "taskProjection.acceptanceRefs",
         "taskProjection.requirementDetailRefs",
+        "taskProjection.implementationObligations",
         "taskProjection.verificationIntents",
         "outputContract.blockedReasonOptions",
         "repairContract.profile",
@@ -4369,6 +4643,7 @@ fn materialize_task_result_repair(
         "outputContract.schemaShape.properties.changedFiles",
         "outputContract.schemaShape.properties.noChangeReason",
         "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.implementationObligationResults",
         "outputContract.schemaShape.properties.selfRepairSummary",
         "outputContract.schemaShape.properties.failure",
         "outputContract.schemaShape.properties.executionContinuity",
@@ -4442,6 +4717,7 @@ fn materialize_task_result_repair(
             "resultTemplate": result_template,
             "resultRules": [
                 "The replacement must be a TaskResult JSON, not a repair summary.",
+                "implementationObligationResults must contain exactly one entry for each canonical obligation in the supplied order; Loom derives obligationId and verificationIds.",
                 "Runtime, frontend, requirement detail, and concept evidence must follow the original output contract."
             ]
         },
@@ -4525,6 +4801,7 @@ fn task_projection(task: &TaskDefinition) -> Value {
         "title",
         "taskKind",
         "implementationActions",
+        "implementationObligations",
         "objective",
         "dependsOn",
         "scopeRefs",
@@ -4547,6 +4824,10 @@ fn task_projection(task: &TaskDefinition) -> Value {
     projection.insert(
         "verificationIntents".to_string(),
         compact_verification_intents(full.get("verificationIntents")),
+    );
+    projection.insert(
+        "implementationObligations".to_string(),
+        compact_implementation_obligations(full.get("implementationObligations")),
     );
     if let Some(requirement) = full.get("frontendExperienceRequirement") {
         projection.insert(
@@ -4589,6 +4870,32 @@ fn compact_verification_intents(value: Option<&Value>) -> Value {
                         "behavior",
                         "preferredEvidence",
                         "acceptableEvidence",
+                    ],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn compact_implementation_obligations(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|obligation| {
+                compact_object_fields(
+                    obligation,
+                    &[
+                        "obligationId",
+                        "kind",
+                        "sourceRefs",
+                        "artifactRefs",
+                        "requiredOutcome",
+                        "required",
+                        "acceptableEvidence",
+                        "verificationIds",
+                        "deferPolicy",
                     ],
                 )
             })
@@ -4995,8 +5302,15 @@ fn task_result_issue_conflicts(
     context: &RepairContextInput,
     issues: &[delivery_core::RepairIssue],
 ) -> Vec<Value> {
+    let mut seen = BTreeSet::new();
     issues
         .iter()
+        .filter(|issue| {
+            seen.insert((
+                issue.code.clone(),
+                issue.field_path.clone().unwrap_or_default(),
+            ))
+        })
         .map(|issue| {
             let base = json!({
                 "code": issue.code,
@@ -5024,9 +5338,82 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_CODE_QUALITY_INVALID" {
                 return task_result_code_quality_conflict(context, base);
             }
+            if matches!(
+                issue.code.as_str(),
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID"
+                    | "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INCOMPLETE"
+            ) {
+                return task_result_implementation_obligation_conflict(context, base);
+            }
             base
         })
         .collect()
+}
+
+fn task_result_implementation_obligation_conflict(
+    context: &RepairContextInput,
+    mut base: Value,
+) -> Value {
+    let expected = context
+        .task
+        .implementation_obligations
+        .iter()
+        .map(|obligation| {
+            json!({
+                "obligationId": obligation.obligation_id,
+                "kind": obligation.kind,
+                "required": obligation.required,
+                "acceptableEvidence": obligation.acceptable_evidence,
+                "verificationIds": obligation.verification_ids
+            })
+        })
+        .collect::<Vec<_>>();
+    let current = context
+        .submitted_result
+        .get("implementationObligationResults")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "obligationId": item.get("obligationId").cloned().unwrap_or(Value::Null),
+                        "status": item.get("status").cloned().unwrap_or(Value::Null),
+                        "verificationIds": item.get("verificationIds").cloned().unwrap_or_else(|| json!([])),
+                        "evidenceRefCount": item.get("evidenceRefs").and_then(Value::as_array).map(|refs| refs.len()).unwrap_or(0)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    base["expectedImplementationObligations"] = json!(expected);
+    base["current"] = json!({
+        "implementationObligationResults": current,
+        "passedVerifications": context
+            .submitted_result
+            .get("verificationResults")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("status").and_then(Value::as_str) == Some("passed"))
+                    .map(|item| {
+                        json!({
+                            "verificationId": item.get("verificationId"),
+                            "evidenceType": item.get("evidenceType")
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    base["validRepairChoices"] = json!([
+        "Keep implementationObligationResults in the canonical obligation order and do not add, remove, rename, or reorder entries to change their meaning; Loom derives obligationId and verificationIds.",
+        "Fill evidenceRefs with concrete project-relative implementation or verification evidence; do not author linkage fields.",
+        "Mark an obligation satisfied only when the cited verification passed and its evidence capability proves the requiredOutcome. A build or reference read alone cannot satisfy a behavioral obligation.",
+        "Keep status completed only when every required obligation is satisfied; otherwise submit the actual incomplete status and gap.",
+    ]);
+    base
 }
 
 fn task_result_browser_verification_conflict(
@@ -6107,6 +6494,7 @@ mod tests {
             title: "Implement the workbench".to_string(),
             task_kind: TaskKind::FrontendExperience,
             implementation_actions: vec![],
+            implementation_obligations: vec![],
             objective: "Implement the task-owned workbench flow.".to_string(),
             depends_on: vec![],
             scope_refs: vec!["scope-ui".to_string()],
@@ -6152,9 +6540,26 @@ mod tests {
 
     #[test]
     fn task_result_repair_projection_keeps_task_contract_without_full_task_copy() {
-        let projection = task_projection(&compact_projection_task());
+        let mut task = compact_projection_task();
+        task.implementation_obligations = vec![serde_json::from_value(json!({
+            "obligationId": "obligation-task-ui-frontend-experience",
+            "kind": "frontend_experience",
+            "sourceRefs": ["detail-ui"],
+            "artifactRefs": {},
+            "requiredOutcome": "Implement the task-owned frontend surface.",
+            "required": true,
+            "acceptableEvidence": ["browser_automation"],
+            "verificationIds": ["verify-ui"],
+            "deferPolicy": "must_be_satisfied_before_completed"
+        }))
+        .expect("implementation obligation")];
+        let projection = task_projection(&task);
 
         assert_eq!(projection["projectionKind"], "task_scoped_repair_contract");
+        assert_eq!(
+            projection["implementationObligations"][0]["obligationId"],
+            "obligation-task-ui-frontend-experience"
+        );
         assert!(projection.get("conceptResponsibilities").is_none());
         assert!(projection
             .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/regionsInScope/0/regionId")
@@ -6165,6 +6570,64 @@ mod tests {
         assert!(projection
             .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/unrelatedLargeSource")
             .is_none());
+    }
+
+    #[test]
+    fn implementation_obligation_normalization_matches_ids_instead_of_positions() {
+        let mut task = compact_projection_task();
+        task.implementation_obligations = serde_json::from_value(json!([
+            {
+                "obligationId": "obligation-a",
+                "kind": "business_rule",
+                "artifactRefs": {},
+                "requiredOutcome": "Implement rule A.",
+                "required": true,
+                "acceptableEvidence": ["automated_test"],
+                "verificationIds": ["verify-a"],
+                "deferPolicy": "must_be_satisfied_before_completed"
+            },
+            {
+                "obligationId": "obligation-b",
+                "kind": "state_transition",
+                "artifactRefs": {},
+                "requiredOutcome": "Implement state B.",
+                "required": true,
+                "acceptableEvidence": ["runtime_api_check"],
+                "verificationIds": ["verify-b"],
+                "deferPolicy": "must_be_satisfied_before_completed"
+            }
+        ]))
+        .expect("implementation obligations");
+        let mut object = json!({
+            "implementationObligationResults": [
+                {"obligationId": "obligation-b", "status": "satisfied", "summary": "B"},
+                {"obligationId": "obsolete", "status": "partial", "summary": "obsolete"},
+                {"obligationId": "obligation-a", "status": "satisfied", "summary": "A"}
+            ]
+        });
+
+        normalize_implementation_obligation_results(
+            object.as_object_mut().expect("result object"),
+            &task,
+        );
+
+        assert_eq!(
+            object["implementationObligationResults"][0]["obligationId"],
+            "obligation-a"
+        );
+        assert_eq!(object["implementationObligationResults"][0]["summary"], "A");
+        assert_eq!(
+            object["implementationObligationResults"][1]["obligationId"],
+            "obligation-b"
+        );
+        assert_eq!(object["implementationObligationResults"][1]["summary"], "B");
+        assert_eq!(
+            object["implementationObligationResults"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

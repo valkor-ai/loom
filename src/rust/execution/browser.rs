@@ -1296,6 +1296,7 @@ importers:
                 ImplementationAction::CreateOrUpdateUiFlow,
                 ImplementationAction::WireReferenceInApiOrUi,
             ],
+            implementation_obligations: vec![],
             objective: "Create the accepted workflow".to_string(),
             depends_on: vec![],
             scope_refs: vec![],

@@ -196,11 +196,23 @@ pub(crate) fn task_result_template_with_code_quality(
             })
         })
         .collect::<Vec<_>>();
+    let implementation_obligation_results = task
+        .implementation_obligations
+        .iter()
+        .map(|_| {
+            json!({
+                "status": "not_verified",
+                "evidenceRefs": [],
+                "summary": ""
+            })
+        })
+        .collect::<Vec<_>>();
     let mut template = json!({
         "status": "completed",
         "changedFiles": [],
         "noChangeReason": null,
         "verificationResults": verification_results,
+        "implementationObligationResults": implementation_obligation_results,
         "selfRepairSummary": {
             "attempted": false,
             "attemptCount": 0,
@@ -301,6 +313,7 @@ pub(crate) fn task_result_contract_read_fields(task: &TaskDefinition) -> Vec<&'s
         "outputContract.schemaShape.properties.changedFiles",
         "outputContract.schemaShape.properties.noChangeReason",
         "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.implementationObligationResults",
         "outputContract.schemaShape.properties.selfRepairSummary",
         "outputContract.schemaShape.properties.failure",
         "outputContract.schemaShape.properties.executionContinuity",
@@ -410,6 +423,14 @@ pub(crate) fn task_result_schema_shape(
             "status": "satisfied | partial | not_verified",
             "evidenceRefs": ["project-relative evidence ref"],
             "summary": "string"
+        }]),
+    );
+    properties.insert(
+        "implementationObligationResults".to_string(),
+        json!([{
+            "status": "not_verified | satisfied | partial | blocked",
+            "evidenceRefs": ["project-relative evidence ref"],
+            "summary": "concrete implementation result; do not claim completion from a build alone"
         }]),
     );
     properties.insert(
@@ -551,6 +572,7 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
         "changedFiles",
         "noChangeReason",
         "verificationResults",
+        "implementationObligationResults",
         "selfRepairSummary",
         "failure",
         "executionContinuity",
@@ -1014,10 +1036,27 @@ mod tests {
         .expect("verification intents");
         task.api_contract_requirement_refs = vec!["api-1".to_string()];
         task.code_quality_requirement_refs = vec!["code-1".to_string()];
+        task.implementation_obligations = serde_json::from_value(json!([{
+            "obligationId": "obligation-ui",
+            "kind": "frontend_experience",
+            "artifactRefs": {},
+            "requiredOutcome": "Implement the UI.",
+            "required": true,
+            "acceptableEvidence": ["automated_test"],
+            "verificationIds": ["verify-ui"],
+            "deferPolicy": "must_be_satisfied_before_completed"
+        }]))
+        .expect("implementation obligations");
 
         let template = task_result_template_with_code_quality(&task, &[], None);
 
         assert_eq!(template["verificationResults"][0]["status"], "not_run");
+        assert!(template["implementationObligationResults"][0]
+            .get("obligationId")
+            .is_none());
+        assert!(template["implementationObligationResults"][0]
+            .get("verificationIds")
+            .is_none());
         assert_eq!(template["apiContractEvidence"][0]["status"], "not_verified");
         assert_eq!(template["codeQualityEvidence"][0]["status"], "not_verified");
         assert_eq!(template["frontendExperienceSelfCheck"]["status"], "partial");

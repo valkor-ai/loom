@@ -292,6 +292,8 @@ fn build_review_request(
         .to_string();
     let concept_review_matrix = build_concept_review_matrix(task_plan, task_results);
     let detail_review_matrix = build_detail_review_matrix(task_plan, task_results);
+    let implementation_obligation_review_matrix =
+        build_implementation_obligation_review_matrix(task_plan, task_results);
     let engineering_quality_review_matrix =
         build_engineering_quality_review_matrix(task_plan, task_results);
     let architecture_quality_review_matrix =
@@ -303,6 +305,7 @@ fn build_review_request(
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
+        &implementation_obligation_review_matrix,
         &engineering_quality_review_matrix,
         &architecture_quality_review_matrix,
         &api_contract_review_matrix,
@@ -354,6 +357,7 @@ fn build_review_request(
         "changeContext": change_context,
         "conceptReviewMatrix": concept_review_matrix,
         "detailReviewMatrix": detail_review_matrix,
+        "implementationObligationReviewMatrix": implementation_obligation_review_matrix,
         "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
         "architectureQualityReviewMatrix": architecture_quality_review_matrix,
         "apiContractReviewMatrix": api_contract_review_matrix,
@@ -397,7 +401,7 @@ fn build_review_request(
                 "Do not modify project files during review.",
                 "Use compact browser check status, attempts, command, and observed outcome first. Read a referenced Playwright trace, report, or screenshot only when a failed, blocked, retried, or ambiguous check cannot be judged from the compact evidence.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied implementation obligations, requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "If outputContract.reviewSignals contains architecture_quality with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
@@ -506,11 +510,12 @@ fn build_review_request(
                 {
                     "groupId": "review_matrices",
                     "required": true,
-                    "purpose": "Read compact concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
+                    "purpose": "Read compact implementation-obligation, concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
                     "selectors": read_selectors_value_from_paths([
                         "reviewMatrixSummary.concept",
                         "reviewMatrixSummary.detail",
+                        "reviewMatrixSummary.implementationObligations",
                         "reviewMatrixSummary.engineeringQuality",
                         "reviewMatrixSummary.architectureQuality",
                         "reviewMatrixSummary.apiContract",
@@ -3610,6 +3615,76 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
         .collect()
 }
 
+fn build_implementation_obligation_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .tasks
+        .iter()
+        .flat_map(|task| {
+            let result = task_results
+                .iter()
+                .find(|result| result.task_id == task.task_id);
+            let passed_ids = result
+                .map(|result| {
+                    result
+                        .verification_results
+                        .iter()
+                        .filter(|verification| verification.status == "passed")
+                        .map(|verification| verification.verification_id.as_str())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            task.implementation_obligations.iter().map(move |obligation| {
+                let evidence = result.and_then(|result| {
+                    result
+                        .implementation_obligation_results
+                        .iter()
+                        .find(|item| item.obligation_id == obligation.obligation_id)
+                });
+                let verification_supported = evidence.is_some_and(|evidence| {
+                    !evidence.verification_ids.is_empty()
+                        && evidence.verification_ids.iter().all(|id| {
+                            passed_ids.contains(id.as_str())
+                                && result.is_some_and(|result| {
+                                    result
+                                        .verification_results
+                                        .iter()
+                                        .find(|verification| verification.verification_id == *id)
+                                        .is_some_and(verification_is_traceable)
+                                })
+                        })
+                });
+                let satisfied = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        evidence.status == "satisfied"
+                            && !evidence.evidence_refs.is_empty()
+                            && verification_supported
+                    })
+                });
+                json!({
+                    "obligationId": obligation.obligation_id,
+                    "kind": obligation.kind,
+                    "taskId": task.task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "required": obligation.required,
+                    "requiredOutcome": obligation.required_outcome,
+                    "sourceRefs": obligation.source_refs,
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "evidenceRefCount": evidence.map(|evidence| evidence.evidence_refs.len()).unwrap_or(0),
+                    "verificationSupported": verification_supported,
+                    "satisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
 fn build_engineering_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
@@ -4366,6 +4441,7 @@ fn review_satisfied(review: &Value) -> bool {
 fn compact_review_matrix_summary(
     concept_matrix: &[Value],
     detail_matrix: &[Value],
+    implementation_obligation_matrix: &[Value],
     engineering_quality_matrix: &[Value],
     architecture_quality_matrix: &[Value],
     api_contract_matrix: &[Value],
@@ -4386,6 +4462,14 @@ fn compact_review_matrix_summary(
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
                 "detailId": item.get("detailId").cloned().unwrap_or(Value::Null),
                 "detailSatisfied": item.get("detailSatisfied").cloned().unwrap_or(Value::Null),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "implementationObligations": implementation_obligation_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "obligationId": item.get("obligationId").cloned().unwrap_or(Value::Null),
+                "satisfied": item.get("satisfied").cloned().unwrap_or(Value::Bool(false)),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -4495,6 +4579,40 @@ fn build_review_signals(
         "failedTasks": run.summary.failed,
         "blockedTasks": run.summary.blocked
     })];
+    for obligation in build_implementation_obligation_review_matrix(task_plan, task_results) {
+        let task_id = obligation
+            .get("taskId")
+            .and_then(Value::as_str)
+            .unwrap_or("task");
+        let obligation_id = obligation
+            .get("obligationId")
+            .and_then(Value::as_str)
+            .unwrap_or("obligation");
+        let satisfied = obligation
+            .get("satisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-implementation-obligation-{}-{}",
+                safe_signal_id(task_id),
+                safe_signal_id(obligation_id)
+            ),
+            "kind": "implementation_obligation",
+            "taskRefs": [task_id],
+            "obligationId": obligation_id,
+            "obligationKind": obligation.get("kind").cloned().unwrap_or(Value::Null),
+            "implementationSatisfied": satisfied,
+            "evidenceRefCount": obligation.get("evidenceRefCount").cloned().unwrap_or(Value::from(0)),
+            "verificationSupported": obligation.get("verificationSupported").cloned().unwrap_or(Value::Bool(false)),
+            "recommendedNextAction": if satisfied { "none" } else { "execution_repair" },
+            "reason": if satisfied {
+                "The task implementation obligation has persisted evidence and supported verification."
+            } else {
+                "The task implementation obligation is incomplete or its evidence cannot prove the declared outcome."
+            }
+        }));
+    }
     for detail in build_detail_review_matrix(task_plan, task_results) {
         let detail_id = detail
             .get("detailId")

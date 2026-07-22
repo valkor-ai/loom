@@ -650,7 +650,11 @@ fn validate_task_execution_request_coverage(
         "task.objective".to_string(),
         "task.writeBoundary".to_string(),
     ];
-    for field in ["implementationActions", "verificationIntents"] {
+    for field in [
+        "implementationActions",
+        "implementationObligations",
+        "verificationIntents",
+    ] {
         if task
             .get(field)
             .and_then(Value::as_array)
@@ -716,6 +720,13 @@ pub(crate) fn task_execution_rules(
             "requiredCloseout": "Write TaskResult and run loom.recordTaskResultFile in this same task turn unless a declared stop condition is reached.",
             "taskResultField": "executionContinuity",
             "statusRule": "If agent-owned long-running work was started and its release state is unknown, use completed_with_notes with notes unless an independent failure or blocked condition remains."
+        },
+        "implementationClosureContract": {
+            "source": "task.implementationObligations",
+            "ownership": "MCP",
+            "agentRule": "Implement every required obligation in this task before reporting completed. Report one implementationObligationResults entry for every obligation in the supplied canonical order; fill only status, evidenceRefs, and summary. Do not author obligationId or verificationIds.",
+            "completionRule": "A task is complete only when every required obligation is satisfied with concrete evidence and no obligation is partial, blocked, or not_verified.",
+            "repairRule": "When an obligation is incomplete, submit execution repair with the unchanged obligationId and the missing implementation or evidence; do not change the task contract."
         },
         "verificationCommandSchedulingRules": verification_command_scheduling_rules(),
         "userFacingLanguage": {
@@ -903,6 +914,8 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "If status is completed, every verification intent should have passed evidence.".to_string(),
         "If status is failed, failure is required.".to_string(),
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
+        "For every task.implementationObligations entry, provide exactly one implementationObligationResults entry in the supplied order, filling status, evidenceRefs, and summary only. Loom derives obligationId and verificationIds. Required obligations must be satisfied before status=completed; partial, blocked, or not_verified obligations require execution repair or a non-completed status.".to_string(),
+        "implementationObligationResults.evidenceRefs must point to concrete implementation or verification evidence. A build, compile, or reference-read result alone cannot satisfy a persistence, security, state transition, API behavior, or runtime obligation unless its declared evidence capability proves that target.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
@@ -939,7 +952,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
-        rules.push("Treat task.implementationActions, task.objective, task.writeBoundary, and the selected reference plan as the implementation contract. Do not invent a second obligation list inside TaskResult; codeQualityEvidence records how the completed task followed the selected references.".to_string());
+        rules.push("Treat task.implementationObligations as the implementation closure contract. task.implementationActions is only the normalized action classification; do not invent or duplicate obligations in TaskResult.".to_string());
         rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
@@ -1122,6 +1135,7 @@ fn task_execution_read_groups(
         "task.title",
         "task.taskKind",
         "task.implementationActions",
+        "task.implementationObligations",
         "task.objective",
         "task.dependsOn",
         "task.scopeRefs",
@@ -1264,6 +1278,7 @@ fn task_execution_read_groups(
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
+        "executionRules.implementationClosureContract",
         "executionRules.verificationCommandSchedulingRules",
     ];
     result_fields.extend(task_result_contract_read_fields(task));
@@ -3188,6 +3203,7 @@ mod tests {
             title: "Implement application observability".to_string(),
             task_kind: TaskKind::ConfigurationSupport,
             implementation_actions: vec![ImplementationAction::ImplementObservability],
+            implementation_obligations: vec![],
             objective: "Configure logging and implement owned diagnostic boundaries.".to_string(),
             depends_on: vec![],
             scope_refs: vec![],

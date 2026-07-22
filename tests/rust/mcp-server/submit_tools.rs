@@ -10942,7 +10942,7 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
             verification["provenance"] = json!({
                 "evidenceRefs": ["src/main.tsx"],
                 "changedFiles": ["src/main.tsx"],
-                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
+                "testCaseRefs": ["fixture-task-result"],
                 "command": "fixture verification",
                 "exitCode": 0
             });
@@ -11397,17 +11397,46 @@ fn write_task_result_candidate_with_detail_evidence(
         let verification_id = verification
             .get("verificationId")
             .and_then(Value::as_str)
+            .or_else(|| {
+                fields[&verification_intents_field]
+                    .value
+                    .as_array()
+                    .and_then(|intents| intents.get(index))
+                    .and_then(|intent| intent["verificationId"].as_str())
+            })
             .map(str::to_string)
             .unwrap_or_else(|| format!("verify-account-{:03}", index + 1));
         verification["verificationId"] = json!(verification_id);
         verification["status"] = json!("passed");
-        verification["evidenceType"] = json!("static_check");
+        let evidence_type = fields[&verification_intents_field]
+            .value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|intent| intent["verificationId"] == json!(verification_id))
+            .and_then(|intent| intent["acceptableEvidence"].as_array())
+            .and_then(|evidence| evidence.first())
+            .and_then(Value::as_str)
+            .unwrap_or("static_check");
+        verification["evidenceType"] = json!(evidence_type);
         verification["summary"] = json!(verification_summary);
         if index == 0 || verification.get("browserChecks").is_some() {
             verification["browserChecks"] = json!(browser_checks);
         }
     }
     result["verificationResults"] = Value::Array(verification_results);
+    if let Some(obligations) = result
+        .get_mut("implementationObligationResults")
+        .and_then(Value::as_array_mut)
+    {
+        for obligation in obligations {
+            obligation["status"] = json!("satisfied");
+            obligation["evidenceRefs"] = json!(["src/main.tsx"]);
+            obligation["summary"] = json!(
+                "The task-owned implementation obligation is covered by the changed source and passed task verification."
+            );
+        }
+    }
     if let Some(verifications) = result
         .get_mut("verificationResults")
         .and_then(Value::as_array_mut)
@@ -11419,7 +11448,7 @@ fn write_task_result_candidate_with_detail_evidence(
             verification["provenance"] = json!({
                 "evidenceRefs": ["src/main.tsx"],
                 "changedFiles": ["src/main.tsx"],
-                "testCaseRefs": ["tests/rust/mcp-server/submit_tools.rs"],
+                "testCaseRefs": ["fixture-task-result"],
                 "command": "fixture verification",
                 "exitCode": 0
             });
@@ -11920,7 +11949,10 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
         fixture.root_str(),
     );
     assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
-    assert_ne!(accepted["next"]["artifactKind"], "task_result_repair");
+    assert_ne!(
+        accepted["next"]["artifactKind"], "task_result_repair",
+        "unexpected repair: {accepted:#}"
+    );
 
     let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
     let persisted_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
