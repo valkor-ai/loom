@@ -752,6 +752,126 @@ fn collect_go_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
     signals.package_managers.insert("go".to_string());
 }
 
+#[derive(Clone, Copy)]
+struct BackendEcosystemDefinition {
+    ecosystem_id: &'static str,
+    label: &'static str,
+    runtime_family: &'static str,
+    backend_options: &'static [&'static str],
+    backend_matchers: &'static [&'static str],
+    data_access_options: &'static [&'static str],
+    data_access_matchers: &'static [&'static str],
+}
+
+const BACKEND_ECOSYSTEMS: &[BackendEcosystemDefinition] = &[
+    BackendEcosystemDefinition {
+        ecosystem_id: "nextjs_fullstack",
+        label: "Next.js full-stack",
+        runtime_family: "typescript_node",
+        backend_options: &["Next.js + Server Actions / Route Handlers / SSR"],
+        backend_matchers: &["next.js", "nextjs"],
+        data_access_options: &["Prisma", "Drizzle"],
+        data_access_matchers: &["prisma", "drizzle"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "node_http",
+        label: "Node.js HTTP service",
+        runtime_family: "typescript_node",
+        backend_options: &["Node.js + Fastify", "Node.js + Express"],
+        backend_matchers: &["node.js", "nodejs", "typescript", "fastify", "express"],
+        data_access_options: &["Prisma", "Drizzle", "Kysely"],
+        data_access_matchers: &["prisma", "drizzle", "kysely"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "nestjs_service",
+        label: "NestJS service",
+        runtime_family: "typescript_node",
+        backend_options: &["Node.js + NestJS"],
+        backend_matchers: &["nestjs"],
+        data_access_options: &["Prisma", "TypeORM"],
+        data_access_matchers: &["prisma", "typeorm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "python_fastapi",
+        label: "FastAPI service",
+        runtime_family: "python",
+        backend_options: &["Python + FastAPI"],
+        backend_matchers: &["python", "fastapi"],
+        data_access_options: &["SQLAlchemy", "SQLModel"],
+        data_access_matchers: &["sqlalchemy", "sqlmodel"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "python_django",
+        label: "Django application",
+        runtime_family: "python",
+        backend_options: &["Python + Django"],
+        backend_matchers: &["django"],
+        data_access_options: &["Django ORM"],
+        data_access_matchers: &["django orm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "jvm_spring",
+        label: "Spring Boot service",
+        runtime_family: "jvm",
+        backend_options: &["Java + Spring Boot"],
+        backend_matchers: &["java", "kotlin", "spring boot"],
+        data_access_options: &["Spring Data JPA", "MyBatis Plus", "jOOQ"],
+        data_access_matchers: &["spring data jpa", "mybatis", "jooq"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "dotnet_aspnetcore",
+        label: "ASP.NET Core service",
+        runtime_family: "dotnet",
+        backend_options: &[".NET + ASP.NET Core"],
+        backend_matchers: &[".net", "asp.net", "dotnet"],
+        data_access_options: &["Entity Framework Core", "Dapper"],
+        data_access_matchers: &["entity framework", "ef core", "dapper"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "go_http",
+        label: "Go HTTP service",
+        runtime_family: "go",
+        backend_options: &["Go + net/http or Gin"],
+        backend_matchers: &["go", "net/http", "gin"],
+        data_access_options: &["database/sql", "sqlc", "GORM"],
+        data_access_matchers: &["database/sql", "sqlc", "gorm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "no_independent_backend",
+        label: "No independent backend",
+        runtime_family: "none",
+        backend_options: &["No independent backend"],
+        backend_matchers: &["no independent backend", "no backend"],
+        data_access_options: &["No ORM"],
+        data_access_matchers: &["no orm"],
+    },
+];
+
+const PORTABLE_DATA_ACCESS_OPTIONS: &[&str] = &["Raw SQL / framework-native wrapper", "No ORM"];
+const PORTABLE_DATA_ACCESS_MATCHERS: &[&str] = &[
+    "raw sql",
+    "framework native wrapper",
+    "lightweight wrapper",
+    "no orm",
+];
+
+fn backend_ecosystem_guidance() -> Value {
+    json!({
+        "sourceOfTruth": "This catalog is the single source for backend/dataAccess recommendation relationships and known runtime-family compatibility checks.",
+        "renderingRule": "Render backend and dataAccess as one grouped choice. Do not present an independent flat dataAccess option list.",
+        "coverageRule": "When backend choice is open and no confirmed constraint excludes an ecosystem, keep the adjustable range diverse across TypeScript/Node, Python, JVM/Spring, and .NET. Do not truncate by catalog order; include Go when requirement or user preference makes it relevant.",
+        "customTechnologyPolicy": "Bundles are mainstream recommendations, not a whitelist. Keep user-specified backend and data-access technologies when their relationship is intentional and explain the custom pairing in the final confirmation summary.",
+        "portableDataAccessOptions": PORTABLE_DATA_ACCESS_OPTIONS,
+        "bundles": BACKEND_ECOSYSTEMS.iter().map(|ecosystem| json!({
+            "ecosystemId": ecosystem.ecosystem_id,
+            "label": ecosystem.label,
+            "runtimeFamily": ecosystem.runtime_family,
+            "backendOptions": ecosystem.backend_options,
+            "recommendedDataAccessOptions": ecosystem.data_access_options
+        })).collect::<Vec<_>>()
+    })
+}
+
 fn technical_baseline_selection_guidance(
     project_kind: ProjectKind,
     has_previous_baseline: bool,
@@ -789,7 +909,10 @@ fn technical_baseline_selection_guidance(
             "conditionalTracks": {
                 "qualityAutomation": "Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline."
             },
-            "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
+            "coupledTracks": {
+                "backendDataAccess": "backend and dataAccess remain separate final tracks, but recommendation and confirmation must present them as one compatible ecosystem choice."
+            },
+            "customTechnologyPolicy": "The ecosystem catalog and independent track options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
             "externalServicesProviderShape": {
                 "allowedProviderFields": ["provider", "capabilities"],
                 "allowedCapabilityFields": ["purpose", "durability", "startupRequirement"],
@@ -814,7 +937,7 @@ fn technical_baseline_selection_guidance(
             "mandatorySections": [
                 "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
-                "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
+                "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
                 "When securityRequirement is protected, show the proposed mechanism, one selected algorithm, key source, transport, issuer/audience ownership, and the confirmation or adjustment needed before submitting the baseline.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
@@ -823,6 +946,8 @@ fn technical_baseline_selection_guidance(
                 "Do not present the recommendation as based only on the first phase or current small implementation slice.",
                 "Do not omit the adjustable technology range.",
                 "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
+                "Do not present backend and dataAccess as unrelated option lists. Keep every displayed data-access choice under its compatible backend ecosystem.",
+                "Do not truncate backend alternatives by catalog order. When no confirmed constraint excludes them, preserve mainstream ecosystem coverage including Java + Spring Boot.",
                 "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
                 "When externalServices includes Redis, explain the business role in plain language, allow multiple roles, and ask only the persistence or startup questions needed by the selected roles.",
                 "Do not ask users to choose Redis data structures, TTL values, Lua scripts, or Compose settings during TechnicalBaseline confirmation; those decisions belong to Architecture.",
@@ -830,7 +955,7 @@ fn technical_baseline_selection_guidance(
                 "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess."
             ]
         },
-        "commonOptions": {
+        "independentTrackOptions": {
             "web": {
                 "label": "Web client",
                 "examples": ["Next.js", "React + Vite", "Vue + Vite", "SvelteKit", "Astro", "No Web client"]
@@ -839,17 +964,9 @@ fn technical_baseline_selection_guidance(
                 "label": "App client",
                 "examples": ["No App client", "React Native + Expo", "Flutter", "iOS Native (Swift / SwiftUI)", "Android Native (Kotlin / Jetpack Compose)", "Hybrid WebView (Capacitor / Ionic)", "PWA"]
             },
-            "backend": {
-                "label": "Backend / service",
-                "examples": ["Next.js + Server Actions / Route Handlers / SSR", "Node.js + Fastify", "Node.js + Express", "Node.js + NestJS", "Python + FastAPI", "Python + Django", "Java + Spring Boot", "Go + net/http or Gin", ".NET + ASP.NET Core", "No independent backend"]
-            },
             "persistence": {
                 "label": "Database / persistence",
                 "examples": ["SQLite", "PostgreSQL", "MySQL", "MongoDB", "File storage / local JSON", "No persistence yet"]
-            },
-            "dataAccess": {
-                "label": "ORM / data access",
-                "examples": ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "MyBatis Plus", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"]
             },
             "externalServices": {
                 "label": "External services",
@@ -874,17 +991,13 @@ fn technical_baseline_selection_guidance(
                 "rule": "Use the accepted requirement and repository identity evidence; do not ask the user to choose token claims or JWT data structures here."
             }
         },
+        "backendEcosystems": backend_ecosystem_guidance(),
         "shorthandNormalization": {
             "backend": [
                 "If the user writes backend=Java without a framework, normalize it to Java + Spring Boot unless they explicitly name a different Java backend stack.",
                 "If the user writes backend=Python without a framework, normalize it to Python + FastAPI for service/backend work unless the requirement or user explicitly points to Django-style site/admin/content capabilities.",
                 "If the user writes backend=Node.js without a framework, ask for or summarize a concrete Node.js framework choice such as Fastify, Express, or NestJS before final confirmation.",
                 "If the user writes backend=.NET without a framework, normalize it to .NET + ASP.NET Core unless they explicitly name another .NET backend stack."
-            ],
-            "dataAccessCompatibility": [
-                "When backend is Java + Spring Boot and dataAccess is not specified, recommend Spring Data JPA or MyBatis Plus explicitly before final confirmation; do not leave it as generic Java persistence.",
-                "When backend is Python + FastAPI and dataAccess is not specified, recommend SQLAlchemy or SQLModel explicitly before final confirmation.",
-                "When backend is Python + Django and dataAccess is not specified, recommend Django ORM explicitly before final confirmation."
             ]
         },
         "recommendationPrinciples": [
@@ -899,7 +1012,7 @@ fn technical_baseline_selection_guidance(
         "replyProtocolForUser": {
             "acceptRecommendation": "确认推荐方案",
             "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, qualityAutomation=Playwright, app=不需要, externalServices=不需要",
-            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
+            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Node.js+Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
             "redisCapabilityExample": "externalServices=Redis，用于登录会话和后台任务；登录会话重启后保留，后台任务失败可重试",
             "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
         }
@@ -1487,6 +1600,95 @@ fn validate_new_project_candidate(
             "New-project Web baselines must include a selected qualityAutomation track with a concrete browser automation stack.",
         ));
     }
+    if let Some(compatibility_issue) = backend_data_access_compatibility_issue(&candidate.stack) {
+        issues.push(compatibility_issue);
+    }
+}
+
+fn backend_data_access_compatibility_issue(stack: &Value) -> Option<delivery_core::RepairIssue> {
+    let backend = active_track_selection(stack, "backend")?;
+    let data_access = active_track_selection(stack, "dataAccess")?;
+    if technology_matches_any(data_access, PORTABLE_DATA_ACCESS_MATCHERS) {
+        return None;
+    }
+    let backend_families = backend_runtime_families(backend);
+    let data_access_families = data_access_runtime_families(data_access);
+    if backend_families.is_empty()
+        || data_access_families.is_empty()
+        || !backend_families.is_disjoint(&data_access_families)
+    {
+        return None;
+    }
+    let compatible_options = BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| backend_families.contains(ecosystem.runtime_family))
+        .flat_map(|ecosystem| ecosystem.data_access_options.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(issue(
+        "NEW_PROJECT_BACKEND_DATA_ACCESS_INCOMPATIBLE",
+        "stack.tracks.dataAccess.selection",
+        &format!(
+            "backend selection '{backend}' and dataAccess selection '{data_access}' belong to different known runtime ecosystems. Use a compatible option such as {compatible_options}, or provide a genuinely custom data-access selection whose relationship can be explained during confirmation."
+        ),
+    ))
+}
+
+fn active_track_selection<'a>(stack: &'a Value, track: &str) -> Option<&'a str> {
+    let track = stack.pointer(&format!("/tracks/{track}"))?.as_object()?;
+    if !matches!(
+        track.get("status").and_then(Value::as_str),
+        Some("selected" | "user_custom")
+    ) {
+        return None;
+    }
+    track
+        .get("selection")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|selection| !selection.is_empty())
+}
+
+fn backend_runtime_families(selection: &str) -> BTreeSet<&'static str> {
+    BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| technology_matches_any(selection, ecosystem.backend_matchers))
+        .map(|ecosystem| ecosystem.runtime_family)
+        .collect()
+}
+
+fn data_access_runtime_families(selection: &str) -> BTreeSet<&'static str> {
+    BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| technology_matches_any(selection, ecosystem.data_access_matchers))
+        .map(|ecosystem| ecosystem.runtime_family)
+        .collect()
+}
+
+fn technology_matches_any(selection: &str, matchers: &[&str]) -> bool {
+    let selection = format!(" {} ", normalize_technology_phrase(selection));
+    matchers.iter().any(|matcher| {
+        let matcher = format!(" {} ", normalize_technology_phrase(matcher));
+        selection.contains(&matcher)
+    })
+}
+
+fn normalize_technology_phrase(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn new_project_stack_tracks_complete(stack: &Value) -> bool {
@@ -2033,4 +2235,82 @@ fn issue(code: &str, field_path: &str, message: &str) -> delivery_core::RepairIs
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack_with_backend_and_data_access(backend: &str, data_access: &str) -> Value {
+        json!({
+            "tracks": {
+                "backend": {
+                    "status": "selected",
+                    "selection": backend
+                },
+                "dataAccess": {
+                    "status": "selected",
+                    "selection": data_access
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn backend_ecosystem_guidance_groups_spring_with_data_access_options() {
+        let guidance = backend_ecosystem_guidance();
+        let spring = guidance["bundles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|bundle| bundle["ecosystemId"] == "jvm_spring")
+            .expect("Spring ecosystem bundle");
+
+        assert!(spring["backendOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Java + Spring Boot")));
+        assert!(spring["recommendedDataAccessOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Spring Data JPA")));
+        assert!(spring["recommendedDataAccessOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("MyBatis Plus")));
+        assert!(guidance["renderingRule"]
+            .as_str()
+            .unwrap()
+            .contains("Do not present an independent flat dataAccess option list"));
+    }
+
+    #[test]
+    fn known_cross_runtime_data_access_is_rejected() {
+        let stack = stack_with_backend_and_data_access("Java + Spring Boot", "Prisma");
+
+        let issue = backend_data_access_compatibility_issue(&stack).expect("compatibility issue");
+
+        assert_eq!(issue.code, "NEW_PROJECT_BACKEND_DATA_ACCESS_INCOMPATIBLE");
+        assert_eq!(
+            issue.field_path.as_deref(),
+            Some("stack.tracks.dataAccess.selection")
+        );
+        assert!(issue.message.contains("Spring Data JPA"));
+    }
+
+    #[test]
+    fn compatible_portable_and_custom_data_access_remain_open() {
+        for (backend, data_access) in [
+            ("Java + Spring Boot", "Spring Data JPA"),
+            ("Python + Django", "SQLAlchemy"),
+            ("Node.js + Fastify", "Raw SQL / lightweight wrapper"),
+            ("Java + Spring Boot", "Custom JDBC Adapter"),
+        ] {
+            let stack = stack_with_backend_and_data_access(backend, data_access);
+            assert!(
+                backend_data_access_compatibility_issue(&stack).is_none(),
+                "{backend} + {data_access} should remain valid"
+            );
+        }
+    }
 }

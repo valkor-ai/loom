@@ -448,20 +448,31 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .as_array()
         .expect("core tracks")
         .contains(&json!("backend")));
-    assert!(guidance["commonOptions"]["backend"]["examples"]
+    let ecosystem_bundles = guidance["backendEcosystems"]["bundles"]
         .as_array()
-        .expect("backend examples")
+        .expect("backend ecosystem bundles");
+    let spring = ecosystem_bundles
+        .iter()
+        .find(|bundle| bundle["ecosystemId"] == "jvm_spring")
+        .expect("Spring ecosystem bundle");
+    assert!(spring["backendOptions"]
+        .as_array()
+        .expect("Spring backend options")
         .contains(&json!("Java + Spring Boot")));
-    assert!(guidance["commonOptions"]["backend"]["examples"]
+    assert!(spring["recommendedDataAccessOptions"]
         .as_array()
-        .expect("backend examples")
-        .contains(&json!("Python + FastAPI")));
-    assert!(guidance["commonOptions"]["dataAccess"]["examples"]
-        .as_array()
-        .expect("data access examples")
+        .expect("Spring data access options")
         .contains(&json!("MyBatis Plus")));
+    assert!(guidance["independentTrackOptions"].get("backend").is_none());
+    assert!(guidance["independentTrackOptions"]
+        .get("dataAccess")
+        .is_none());
+    assert!(guidance["backendEcosystems"]["renderingRule"]
+        .as_str()
+        .expect("backend ecosystem rendering rule")
+        .contains("Do not present an independent flat dataAccess option list"));
     assert_eq!(
-        guidance["commonOptions"]["qualityAutomation"]["examples"][0],
+        guidance["independentTrackOptions"]["qualityAutomation"]["examples"][0],
         json!("Playwright")
     );
     assert_eq!(
@@ -1527,6 +1538,44 @@ fn new_project_web_baseline_requires_quality_automation_track() {
         .any(|issue| {
             issue["code"] == "NEW_PROJECT_QUALITY_AUTOMATION_INCOMPLETE"
                 && issue["fieldPath"] == "stack.tracks.qualityAutomation"
+        }));
+}
+
+#[test]
+fn new_project_baseline_rejects_known_cross_runtime_data_access() {
+    let fixture = Fixture::new("technical-baseline-backend-data-access");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = new_project_technical_baseline_candidate_json();
+    candidate["stack"]["tracks"]["dataAccess"]["selection"] = json!("Prisma");
+    candidate["stack"]["tracks"]["dataAccess"]["rationale"] =
+        json!("This deliberately exercises a known cross-runtime mismatch.");
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "NEW_PROJECT_BACKEND_DATA_ACCESS_INCOMPATIBLE"
+                && issue["fieldPath"] == "stack.tracks.dataAccess.selection"
         }));
 }
 
