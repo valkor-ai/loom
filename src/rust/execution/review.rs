@@ -34,6 +34,7 @@ use crate::{
     },
     task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
+    task_result::is_generated_output_path,
 };
 
 const REVIEW_ACTIONS: &[&str] = &[
@@ -3587,6 +3588,25 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                         !result.changed_files.is_empty() || result.no_change_reason.is_some()
                     })
                     .unwrap_or(false);
+                let implementation_supported = result.is_some_and(|result| {
+                    let obligations = task
+                        .implementation_obligations
+                        .iter()
+                        .filter(|obligation| {
+                            obligation
+                                .source_refs
+                                .iter()
+                                .any(|source_ref| source_ref == detail_id)
+                        })
+                        .collect::<Vec<_>>();
+                    obligations.is_empty()
+                        || obligations.iter().all(|obligation| {
+                            result.implementation_obligation_results.iter().any(|item| {
+                                item.obligation_id == obligation.obligation_id
+                                    && item.status == "satisfied"
+                            })
+                        })
+                });
                 let ok = result.is_some_and(|result| {
                     matches!(
                         result.status,
@@ -3598,6 +3618,7 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                             && !evidence.evidence_refs.is_empty()
                             && verification_supported
                             && artifact_supported
+                            && implementation_supported
                     })
                 });
                 json!({
@@ -3608,6 +3629,7 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                     "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "verificationSupported": verification_supported,
                     "artifactSupported": artifact_supported,
+                    "implementationSupported": implementation_supported,
                     "recommendedNextAction": if ok { "none" } else { "execution_repair" }
                 })
             })
@@ -3652,9 +3674,24 @@ fn build_implementation_obligation_review_matrix(
                                         .verification_results
                                         .iter()
                                         .find(|verification| verification.verification_id == *id)
-                                        .is_some_and(verification_is_traceable)
+                                        .is_some_and(|verification| {
+                                            verification_is_traceable(verification)
+                                                && obligation.acceptable_evidence.contains(
+                                                    &verification.evidence_type.unwrap_or(
+                                                        contracts::VerificationEvidence::AgentReviewExplanation,
+                                                    ),
+                                                )
+                                        })
                                 })
                         })
+                });
+                let evidence_owned = evidence.is_some_and(|evidence| {
+                    evidence.evidence_refs.iter().any(|reference| {
+                        result.is_some_and(|result| result.changed_files.contains(reference))
+                    }) && evidence
+                        .evidence_refs
+                        .iter()
+                        .all(|reference| !is_generated_output_path(reference))
                 });
                 let satisfied = result.is_some_and(|result| {
                     matches!(
@@ -3664,6 +3701,7 @@ fn build_implementation_obligation_review_matrix(
                         evidence.status == "satisfied"
                             && !evidence.evidence_refs.is_empty()
                             && verification_supported
+                            && evidence_owned
                     })
                 });
                 json!({
@@ -3677,6 +3715,7 @@ fn build_implementation_obligation_review_matrix(
                     "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "evidenceRefCount": evidence.map(|evidence| evidence.evidence_refs.len()).unwrap_or(0),
                     "verificationSupported": verification_supported,
+                    "evidenceOwned": evidence_owned,
                     "satisfied": satisfied,
                     "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
                 })
@@ -3697,9 +3736,34 @@ fn build_engineering_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
+                let task = task_plan.tasks.iter().find(|task| task.task_id == *task_id);
                 let passed_verifications = result
                     .map(passed_verification_summaries)
                     .unwrap_or_default();
+                let implementation_support = result
+                    .map(|result| {
+                        result
+                            .implementation_obligation_results
+                            .iter()
+                            .filter(|item| {
+                                item.status == "satisfied"
+                                    && task.is_some_and(|task| {
+                                        task.implementation_obligations.iter().any(|obligation| {
+                                            obligation.obligation_id == item.obligation_id
+                                                && matches!(
+                                                    obligation.kind.as_str(),
+                                                    "persistence_mapping"
+                                                        | "entity_contract"
+                                                        | "entity_lifecycle"
+                                                        | "interface_contract"
+                                                        | "api_binding"
+                                                )
+                                        })
+                                    })
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3707,6 +3771,7 @@ fn build_engineering_quality_review_matrix(
                             contracts::TaskResultStatus::Completed
                                 | contracts::TaskResultStatus::CompletedWithNotes
                         ) && !passed_verifications.is_empty()
+                            && implementation_support > 0
                     })
                     .unwrap_or(false);
                 json!({
@@ -3719,6 +3784,7 @@ fn build_engineering_quality_review_matrix(
                     "riskFieldKinds": requirement.risk_field_kinds,
                     "verificationObligations": requirement.verification_obligations,
                     "passedVerificationSummaries": passed_verifications,
+                    "implementationSupportCount": implementation_support,
                     "requirementDetailEvidence": result
                         .map(compact_requirement_detail_evidence)
                         .unwrap_or_default(),
@@ -4483,6 +4549,10 @@ fn compact_review_matrix_summary(
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
+                "implementationSupportCount": item
+                    .get("implementationSupportCount")
+                    .cloned()
+                    .unwrap_or_else(|| json!(0)),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -4715,6 +4785,10 @@ fn build_review_signals(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0),
+            "implementationSupportCount": item
+                .get("implementationSupportCount")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
             "reason": if quality_satisfied {
                 "TaskResult contains passed verification evidence for the referenced engineering quality requirement."

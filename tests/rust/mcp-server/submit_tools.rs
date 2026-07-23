@@ -12813,6 +12813,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "moduleId": "module.account-service",
                 "name": "account-service",
                 "summary": "Handles the current phase account workflow.",
+                "responsibility": "Owns account lifecycle behavior and its current-phase persistence boundary.",
                 "scopeRefs": [scope_id.clone()],
                 "acceptanceRefs": [acceptance_id.clone()]
             }]
@@ -13117,11 +13118,11 @@ fn frontend_surface_decision_candidate_json() -> Value {
         "informationModel": {
             "primaryObjects": ["account"],
             "fields": ["account id", "status", "investor name", "updated time"],
-            "scanOrder": ["identity", "status", "primary action", "detail"]
+            "scanOrder": ["identity", "status", "action", "custom item"]
         },
         "actionModel": [{
             "actionId": "action_open_account",
-            "kind": "primary",
+            "kind": "create_update",
             "label": "新建证券账户",
             "placement": "page_actions",
             "risk": "business_blocking",

@@ -3117,7 +3117,7 @@ fn artifact_ref_owner_score(
 
 fn structured_task_kind_owner_score(
     task: &TaskDefinition,
-    detail: &RequirementDetailItem,
+    _detail: &RequirementDetailItem,
     coverage: &ArchitectureDetailCoverageEntry,
 ) -> u32 {
     let refs = &coverage.artifact_refs;
@@ -3129,7 +3129,7 @@ fn structured_task_kind_owner_score(
         || !refs.frontend_operation_paths.is_empty();
     let has_flow = !refs.user_flows.is_empty();
     let has_state = !refs.state_machines.is_empty();
-    let mut score = 0;
+    let mut score: u32 = 0;
     if has_data && task_directly_owns_persistence_mapping(task) {
         score += 16;
     }
@@ -3152,17 +3152,11 @@ fn structured_task_kind_owner_score(
     }
     if !has_data && !has_api && !has_ui && !has_flow && !has_state {
         score += match task.task_kind {
-            TaskKind::FeatureIncrement | TaskKind::IntegrationIncrement => 6,
-            TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
-                if task_is_frontend_task(task) =>
-            {
-                6
-            }
-            TaskKind::InterfaceIncrement
-                if detail.impact_tags.iter().any(|tag| tag == "interface") =>
-            {
-                6
-            }
+            TaskKind::FeatureIncrement => 6,
+            TaskKind::InterfaceIncrement if task_owns_interface_behavior(task) => 5,
+            TaskKind::IntegrationIncrement => 3,
+            // A frontend task is not the owner of a generic requirement
+            // unless the accepted detail carries a frontend impact.
             _ => 0,
         };
     }
@@ -3174,7 +3168,7 @@ fn semantic_detail_owner_score(
     detail: &RequirementDetailItem,
     coverage: &ArchitectureDetailCoverageEntry,
 ) -> u32 {
-    let mut score = 0;
+    let mut score: u32 = 0;
     if (detail.impact_tags.iter().any(|tag| tag == "data_model")
         || detail.lifecycle_stage == "create")
         && task_directly_owns_persistence_mapping(task)
@@ -3203,6 +3197,39 @@ fn semantic_detail_owner_score(
     }
     if !coverage.artifact_refs.user_flows.is_empty() && task_owns_business_flow_behavior(task) {
         score += 3;
+    }
+    // These are structured requirement facts. They are the deterministic
+    // fallback when AAC has not attached a concrete artifact to a detail.
+    match detail.lifecycle_stage.as_str() {
+        "state_change" | "approve_or_process" => {
+            if task_owns_interface_behavior(task) {
+                score += 10;
+            }
+            if task_owns_business_flow_behavior(task) {
+                score += 4;
+            }
+        }
+        "create" | "update" | "query_select" => {
+            if task_directly_owns_persistence_mapping(task) {
+                score += 8;
+            }
+            if task_owns_interface_behavior(task) {
+                score += 5;
+            }
+        }
+        _ => {}
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "frontend") {
+        if task_is_frontend_task(task) {
+            score += 24;
+        } else {
+            score = score.saturating_sub(20);
+        }
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "data_model")
+        && task_directly_owns_persistence_mapping(task)
+    {
+        score += 10;
     }
     score
 }
@@ -3902,18 +3929,20 @@ fn validate_requirement_detail_assignments(
     if covered_detail_ids.is_empty() {
         return Vec::new();
     }
-    let task_detail_ids = tasks
-        .iter()
-        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let verification_detail_ids = tasks
+    let task_detail_owners = tasks
         .iter()
         .flat_map(|task| {
-            task.verification_intents
+            task.requirement_detail_refs
                 .iter()
-                .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+                .map(|detail_id| (detail_id.clone(), task.task_id.clone()))
         })
-        .collect::<BTreeSet<_>>();
+        .fold(
+            BTreeMap::<String, Vec<String>>::new(),
+            |mut owners, (detail, task)| {
+                owners.entry(detail).or_default().push(task);
+                owners
+            },
+        );
 
     let mut issues = Vec::new();
     for detail in pgc
@@ -3925,19 +3954,43 @@ fn validate_requirement_detail_assignments(
         if !covered_detail_ids.contains(&detail.detail_id) {
             continue;
         }
-        if !task_detail_ids.contains(&detail.detail_id) {
+        let owners = task_detail_owners
+            .get(&detail.detail_id)
+            .cloned()
+            .unwrap_or_default();
+        if owners.is_empty() {
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].requirementDetailRefs",
-                "Every covered current-phase requirement detail must be assigned to at least one task.",
+                "Every covered current-phase requirement detail must have exactly one MCP-derived implementation owner.",
+                Some(&detail.detail_id),
+            ));
+        } else if owners.len() != 1 {
+            issues.push(issue(
+                "DETAIL_TASK_OWNERSHIP_CONFLICT",
+                "tasks[].requirementDetailRefs",
+                "A requirement detail must be owned by exactly one implementation task; verification and closure tasks must not duplicate the business owner.",
                 Some(&detail.detail_id),
             ));
         }
-        if !verification_detail_ids.contains(&detail.detail_id) {
+        let verification_owned = owners.first().is_some_and(|owner_id| {
+            tasks
+                .iter()
+                .find(|task| &task.task_id == owner_id)
+                .is_some_and(|task| {
+                    task.verification_intents.iter().any(|intent| {
+                        intent
+                            .requirement_detail_refs
+                            .iter()
+                            .any(|item| item == &detail.detail_id)
+                    })
+                })
+        });
+        if !verification_owned {
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].verificationIntents[].requirementDetailRefs",
-                "Every covered current-phase requirement detail must be assigned to at least one verification intent.",
+                "The owning implementation task must include each covered detail in an assigned verification intent.",
                 Some(&detail.detail_id),
             ));
         }
@@ -6486,9 +6539,14 @@ fn normalize_implementation_obligations(
                     .is_some_and(|id| artifacts.interfaces.iter().any(|owned| owned == &id))
             })
             .collect::<Vec<_>>();
-        let interaction_requires_security = task_owned_application_interactions(aac, task)
-            .iter()
-            .any(|interaction| interaction_requires_security(interaction));
+        // Security belongs to the interface boundary. A persistence or domain
+        // task may touch a module that has secured interactions, but it must not
+        // inherit the API authentication obligation merely because the module
+        // is shared by that interaction.
+        let interaction_requires_security = task_owns_interface_behavior(task)
+            && task_owned_application_interactions(aac, task)
+                .iter()
+                .any(|interaction| interaction_requires_security(interaction));
         if task_has_implementation_action(
             task,
             ImplementationAction::ImplementAuthenticationOrAuthorization,
@@ -6547,14 +6605,10 @@ fn normalize_implementation_obligations(
             );
         }
 
-        let task_verification_ids = task
-            .verification_intents
-            .iter()
-            .filter(|intent| verification_intent_matches_obligation(intent, task))
-            .map(|intent| intent.verification_id.clone())
-            .collect::<Vec<_>>();
-        for obligation in &mut obligations {
-            obligation.verification_ids = task_verification_ids.clone();
+        let obligation_snapshot = obligations.clone();
+        for (index, obligation) in obligations.iter_mut().enumerate() {
+            obligation.verification_ids =
+                verification_ids_for_obligation(task, &obligation_snapshot, index);
         }
         obligations.sort_by(|left, right| left.obligation_id.cmp(&right.obligation_id));
         task.implementation_obligations = obligations;
@@ -6591,7 +6645,12 @@ fn implementation_obligation_for_action(
             "Implement the task-owned persistence operation and its provider-compatible data-access behavior.",
             evidence(true),
         ),
-        ImplementationAction::CreateOrUpdateInterface | ImplementationAction::WireReferenceInApiOrUi => (
+        ImplementationAction::CreateOrUpdateInterface => (
+            "interface_contract",
+            "Implement the task-owned API interface against the accepted method, schema, status, error, and security contract.",
+            evidence(true),
+        ),
+        ImplementationAction::WireReferenceInApiOrUi => (
             "api_binding",
             "Implement the task-owned API or client binding against the accepted interface contract.",
             evidence(true),
@@ -6708,6 +6767,84 @@ fn verification_intent_matches_obligation(
         || (intent.acceptance_refs.is_empty() && intent.requirement_detail_refs.is_empty())
 }
 
+fn verification_ids_for_obligation(
+    task: &TaskDefinition,
+    obligations: &[TaskImplementationObligation],
+    obligation_index: usize,
+) -> Vec<String> {
+    let obligation = &obligations[obligation_index];
+    let mut matching = task
+        .verification_intents
+        .iter()
+        .filter(|intent| {
+            verification_intent_matches_obligation(intent, task)
+                && verification_intent_matches_scope(intent, obligation)
+                && verification_intent_matches_evidence(intent, obligation)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect::<Vec<_>>();
+
+    // When a task has no structured refs to distinguish its intents, use the
+    // available evidence capability and stable declaration order. A single
+    // unscoped intent may legitimately verify multiple obligations; unrelated
+    // scoped intents must not be copied into every obligation.
+    if matching.is_empty() {
+        let compatible = task
+            .verification_intents
+            .iter()
+            .filter(|intent| {
+                verification_intent_matches_obligation(intent, task)
+                    && verification_intent_matches_evidence(intent, obligation)
+            })
+            .map(|intent| intent.verification_id.clone())
+            .collect::<Vec<_>>();
+        matching = if compatible.len() == 1 {
+            compatible
+        } else {
+            compatible
+                .get(obligation_index)
+                .or_else(|| compatible.last())
+                .cloned()
+                .into_iter()
+                .collect()
+        };
+    }
+    matching.sort();
+    matching.dedup();
+    matching
+}
+
+fn verification_intent_matches_scope(
+    intent: &VerificationIntent,
+    obligation: &TaskImplementationObligation,
+) -> bool {
+    let intent_refs = intent
+        .acceptance_refs
+        .iter()
+        .chain(intent.requirement_detail_refs.iter())
+        .collect::<BTreeSet<_>>();
+    intent_refs.is_empty()
+        || intent_refs.iter().any(|reference| {
+            obligation
+                .source_refs
+                .iter()
+                .any(|source| source == *reference)
+        })
+}
+
+fn verification_intent_matches_evidence(
+    intent: &VerificationIntent,
+    obligation: &TaskImplementationObligation,
+) -> bool {
+    obligation.acceptable_evidence.iter().any(|expected| {
+        intent
+            .preferred_evidence
+            .iter()
+            .chain(intent.acceptable_evidence.iter())
+            .any(|actual| actual == expected)
+    })
+}
+
 fn obligation_source_refs(task: &TaskDefinition, extra: &[&str]) -> Vec<String> {
     task.scope_refs
         .iter()
@@ -6751,22 +6888,103 @@ fn push_task_implementation_obligation(
     {
         return;
     }
+    let primary = obligations.is_empty();
     obligations.push(TaskImplementationObligation {
         obligation_id,
         kind: kind.to_string(),
-        source_refs: source_refs
-            .into_iter()
-            .filter(|value| !value.trim().is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-        artifact_refs,
+        source_refs: compact_obligation_source_refs(task, kind, source_refs, primary),
+        artifact_refs: compact_obligation_artifact_refs(kind, artifact_refs),
         required_outcome: required_outcome.to_string(),
         required: true,
         acceptable_evidence,
         verification_ids: Vec::new(),
         defer_policy: "must_be_satisfied_before_completed".to_string(),
     });
+}
+
+fn compact_obligation_source_refs(
+    task: &TaskDefinition,
+    kind: &str,
+    source_refs: Vec<String>,
+    primary: bool,
+) -> Vec<String> {
+    let relevant_artifacts =
+        compact_obligation_artifact_ref_set(kind, &task.write_boundary.artifact_refs);
+    let task_refs = task
+        .scope_refs
+        .iter()
+        .chain(task.acceptance_refs.iter())
+        .chain(task.requirement_detail_refs.iter())
+        .collect::<BTreeSet<_>>();
+    source_refs
+        .into_iter()
+        .filter(|value| {
+            if !primary {
+                return relevant_artifacts.contains(value);
+            }
+            task.requirement_detail_refs
+                .iter()
+                .any(|item| item == value)
+                || task.acceptance_refs.iter().any(|item| item == value)
+                || task.scope_refs.iter().any(|item| item == value)
+                || relevant_artifacts.contains(value)
+                || !task_refs.contains(value)
+        })
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn compact_obligation_artifact_refs(kind: &str, artifacts: TaskArtifactRefs) -> TaskArtifactRefs {
+    let mut compact = TaskArtifactRefs::default();
+    match kind {
+        "entity_contract" | "persistence_mapping" | "entity_lifecycle" => {
+            compact.modules = artifacts.modules;
+            compact.entities = artifacts.entities;
+            compact.state_machines = artifacts.state_machines;
+        }
+        "interface_contract"
+        | "api_binding"
+        | "authentication_authorization"
+        | "resilience_policy"
+        | "state_transition"
+        | "service_routing"
+        | "external_integration"
+        | "async_processing"
+        | "cache_policy" => {
+            compact.modules = artifacts.modules;
+            compact.interfaces = artifacts.interfaces;
+            compact.consumed_interfaces = artifacts.consumed_interfaces;
+        }
+        "frontend_experience" | "business_rule" => {
+            compact.modules = artifacts.modules;
+            compact.user_flows = artifacts.user_flows;
+            compact.consumed_interfaces = artifacts.consumed_interfaces;
+        }
+        "state_machine" => {
+            compact.modules = artifacts.modules;
+            compact.state_machines = artifacts.state_machines;
+        }
+        _ => compact.modules = artifacts.modules,
+    }
+    compact
+}
+
+fn compact_obligation_artifact_ref_set(
+    kind: &str,
+    artifacts: &TaskArtifactRefs,
+) -> BTreeSet<String> {
+    let compact = compact_obligation_artifact_refs(kind, artifacts.clone());
+    compact
+        .modules
+        .into_iter()
+        .chain(compact.entities)
+        .chain(compact.interfaces)
+        .chain(compact.consumed_interfaces)
+        .chain(compact.user_flows)
+        .chain(compact.state_machines)
+        .collect()
 }
 
 fn artifact_refs_for(artifacts: &TaskArtifactRefs, field: &str) -> TaskArtifactRefs {
@@ -7452,6 +7670,7 @@ fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementPersistenceTransaction
                     | ImplementationAction::OptimizePersistenceQuery
                     | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::ImplementEntityLifecycle
                     | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
@@ -8012,6 +8231,56 @@ mod tests {
     }
 
     #[test]
+    fn implementation_obligations_keep_single_provenance_and_relevant_verifications() {
+        let mut task = browser_task(3);
+        task.task_kind = TaskKind::InterfaceIncrement;
+        task.frontend_experience_requirement = None;
+        task.implementation_actions = vec![
+            ImplementationAction::CreateOrUpdateInterface,
+            ImplementationAction::ImplementResiliencePolicy,
+        ];
+        task.scope_refs = vec!["scope-orders".to_string()];
+        task.acceptance_refs = vec!["accept-orders".to_string()];
+        task.requirement_detail_refs = vec![
+            "detail-orders-create".to_string(),
+            "detail-orders-retry".to_string(),
+        ];
+        task.write_boundary.artifact_refs.interfaces = vec!["api-orders".to_string()];
+
+        let mut obligations = Vec::new();
+        push_task_implementation_obligation(
+            &mut obligations,
+            &task,
+            "interface_contract",
+            "Implement the accepted interface.",
+            vec![VerificationEvidence::AutomatedTest],
+            task.write_boundary.artifact_refs.clone(),
+            obligation_source_refs(&task, &[]),
+        );
+        push_task_implementation_obligation(
+            &mut obligations,
+            &task,
+            "resilience_policy",
+            "Implement bounded retry behavior.",
+            vec![VerificationEvidence::AutomatedTest],
+            task.write_boundary.artifact_refs.clone(),
+            obligation_source_refs(&task, &[]),
+        );
+
+        assert_eq!(obligations[0].source_refs.len(), 5);
+        assert!(obligations[0]
+            .source_refs
+            .contains(&"detail-orders-create".to_string()));
+        assert!(!obligations[1]
+            .source_refs
+            .contains(&"detail-orders-create".to_string()));
+        assert!(obligations[0]
+            .artifact_refs
+            .interfaces
+            .contains(&"api-orders".to_string()));
+    }
+
+    #[test]
     fn deferred_security_does_not_create_authentication_task_signals() {
         assert!(!interface_requires_security(&json!({
             "authPolicy": {"required": "deferred_with_risk"}
@@ -8433,6 +8702,21 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(ids, vec!["verify-owned"]);
+        let obligation = TaskImplementationObligation {
+            obligation_id: "obligation-owned".to_string(),
+            kind: "persistence_mapping".to_string(),
+            source_refs: vec!["detail-owned".to_string()],
+            artifact_refs: TaskArtifactRefs::default(),
+            required_outcome: "Implement the owned persistence boundary.".to_string(),
+            required: true,
+            acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+            verification_ids: vec![],
+            defer_policy: "must_be_satisfied_before_completed".to_string(),
+        };
+        assert_eq!(
+            verification_ids_for_obligation(&task, &[obligation], 0),
+            vec!["verify-owned"]
+        );
         assert_eq!(
             implementation_obligation_for_action(ImplementationAction::CreateOrUpdatePersistence)
                 .expect("persistence action")

@@ -494,7 +494,7 @@ fn validate_result(
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
     validate_verification_provenance(project_root, result, &mut issues);
-    validate_implementation_obligation_results(result, task, &mut issues);
+    validate_implementation_obligation_results(project_root, result, task, &mut issues);
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -819,6 +819,14 @@ fn normalize_implementation_obligation_results(
             }
             normalize_string_array_field(&mut item, "verificationIds");
             normalize_string_array_field(&mut item, "evidenceRefs");
+            if let Some(evidence_refs) = item.get_mut("evidenceRefs").and_then(Value::as_array_mut)
+            {
+                evidence_refs.retain(|reference| {
+                    reference
+                        .as_str()
+                        .is_some_and(|reference| !is_generated_output_path(reference))
+                });
+            }
             if !item.get("summary").is_some_and(Value::is_string) {
                 item.insert("summary".to_string(), json!(""));
             }
@@ -2428,6 +2436,7 @@ fn validate_browser_verification_results(
 }
 
 fn validate_implementation_obligation_results(
+    project_root: &Path,
     result: &TaskResult,
     task: &TaskDefinition,
     issues: &mut Vec<delivery_core::RepairIssue>,
@@ -2549,6 +2558,14 @@ fn validate_implementation_obligation_results(
                     "This obligation requires passed behavioral evidence; a build or reference-read result cannot satisfy it.",
                 ));
             }
+            validate_obligation_evidence_refs(project_root, result, evidence, issues);
+            if evidence.summary.trim().is_empty() {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].summary",
+                    "Satisfied implementation obligations must explain the concrete implementation evidence; a status without a summary is not a completion claim.",
+                ));
+            }
         }
     }
 
@@ -2592,6 +2609,77 @@ fn validate_implementation_obligation_results(
             }
         }
     }
+}
+
+fn validate_obligation_evidence_refs(
+    project_root: &Path,
+    result: &TaskResult,
+    evidence: &contracts::TaskImplementationObligationResult,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let changed_files = result.changed_files.iter().collect::<BTreeSet<_>>();
+    let mut has_changed_source = false;
+    for reference in &evidence.evidence_refs {
+        if !is_safe_project_relative_path(reference) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence references must be safe project-relative paths.",
+            ));
+            continue;
+        }
+        if is_generated_output_path(reference) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence must cite source or test files, not build output, caches, reports, or dependency directories.",
+            ));
+        }
+        if changed_files.contains(reference) {
+            has_changed_source = true;
+        } else if !from_project_relative(project_root, reference)
+            .ok()
+            .is_some_and(|path| path.is_file())
+        {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence references must point to existing project files or the task's changedFiles.",
+            ));
+        }
+    }
+    if !has_changed_source {
+        issues.push(issue(
+            "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+            "implementationObligationResults[].evidenceRefs",
+            "Satisfied implementation obligations must cite at least one file changed by this task; inherited files alone cannot prove ownership or completion.",
+        ));
+    }
+}
+
+pub(crate) fn is_generated_output_path(path: &str) -> bool {
+    path.split('/').any(|part| {
+        matches!(
+            part,
+            "target"
+                | "dist"
+                | "build"
+                | "coverage"
+                | ".cache"
+                | "cache"
+                | "reports"
+                | "report"
+                | "logs"
+                | "log"
+                | "test-results"
+                | "playwright-report"
+                | ".playwright"
+                | ".pytest_cache"
+                | ".next"
+                | "out"
+                | "node_modules"
+        )
+    })
 }
 
 fn validate_requirement_detail_evidence(

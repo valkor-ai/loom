@@ -739,7 +739,8 @@ pub(crate) fn task_execution_rules(
             "Do not implement deferred scope.",
             "Use confirmed business language in user-visible UI, feedback, test names, and TaskResult evidence when applicable.",
             "Write TaskResult JSON only to outputContract.resultFile."
-        ]
+        ],
+        "taskResponsibilityBoundary": task_responsibility_boundary(task)
     });
     let Some(object) = rules.as_object_mut() else {
         return rules;
@@ -791,6 +792,71 @@ pub(crate) fn task_execution_rules(
         );
     }
     rules
+}
+
+fn task_responsibility_boundary(task: &TaskDefinition) -> Value {
+    let owns_persistence = task_directly_owns_persistence(task);
+    let owns_interface = !task.write_boundary.artifact_refs.interfaces.is_empty()
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                contracts::ImplementationAction::CreateOrUpdateInterface
+                    | contracts::ImplementationAction::CreateEntityCrud
+            )
+        });
+    let owns_frontend = task.frontend_experience_requirement.is_some()
+        || matches!(
+            task.task_kind,
+            contracts::TaskKind::FrontendExperience | contracts::TaskKind::UiFlowIncrement
+        );
+    let owns_runtime = task
+        .runtime_delivery_requirement
+        .as_ref()
+        .is_some_and(|requirement| requirement.applies_to_this_task);
+    let mut rules = vec![
+        "Only implement the responsibilities listed in ownedResponsibilities and the supplied implementationObligations.".to_string(),
+        "A consumed interface is an integration input, not permission to rewrite the provider's persistence, domain, or API implementation.".to_string(),
+        "When another task owns a responsibility, call its accepted boundary and record the dependency; do not duplicate its implementation in this task.".to_string(),
+    ];
+    if !owns_persistence {
+        rules.push("This task does not own persistence mapping, schema, migration, repository, or transaction implementation. Do not add or modify those artifacts.".to_string());
+    }
+    if !owns_interface {
+        rules.push("This task does not own server API interfaces. Do not add controllers, routes, request handlers, or API contract changes.".to_string());
+    }
+    if !owns_frontend {
+        rules.push("This task does not own frontend surfaces. Do not add or modify client UI, browser flows, or frontend-only state.".to_string());
+    }
+    if !owns_runtime {
+        rules.push("This task does not own runtime delivery assets or package start commands. Do not rewrite deployment or runtime configuration.".to_string());
+    }
+    json!({
+        "ownedResponsibilities": task.implementation_actions,
+        "ownedArtifactRefs": task.write_boundary.artifact_refs,
+        "ownedObligationIds": task.implementation_obligations.iter().map(|item| item.obligation_id.clone()).collect::<Vec<_>>(),
+        "rules": rules
+    })
+}
+
+fn task_directly_owns_persistence(task: &TaskDefinition) -> bool {
+    !task.write_boundary.artifact_refs.entities.is_empty()
+        || matches!(task.task_kind, contracts::TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                contracts::ImplementationAction::CreateOrUpdateEntity
+                    | contracts::ImplementationAction::CreateOrUpdatePersistence
+                    | contracts::ImplementationAction::CreateEntityCrud
+                    | contracts::ImplementationAction::CreateEntityRepository
+                    | contracts::ImplementationAction::CreateEntityMigration
+                    | contracts::ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | contracts::ImplementationAction::ImplementEntityLifecycle
+                    | contracts::ImplementationAction::ImplementPersistenceTransaction
+                    | contracts::ImplementationAction::OptimizePersistenceQuery
+                    | contracts::ImplementationAction::ImplementAnalyticalQuery
+                    | contracts::ImplementationAction::AddOrUpdatePersistenceTests
+            )
+        })
 }
 
 fn source_edit_preparation_contract(result_file: &str) -> Value {
@@ -916,6 +982,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
         "For every task.implementationObligations entry, provide exactly one implementationObligationResults entry in the supplied order, filling status, evidenceRefs, and summary only. Loom derives obligationId and verificationIds. Required obligations must be satisfied before status=completed; partial, blocked, or not_verified obligations require execution repair or a non-completed status.".to_string(),
         "implementationObligationResults.evidenceRefs must point to concrete implementation or verification evidence. A build, compile, or reference-read result alone cannot satisfy a persistence, security, state transition, API behavior, or runtime obligation unless its declared evidence capability proves that target.".to_string(),
+        "implementationObligationResults.evidenceRefs must cite task-owned source or test files. Do not cite dist, target, build, coverage, report, log, cache, or node_modules output; verification provenance carries command and generated report references.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
@@ -1148,6 +1215,7 @@ fn task_execution_read_groups(
         "sourceContext.userFacingLanguage",
         "executionRules.sourceEditPreparationContract",
         "executionRules.boundaryRules",
+        "executionRules.taskResponsibilityBoundary",
     ];
     let mut scope_fields = vec![
         "sourceContext.acceptanceSnapshot",
@@ -3255,6 +3323,22 @@ mod tests {
             .any(|item| item
                 .as_str()
                 .is_some_and(|text| text.contains("mybatis-plus"))));
+    }
+
+    #[test]
+    fn task_execute_exposes_mcp_derived_responsibility_boundary() {
+        let task = code_quality_task();
+        let rules = task_execution_rules(".loom/result.json", &task, None);
+        let boundary = &rules["taskResponsibilityBoundary"];
+
+        assert!(boundary["ownedResponsibilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some("implement_observability")));
+        assert!(boundary["rules"].as_array().unwrap().iter().any(|item| item
+            .as_str()
+            .is_some_and(|text| text.contains("does not own persistence"))));
     }
 
     #[test]
