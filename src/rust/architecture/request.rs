@@ -1129,6 +1129,115 @@ pub fn section_schema_shape(
     })
 }
 
+/// Validate the concrete section content against the same shape that is sent
+/// to the Agent. This is intentionally structural only; cross-artifact
+/// ownership and reference checks remain domain validation below it.
+pub(crate) fn validate_section_content_shape(
+    content: &Value,
+    schema_shape: &Value,
+) -> Vec<(String, String)> {
+    let Some(expected) = schema_shape.get("content") else {
+        return vec![(
+            "content".to_string(),
+            "The current Architecture write contract is missing content shape.".to_string(),
+        )];
+    };
+    let mut violations = Vec::new();
+    validate_shape_node(content, expected, "content", &mut violations);
+    violations
+}
+
+fn validate_shape_node(
+    value: &Value,
+    expected: &Value,
+    path: &str,
+    violations: &mut Vec<(String, String)>,
+) {
+    match expected {
+        Value::Object(shape) => {
+            let Some(object) = value.as_object() else {
+                violations.push((
+                    path.to_string(),
+                    "The value must be a structured object declared by the current contract."
+                        .to_string(),
+                ));
+                return;
+            };
+            for (field, field_shape) in shape {
+                if let Some(actual) = object.get(field) {
+                    validate_shape_node(
+                        actual,
+                        field_shape,
+                        &format!("{path}.{field}"),
+                        violations,
+                    );
+                }
+            }
+        }
+        Value::Array(shape) => {
+            let Some(items) = value.as_array() else {
+                violations.push((
+                    path.to_string(),
+                    "The value must be an array declared by the current contract.".to_string(),
+                ));
+                return;
+            };
+            if let Some(item_shape) = shape.first() {
+                for (index, item) in items.iter().enumerate() {
+                    validate_shape_node(item, item_shape, &format!("{path}[{index}]"), violations);
+                }
+            }
+        }
+        Value::String(description) => {
+            let description = description.trim();
+            if description == "object" {
+                if !value.is_object() {
+                    violations.push((path.to_string(), "The value must be an object.".to_string()));
+                }
+            } else if description == "array" {
+                if !value.is_array() {
+                    violations.push((path.to_string(), "The value must be an array.".to_string()));
+                }
+            } else if description == "boolean" {
+                if !value.is_boolean() {
+                    violations.push((path.to_string(), "The value must be a boolean.".to_string()));
+                }
+            } else if description == "number" {
+                if !value.is_number() {
+                    violations.push((path.to_string(), "The value must be a number.".to_string()));
+                }
+            } else if description == "string" || description.contains(" | ") {
+                let Some(actual) = value.as_str() else {
+                    violations.push((
+                        path.to_string(),
+                        "The value must be a string declared by the current contract.".to_string(),
+                    ));
+                    return;
+                };
+                if description.contains(" | ")
+                    && !description.split(" | ").any(|item| item.trim() == actual)
+                {
+                    violations.push((
+                        path.to_string(),
+                        format!("The value must be one of: {description}."),
+                    ));
+                }
+            }
+        }
+        Value::Bool(_) => {
+            if !value.is_boolean() {
+                violations.push((path.to_string(), "The value must be a boolean.".to_string()));
+            }
+        }
+        Value::Number(_) => {
+            if !value.is_number() {
+                violations.push((path.to_string(), "The value must be a number.".to_string()));
+            }
+        }
+        Value::Null => {}
+    }
+}
+
 fn section_content_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
@@ -1150,7 +1259,7 @@ fn section_content_shape(
                 "applications": [{
                     "applicationId": "stable application id",
                     "name": "string",
-                    "kind": "web_client | mobile_client | native_client | desktop_client | backend_service | api_service | worker | external_system",
+                    "kind": "web_application | web_client | mobile_client | native_client | desktop_client | backend_service | api_service | worker | external_system",
                     "rootPath": "repository-relative root"
                 }],
                 "applicationInteractions": [{

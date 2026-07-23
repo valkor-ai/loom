@@ -296,7 +296,16 @@ pub fn finalize_output_contract(
         .and_then(Value::as_str)
         .map(str::to_string)
     {
-        let normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind);
+        let mut normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind)
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect::<BTreeSet<_>>();
+        normalized_fields.extend(
+            field_policies
+                .iter()
+                .filter(|(_, policy)| policy.owner == AgentFieldOwner::Mcp)
+                .map(|(path, _)| path.clone()),
+        );
         if !normalized_fields.is_empty() {
             contract.insert(
                 "mcpNormalizedFields".to_string(),
@@ -524,6 +533,7 @@ pub fn validate_agent_write_contract(
         &contract,
         "candidate",
         true,
+        target_id,
         &mcp_normalized_fields,
         &domain_validation_paths,
         &mut issues,
@@ -557,6 +567,20 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "section",
             "createdAt",
             "content.source",
+            "content.runtimeDelivery.runtimeDependencies",
+            "content.architectureQuality.decisions[].decisionId",
+            "content.architectureQuality.decisions[].category",
+            "content.architectureQuality.decisions[].sourceRefs",
+            "content.architectureQuality.decisions[].ownerArtifactRefs",
+            "content.architectureQuality.nfrs[].nfrId",
+            "content.architectureQuality.nfrs[].category",
+            "content.architectureQuality.nfrs[].source",
+            "content.architectureQuality.nfrs[].sourceRefs",
+            "content.architectureQuality.nfrs[].ownerArtifactRefs",
+            "content.architectureQuality.nfrs[].architectureRefs",
+            "content.architectureQuality.risks[].riskId",
+            "content.architectureQuality.risks[].category",
+            "content.architectureQuality.risks[].ownerArtifactRefs",
         ],
         "task_plan_candidate" => &[
             "schemaVersion",
@@ -565,6 +589,31 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "phaseId",
             "taskPlanId",
             "createdAt",
+            "groups[].scopeRefs",
+            "groups[].acceptanceRefs",
+            "group.scopeRefs",
+            "group.acceptanceRefs",
+            "tasks[].scopeRefs",
+            "tasks[].acceptanceRefs",
+            "tasks[].requirementDetailRefs",
+            "tasks[].writeBoundary.forbiddenPaths",
+            "tasks[].writeBoundary.artifactRefs.modules",
+            "tasks[].writeBoundary.artifactRefs.entities",
+            "tasks[].writeBoundary.artifactRefs.interfaces",
+            "tasks[].writeBoundary.artifactRefs.consumedInterfaces",
+            "tasks[].writeBoundary.artifactRefs.userFlows",
+            "tasks[].writeBoundary.artifactRefs.stateMachines",
+            "tasks[].writeBoundary.artifactRefs.decisions",
+            "tasks[].writeBoundary.artifactRefs.nfrs",
+            "tasks[].writeBoundary.artifactRefs.risks",
+            "tasks[].verificationIntents[].acceptanceRefs",
+            "tasks[].verificationIntents[].requirementDetailRefs",
+            "tasks[].frontendExperienceRequirement",
+            "tasks[].runtimeDeliveryRequirement",
+            "tasks[].engineeringQualityRequirementRefs",
+            "tasks[].architectureQualityRequirementRefs",
+            "tasks[].apiContractRequirementRefs",
+            "tasks[].codeQualityRequirementRefs",
         ],
         "task_result" | "task_result_repair" => &[
             "schemaVersion",
@@ -573,6 +622,29 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "taskId",
             "createdAt",
             "updatedAt",
+            "verificationResults[].verificationId",
+            "verificationResults[].evidenceType",
+            "implementationObligationResults[].obligationId",
+            "implementationObligationResults[].verificationIds",
+            "requirementDetailEvidence[].detailId",
+            "requirementDetailEvidence[].verificationIds",
+            "frontendExperienceSelfCheck.closureRequirementIds",
+            "frontendQualitySelfCheck.surfaceDecisionContractRef",
+            "frontendQualitySelfCheck.surfaceRegionEvidence[].id",
+            "frontendQualitySelfCheck.surfaceActionEvidence[].id",
+            "frontendQualitySelfCheck.surfaceStateEvidence[].id",
+            "frontendQualitySelfCheck.surfaceQualityRuleEvidence[].id",
+            "runtimeDeliveryEvidence.requirementRef",
+            "runtimeDeliveryEvidence.checkedFields",
+            "runtimeDeliveryEvidence.codeLevelChecks[].checkId",
+            "runtimeDeliveryEvidence.codeLevelChecks[].contractField",
+            "architectureQualityEvidence[].requirementId",
+            "architectureQualityEvidence[].verificationIds",
+            "apiContractEvidence[].requirementId",
+            "apiContractEvidence[].interfaceRefs",
+            "apiContractEvidence[].verificationIds",
+            "codeQualityEvidence[].requirementId",
+            "codeQualityEvidence[].verificationIds",
         ],
         "review_result" => &[
             "schemaVersion",
@@ -580,6 +652,12 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "source",
             "createdAt",
             "updatedAt",
+            "findings[].findingId",
+            "pendingActions[].findingRefs",
+            "nextAction.targetTaskIds",
+            "nextAction.findingRefs",
+            "nextAction.targetPhaseId",
+            "nextAction.targetNode",
         ],
         "manual_review_resolution" => &[
             "schemaVersion",
@@ -588,6 +666,9 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "deliveryId",
             "phaseId",
             "createdAt",
+            "nextAction.targetTaskIds",
+            "nextAction.findingRefs",
+            "nextAction.targetPhaseId",
         ],
         "technical_baseline_candidate" => &["projectKind", "source"],
         "deploy_execution_repair_result" => &["schemaVersion", "repairId", "deploymentFailureRef"],
@@ -665,6 +746,18 @@ fn merge_contract_nodes(base: &mut Value, supplement: &Value) {
         return;
     };
 
+    for key in [
+        "owner",
+        "applicability",
+        "emptyPolicy",
+        "preserveOnRepair",
+        "constraints",
+    ] {
+        if let Some(value) = supplement_object.get(key) {
+            base_object.insert(key.to_string(), value.clone());
+        }
+    }
+
     if base_object
         .get("type")
         .and_then(Value::as_str)
@@ -717,11 +810,28 @@ fn validate_contract_node(
     contract: &Value,
     path: &str,
     root: bool,
+    target_id: &str,
     mcp_normalized_fields: &BTreeSet<String>,
     domain_validation_paths: &BTreeSet<String>,
     issues: &mut Vec<RepairIssue>,
 ) {
     if is_mcp_normalized_field(path, mcp_normalized_fields) {
+        return;
+    }
+    if contract
+        .get("applicability")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "not_applicable")
+        && !value.is_null()
+    {
+        issues.push(RepairIssue {
+            code: "WRITE_CONTRACT_FIELD_NOT_APPLICABLE".to_string(),
+            message: format!(
+                "{path} is not applicable to the current request and must be omitted."
+            ),
+            target_id: Some(target_id.to_string()),
+            field_path: Some(path.to_string()),
+        });
         return;
     }
     let nullable = contract
@@ -747,7 +857,7 @@ fn validate_contract_node(
             issues.push(RepairIssue {
                 code: "WRITE_CONTRACT_TYPE_INVALID".to_string(),
                 message: format!("{path} must be a {expected_type}."),
-                target_id: Some("candidate".to_string()),
+                target_id: Some(target_id.to_string()),
                 field_path: Some(path.to_string()),
             });
             return;
@@ -760,7 +870,7 @@ fn validate_contract_node(
                 message: format!(
                     "{path} must use one of the values declared by the current write contract."
                 ),
-                target_id: Some("candidate".to_string()),
+                target_id: Some(target_id.to_string()),
                 field_path: Some(path.to_string()),
             });
         }
@@ -780,7 +890,7 @@ fn validate_contract_node(
                         message: format!(
                             "{path}.{field} is required by the current write contract."
                         ),
-                        target_id: Some("candidate".to_string()),
+                        target_id: Some(target_id.to_string()),
                         field_path: Some(format!("{path}.{field}")),
                     });
                 }
@@ -797,7 +907,7 @@ fn validate_contract_node(
                 issues.push(RepairIssue {
                     code: "WRITE_CONTRACT_FIELD_UNKNOWN".to_string(),
                     message: format!("{child_path} is not declared by the current write contract."),
-                    target_id: Some("candidate".to_string()),
+                    target_id: Some(target_id.to_string()),
                     field_path: Some(child_path),
                 });
                 continue;
@@ -807,6 +917,7 @@ fn validate_contract_node(
                 child_contract,
                 &child_path,
                 false,
+                target_id,
                 mcp_normalized_fields,
                 domain_validation_paths,
                 issues,
@@ -820,6 +931,7 @@ fn validate_contract_node(
                 item_contract,
                 &format!("{path}.{index}"),
                 false,
+                target_id,
                 mcp_normalized_fields,
                 domain_validation_paths,
                 issues,
@@ -1311,6 +1423,7 @@ mod tests {
             failure_contract,
             "candidate.failure",
             false,
+            "candidate",
             &BTreeSet::new(),
             &BTreeSet::new(),
             &mut issues,
@@ -1326,6 +1439,7 @@ mod tests {
             failure_contract,
             "candidate.failure",
             false,
+            "candidate",
             &BTreeSet::new(),
             &BTreeSet::new(),
             &mut issues,

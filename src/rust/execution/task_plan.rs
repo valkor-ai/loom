@@ -817,7 +817,6 @@ where
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let mut group_value = read_project_json_value(root, &group_file)?;
-        normalize_taskplan_candidate_null_arrays(&mut group_value);
         normalize_taskplan_group_envelope(
             &mut group_value,
             &authorized.request_id,
@@ -1204,56 +1203,6 @@ fn normalize_taskplan_group_envelope(
     object.insert("deliveryId".to_string(), json!(delivery_id));
     object.insert("phaseId".to_string(), json!(phase_id));
     object.insert("createdAt".to_string(), json!(state::store::now_string()));
-}
-
-fn normalize_taskplan_candidate_null_arrays(raw: &mut Value) {
-    const ARRAY_FIELDS: &[&str] = &[
-        "acceptanceRefs",
-        "acceptableEvidence",
-        "affectedContractFields",
-        "conceptRefs",
-        "conceptResponsibilities",
-        "conceptVerificationIntents",
-        "consumedInterfaces",
-        "dependsOn",
-        "decisions",
-        "entities",
-        "forbiddenActions",
-        "forbiddenPaths",
-        "implementationActions",
-        "interfaces",
-        "modules",
-        "nfrs",
-        "preferredEvidence",
-        "requirementDetailRefs",
-        "requiredCodeLevelChecks",
-        "risks",
-        "scopeRefs",
-        "stateMachines",
-        "userFlows",
-        "verificationIntents",
-    ];
-    normalize_named_null_arrays(raw, ARRAY_FIELDS);
-}
-
-fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                normalize_named_null_arrays(item, array_fields);
-            }
-        }
-        Value::Object(object) => {
-            for (key, value) in object.iter_mut() {
-                if value.is_null() && array_fields.contains(&key.as_str()) {
-                    *value = Value::Array(vec![]);
-                } else {
-                    normalize_named_null_arrays(value, array_fields);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 fn validate_outline(
@@ -8079,8 +8028,8 @@ mod tests {
     }
 
     #[test]
-    fn taskplan_candidate_null_optional_arrays_are_normalized_before_deserialization() {
-        let mut candidate = json!({
+    fn taskplan_candidate_nulls_are_not_silently_rewritten() {
+        let candidate = json!({
             "tasks": [{
                 "scopeRefs": null,
                 "verificationIntents": null,
@@ -8098,18 +8047,9 @@ mod tests {
             }]
         });
 
-        normalize_taskplan_candidate_null_arrays(&mut candidate);
-
-        assert_eq!(candidate["tasks"][0]["scopeRefs"], json!([]));
-        assert_eq!(candidate["tasks"][0]["verificationIntents"], json!([]));
-        assert_eq!(
-            candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"],
-            json!([])
-        );
-        assert_eq!(
-            candidate["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"],
-            json!([])
-        );
+        assert!(candidate["tasks"][0]["scopeRefs"].is_null());
+        assert!(candidate["tasks"][0]["verificationIntents"].is_null());
+        assert!(candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"].is_null());
     }
 
     #[test]

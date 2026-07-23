@@ -216,6 +216,90 @@ fn write_contract_allows_only_declared_mcp_normalized_fields() {
 }
 
 #[test]
+fn write_contract_uses_target_id_and_skips_mcp_derived_nested_fields() {
+    let mut output = json!({
+        "artifactKind": "task_plan_candidate",
+        "schemaShape": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "requirementDetailRefs": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "title": {"type": "string"}
+                        }
+                    }
+                }
+            }
+        },
+        "resultTemplate": {
+            "tasks": [{"requirementDetailRefs": [], "title": "Implement tickets"}]
+        },
+        "schemaProjection": {},
+        "writeTargets": [{"targetId": "group-orders", "path": "group-orders.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    let accepted = validate_agent_write_contract(
+        &output,
+        "group-orders",
+        &json!({"tasks": [{"requirementDetailRefs": null, "title": "Implement tickets"}]}),
+    );
+    assert!(accepted.is_empty(), "{accepted:#?}");
+
+    let mut strict_output = json!({
+        "schemaShape": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"]
+        },
+        "resultTemplate": {"title": ""},
+        "schemaProjection": {},
+        "writeTargets": [{"targetId": "group-orders", "path": "group-orders.json"}]
+    });
+    finalize_output_contract(&mut strict_output, &BTreeMap::new());
+    let rejected =
+        validate_agent_write_contract(&strict_output, "group-orders", &json!({"title": true}));
+    assert!(
+        !rejected.is_empty(),
+        "{rejected:#?}; contract={strict_output:#}"
+    );
+    assert_eq!(rejected[0].target_id.as_deref(), Some("group-orders"));
+}
+
+#[test]
+fn not_applicable_policy_rejects_agent_authored_values() {
+    let mut output = json!({
+        "schemaShape": {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"]
+        },
+        "resultTemplate": {"summary": ""},
+        "schemaProjection": {},
+        "writeTargets": [{"targetId": "candidate", "path": "candidate.json"}]
+    });
+    let mut policies = BTreeMap::new();
+    policies.insert(
+        "summary".to_string(),
+        delivery_core::AgentFieldPolicy {
+            applicability: AgentFieldApplicability::NotApplicable,
+            ..Default::default()
+        },
+    );
+    finalize_output_contract(&mut output, &policies);
+
+    let issues = validate_agent_write_contract(&output, "candidate", &json!({"summary": "wrong"}));
+    assert!(!issues.is_empty(), "contract={output:#}");
+    assert_eq!(issues[0].code, "WRITE_CONTRACT_FIELD_NOT_APPLICABLE");
+}
+
+#[test]
 fn architecture_content_is_validated_by_the_architecture_domain() {
     let mut output = json!({
         "artifactKind": "architecture_section_candidate",
