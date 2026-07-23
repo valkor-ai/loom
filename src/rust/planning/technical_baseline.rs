@@ -1,10 +1,9 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
-    BrainstormContract, ProjectKind, SecurityAlgorithm, SecurityKeySource, SecurityMechanism,
-    SecurityRequirement, SecurityRequirementApplicability, SecurityTransport,
-    TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
-    TechnicalBaselineContract, TechnicalBaselineStatus,
+    BrainstormContract, ProjectKind, SecurityKeySource, SecurityMechanism, SecurityRequirement,
+    SecurityRequirementApplicability, SecurityTransport, TechnicalBaselineApprovalType,
+    TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
@@ -447,6 +446,10 @@ fn security_profile_guidance(
     applicability: &SecurityRequirementApplicability,
     has_previous_baseline: bool,
 ) -> Value {
+    let profile_required = matches!(
+        applicability,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    );
     let protected_scope = !matches!(
         applicability,
         SecurityRequirementApplicability::NotApplicable
@@ -454,41 +457,48 @@ fn security_profile_guidance(
     let mut guidance = json!({
         "applies": protected_scope,
         "authority": "securityRequirement from the accepted Brainstorm contract",
-        "profileRequired": protected_scope,
+        "profileRequired": profile_required,
+        "capabilityState": "dormant",
+        "activationRule": "A bearer JWT profile is an explicit opt-in capability. Never recommend or create one from a greenfield default, a backend framework, or a generic protected requirement.",
         "agentFields": []
     });
-    if protected_scope {
+    if profile_required {
         guidance["existingBaselineRule"] = json!(if has_previous_baseline {
             "Reuse an existing accepted security profile when it satisfies the current requirement; do not change its algorithm without explicit user confirmation."
         } else {
-            "Select one concrete profile during TechnicalBaseline confirmation when the requirement is protected."
+            "When authentication is required or optional and no profile is explicitly selected, keep status=needs_user_confirmation with securityProfiles=[] and ask the user to choose the supported security scenario before continuing."
         });
-        guidance["newProjectDefault"] = json!({
-            "mechanism": SecurityMechanism::BearerJwt,
-            "algorithm": SecurityAlgorithm::Rs256,
-            "keySource": SecurityKeySource::EnvironmentSecret,
-            "transport": SecurityTransport::BearerHeader,
-            "rule": "RS256 is a recommendation for a new project only; the agent must present it for user confirmation and must not silently add alternatives."
-        });
-        guidance["algorithmPolicy"] = json!([
-            "Write only the algorithm selected by the accepted TechnicalBaseline profile.",
-            "Do not derive an algorithm from an incoming token header.",
-            "Do not treat HS256 as a default; use it only when the user or existing identity contract explicitly selects it.",
-            "Keep the algorithm closed to the profile selection; do not add a second algorithm for flexibility."
-        ]);
-        guidance["agentFields"] = json!([
-            "securityProfiles[].profileId",
-            "securityProfiles[].name",
-            "securityProfiles[].mechanism",
-            "securityProfiles[].algorithm",
-            "securityProfiles[].keySource",
-            "securityProfiles[].transport",
-            "securityProfiles[].issuer",
-            "securityProfiles[].audiences",
-            "securityProfiles[].claims",
-            "securityProfiles[].sourceRefs",
-            "securityProfiles[].rationale"
-        ]);
+        if has_previous_baseline {
+            guidance["algorithmPolicy"] = json!([
+                "Only an explicitly selected bearer JWT profile may declare an algorithm.",
+                "Do not derive an algorithm from an incoming token header or choose one as a greenfield default.",
+                "Keep the algorithm closed to the explicitly selected profile; do not add a second algorithm for flexibility."
+            ]);
+            guidance["agentFields"] = json!([
+                "securityProfiles[].profileId",
+                "securityProfiles[].name",
+                "securityProfiles[].mechanism",
+                "securityProfiles[].algorithm",
+                "securityProfiles[].keySource",
+                "securityProfiles[].transport",
+                "securityProfiles[].issuer",
+                "securityProfiles[].audiences",
+                "securityProfiles[].claims",
+                "securityProfiles[].sourceRefs",
+                "securityProfiles[].rationale"
+            ]);
+        } else {
+            guidance["selectionRule"] = json!(
+                "Keep securityProfiles empty until the user explicitly selects a supported profile. If the user selects bearer_jwt, write the complete profile from that explicit decision; do not invent its scenario, algorithm, issuer, audience, claims, or transport."
+            );
+        }
+    } else if matches!(
+        applicability,
+        SecurityRequirementApplicability::DeferredWithRisk
+    ) {
+        guidance["profilePolicy"] = json!(
+            "Security is deferred for the current scope. Keep securityProfiles empty and record the deferred risk; do not activate JWT or another authentication implementation in this phase."
+        );
     } else {
         guidance["profilePolicy"] = json!(
             "No authentication profile applies to the accepted scope; securityProfiles must remain an empty array."
@@ -1019,7 +1029,7 @@ fn technical_baseline_selection_guidance(
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
                 "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems. For every displayed ecosystem, list every compatible backend and dataAccess option supplied by that bundle; the JVM/Spring bundle must include Java + Spring Boot with Spring Data JPA, MyBatis Plus, and jOOQ.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
-                "When securityRequirement is protected, show the proposed mechanism, one selected algorithm, key source, transport, issuer/audience ownership, and the confirmation or adjustment needed before submitting the baseline.",
+                "When securityRequirement is required or optional, show the security decision state and ask for an explicit supported profile selection; do not propose or enable JWT as a greenfield default. When security is deferred, show the deferred risk and keep the current phase free of authentication implementation.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
             ],
             "wordingRules": [
@@ -1068,8 +1078,8 @@ fn technical_baseline_selection_guidance(
             },
             "securityProfile": {
                 "label": "Authentication profile when protected",
-                "examples": ["Bearer JWT with the explicitly selected algorithm and identity-provider key source", "Existing session or gateway identity contract"],
-                "rule": "Use the accepted requirement and repository identity evidence; do not ask the user to choose token claims or JWT data structures here."
+                "examples": ["An explicitly selected bearer JWT profile for a confirmed scenario", "An existing accepted security profile reused without change"],
+                "rule": "JWT is dormant and must not be selected from a default or keyword. Only an explicit user choice or an existing accepted profile can activate the current JWT path; do not claim support for an unmodeled session or gateway profile."
             }
         },
         "backendEcosystems": backend_ecosystem_guidance(),
@@ -1149,6 +1159,8 @@ fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
         "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
         "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
         "Build commands, local run commands, and deployment preparation are derived later. For a selected Web client, include qualityAutomation in the same baseline confirmation; do not reopen confirmation only to update test commands or runtime details.",
+        "JWT remains dormant. A protected requirement without an explicitly selected supported security profile must remain needs_user_confirmation; never fill bearer_jwt from a greenfield recommendation.",
+        "A deferred_with_risk security requirement may be accepted without a security profile, but the current phase must not create authentication or JWT implementation work.",
     ];
     if has_previous_baseline {
         rules.extend([
@@ -1275,18 +1287,15 @@ where
         ));
     }
     let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
-    let protected_requirement = !matches!(
+    let security_profile_required = matches!(
         security_requirement.applies,
-        SecurityRequirementApplicability::NotApplicable
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
     );
-    if protected_requirement
-        && !previous_baseline_file.exists()
-        && candidate.approval.r#type != TechnicalBaselineApprovalType::UserConfirmed
-    {
+    if security_profile_required && candidate.security_profiles.is_empty() {
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
-            "The protected security profile is a technology decision and must be explicitly confirmed before the first baseline is accepted. Present the selected mechanism, one algorithm, key source, and transport, then rewrite the same candidate with approval.type=user_confirmed.".to_string(),
+            "Authentication is in scope, but no security profile was explicitly selected. JWT remains dormant and is not a default. Ask the user to choose a supported security scenario or adjust the scope, then rewrite the same candidate before continuing.".to_string(),
             "security_profile_confirmation".to_string(),
         ));
     }
@@ -1478,11 +1487,15 @@ fn validate_security_profiles(
     requirement: &SecurityRequirement,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let protected = !matches!(
+    let not_applicable = matches!(
         requirement.applies,
         SecurityRequirementApplicability::NotApplicable
     );
-    if !protected && !candidate.security_profiles.is_empty() {
+    let profile_required = matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    );
+    if not_applicable && !candidate.security_profiles.is_empty() {
         issues.push(issue(
             "TECHNICAL_BASELINE_SECURITY_PROFILE_UNEXPECTED",
             "securityProfiles",
@@ -1490,14 +1503,8 @@ fn validate_security_profiles(
         ));
         return;
     }
-    if protected && candidate.security_profiles.is_empty() {
-        issues.push(issue(
-            "TECHNICAL_BASELINE_SECURITY_PROFILE_REQUIRED",
-            "securityProfiles",
-            "A protected requirement must select at least one canonical security profile before the TechnicalBaseline can be accepted.",
-        ));
-    }
-    if protected
+    if profile_required
+        && !candidate.security_profiles.is_empty()
         && !candidate
             .security_profiles
             .iter()
@@ -1506,7 +1513,7 @@ fn validate_security_profiles(
         issues.push(issue(
             "TECHNICAL_BASELINE_PROTECTED_PROFILE_REQUIRED",
             "securityProfiles",
-            "A protected requirement must include at least one non-none security profile so protected interfaces have an enforceable authentication mechanism.",
+            "A required or optional security requirement must include an explicitly selected supported non-none security profile; Loom must not silently substitute bearer_jwt.",
         ));
     }
     let mut profile_ids = BTreeSet::new();
@@ -2489,5 +2496,98 @@ mod tests {
                 "{backend} + {data_access} should remain valid"
             );
         }
+    }
+
+    fn candidate_without_security_profile(
+        status: &str,
+        approval_type: &str,
+    ) -> TechnicalBaselineCandidateAgentWritable {
+        serde_json::from_value(json!({
+            "status": status,
+            "source": "agent_recommended_for_new_project",
+            "projectKind": "new_project",
+            "scope": "project",
+            "stack": {},
+            "securityProfiles": [],
+            "constraints": [],
+            "evidence": [],
+            "approval": {"type": approval_type},
+            "confidence": "unknown",
+            "reasoningSummary": [],
+            "alternatives": []
+        }))
+        .expect("candidate shape")
+    }
+
+    #[test]
+    fn jwt_guidance_is_dormant_and_has_no_greenfield_default() {
+        let guidance =
+            security_profile_guidance(&SecurityRequirementApplicability::Required, false);
+
+        assert_eq!(guidance["capabilityState"], json!("dormant"));
+        assert!(guidance.get("newProjectDefault").is_none());
+        assert!(guidance.get("algorithmPolicy").is_none());
+        assert!(guidance["activationRule"]
+            .as_str()
+            .expect("activation rule")
+            .contains("explicit opt-in"));
+    }
+
+    #[test]
+    fn pending_protected_baseline_can_wait_for_explicit_security_selection() {
+        let candidate = candidate_without_security_profile("needs_user_confirmation", "none");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![contracts::ClientTrustModel::ExternalApi],
+            source_refs: vec![],
+            rationale: "External clients need an explicit authentication decision.".to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "pending security selection should reach the user gate"
+        );
+    }
+
+    #[test]
+    fn confirmed_protected_baseline_without_profile_waits_for_security_gate() {
+        let candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![contracts::ClientTrustModel::ServiceToService],
+            source_refs: vec![],
+            rationale: "Service clients need an explicit authentication decision.".to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "the submit route should return the security user gate"
+        );
+    }
+
+    #[test]
+    fn deferred_security_does_not_require_an_active_profile() {
+        let candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::DeferredWithRisk,
+            client_trust_models: vec![contracts::ClientTrustModel::SameOriginBrowser],
+            source_refs: vec![],
+            rationale: "Authentication is deferred to a later phase with an explicit risk."
+                .to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "deferred security should not activate JWT"
+        );
     }
 }

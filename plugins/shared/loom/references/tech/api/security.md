@@ -16,6 +16,8 @@ For protected HTTP APIs, the accepted API contract should state:
 
 Use existing repository roles and permissions when available.
 
+JWT is not the default authentication mechanism. Select it only from an explicitly accepted security profile that matches the current client trust and token-authority scenario. If the profile is absent, do not add JWT or substitute it for a deferred security decision.
+
 ## Implementation Expectations
 
 - Enforce authorization server-side when the task owns backend code.

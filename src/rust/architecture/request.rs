@@ -4,8 +4,8 @@ use contracts::{
     api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
     ui_quality_enum_refs, ui_surface_decision_candidate_shape,
     ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
-    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
-    COVERAGE_ARTIFACT_TYPES,
+    ArchitectureSectionGroup, PlanningGenerationContract, SecurityMechanism,
+    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
@@ -230,6 +230,10 @@ fn build_request_root(
     );
     let architecture_quality_seed = build_architecture_quality_seed(current_output.section, None);
     let runtime_dependency_seed = runtime_dependency_seed(technical_baseline);
+    let security_profile_seed = security_profile_seed(
+        &planning_contract.technical_baseline.security_requirement,
+        technical_baseline,
+    );
     let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -243,10 +247,7 @@ fn build_request_root(
         "uiQualitySeed": ui_quality_seed,
         "architectureQualitySeed": architecture_quality_seed,
         "runtimeDependencySeed": runtime_dependency_seed,
-        "securityProfileSeed": security_profile_seed(
-            &planning_contract.technical_baseline.security_requirement,
-            technical_baseline,
-        ),
+        "securityProfileSeed": security_profile_seed.clone(),
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -312,7 +313,8 @@ fn build_request_root(
                 false,
                 &source_refs,
                 frontend_experience_source,
-                api_quality_seed
+                api_quality_seed,
+                &security_profile_seed
             )
         }
     });
@@ -330,6 +332,7 @@ pub(crate) fn architecture_read_groups(
     source_refs: &Value,
     frontend_experience_source: &Value,
     api_quality_seed: &Value,
+    security_profile_seed: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -416,8 +419,10 @@ pub(crate) fn architecture_read_groups(
         core_fields.extend([
             "securityProfileSeed.securityRequirement",
             "securityProfileSeed.profiles",
-            "securityProfileSeed.algorithmPolicy",
         ]);
+        if security_profile_seed.pointer("/algorithmPolicy").is_some() {
+            core_fields.push("securityProfileSeed.algorithmPolicy");
+        }
     }
     let mut contract_fields = vec![
         "sectionState.currentSection",
@@ -754,16 +759,23 @@ fn security_profile_seed(
     requirement: &contracts::SecurityRequirement,
     baseline: &TechnicalBaselineContract,
 ) -> Value {
-    json!({
+    let mut seed = json!({
         "securityRequirement": requirement,
-        "profiles": baseline.security_profiles,
-        "algorithmPolicy": [
-            "Use only the algorithm selected by the selected security profile.",
+        "profiles": baseline.security_profiles.clone(),
+    });
+    if baseline
+        .security_profiles
+        .iter()
+        .any(|profile| matches!(profile.mechanism, SecurityMechanism::BearerJwt))
+    {
+        seed["algorithmPolicy"] = json!([
+            "Use only the algorithm selected by the explicitly accepted bearer JWT profile.",
             "Do not accept an algorithm from an incoming token header.",
             "Do not add a second JWT profile or a second algorithm in Architecture.",
             "Reference the selected profile by securityProfileRef from each protected interface."
-        ]
-    })
+        ]);
+    }
+    seed
 }
 
 pub(crate) fn build_architecture_quality_seed(
@@ -1550,7 +1562,7 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
         "paginationPolicy": "optional object for unbounded collection endpoints",
         "authPolicy": {
             "required": "not_applicable | required | optional | deferred_with_risk",
-            "securityProfileRef": "required when protected; must reference securityProfileSeed.profiles[].profileId",
+            "securityProfileRef": "required for required or optional authPolicy when selected; omit for not_applicable or deferred_with_risk; must reference securityProfileSeed.profiles[].profileId",
             "actorRefs": ["actor id"],
             "permissionRefs": ["permission or capability id"]
         },
@@ -2223,7 +2235,6 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
         },
         "authPolicy": {
             "required": "not_applicable",
-            "securityProfileRef": "",
             "actorRefs": [],
             "permissionRefs": []
         },
@@ -2365,7 +2376,7 @@ pub fn section_generation_rules(
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
-                    "Use securityProfileSeed as the authority for protected interface authPolicy. Write one canonical authPolicy object per HTTP interface with required, securityProfileRef, actorRefs, and permissionRefs; never use boolean, string, or inferred JWT policy shapes.".to_string(),
+                    "Use securityProfileSeed as the authority for interface authPolicy. Write one canonical authPolicy object per HTTP interface with required, actorRefs, and permissionRefs. For required or optional auth, reference an explicitly selected security profile; for deferred_with_risk, omit securityProfileRef and record the deferred risk. Never use boolean, string, or inferred JWT policy shapes.".to_string(),
                     "Write content.apiContract.publicExposure and content.apiContract.browserBinding once for the current API surface. publicExposure.basePath is the externally served prefix, preservePath must describe proxy behavior, and browserBinding.pathOwnership must remain interface_path. Do not repeat these fields inside every interface.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
@@ -2574,6 +2585,7 @@ mod tests {
             &json!({}),
             &json!({}),
             &seed,
+            &json!({}),
         );
         let group = groups
             .as_array()
@@ -2588,6 +2600,29 @@ mod tests {
             group["selectors"].to_string().contains("apiQualitySeed"),
             "the dedicated group must expose the seed fields to MCP repair logic"
         );
+    }
+
+    #[test]
+    fn dormant_security_seed_does_not_request_jwt_algorithm_guidance() {
+        let groups = architecture_read_groups(
+            ArchitectureSectionGroup::DomainContract,
+            false,
+            false,
+            &json!({}),
+            &json!({}),
+            &json!({}),
+            &json!({"securityRequirement": {"applies": "required"}, "profiles": []}),
+        );
+        let core = groups
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("groupId").and_then(Value::as_str) == Some("architecture_core_context")
+                })
+            })
+            .expect("architecture core read group");
+
+        assert!(!core["selectors"].to_string().contains("algorithmPolicy"));
     }
 
     #[test]

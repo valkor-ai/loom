@@ -101,7 +101,7 @@ pub fn build_api_quality_seed_from_foundation(
             "Do not add versioned paths or deprecation policy unless techReferenceProfile.referenceLoadPlan selects tech/api/evolution.md.",
             "Do not require OpenAPI files unless techReferenceProfile.referenceLoadPlan selects tech/api/contract.md or the repository already owns one.",
             "Do not add authPolicy or authentication infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/security.md or the accepted interface already has an auth policy.",
-            "When the accepted security profile mechanism is bearer_jwt, read tech/api/jwt.md in addition to the general API security reference; do not copy JWT guidance into framework references or invent a second profile.",
+            "JWT is dormant by default. Read tech/api/jwt.md only when an explicitly accepted security profile bound to the current protected API selects bearer_jwt; never activate it from a framework, backend stack, keyword, or generic protected requirement.",
             "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/operations.md or the repository already owns that convention."
         ]
     })
@@ -229,7 +229,7 @@ fn collect_api_seed_signals(
     let security_requirement_applies = security_profile_seed
         .and_then(|seed| seed.pointer("/securityRequirement/applies"))
         .and_then(Value::as_str)
-        .is_some_and(|applies| matches!(applies, "required" | "optional" | "deferred_with_risk"));
+        .is_some_and(|applies| matches!(applies, "required" | "optional"));
     signals.security_required |= security_requirement_applies;
     signals.jwt_required = signals.security_required
         && security_profile_seed
@@ -252,7 +252,7 @@ fn auth_requirement_selects_security(quality_traits: &Value) -> bool {
         quality_traits
             .get("authRequirement")
             .and_then(Value::as_str),
-        Some("required" | "optional" | "deferred_with_risk")
+        Some("required" | "optional")
     )
 }
 
@@ -262,9 +262,7 @@ fn interface_auth_policy_applies(interface: &Value) -> bool {
         .and_then(Value::as_object)
         .and_then(|policy| policy.get("required"))
         .and_then(Value::as_str)
-        .is_some_and(|requirement| {
-            matches!(requirement, "required" | "optional" | "deferred_with_risk")
-        })
+        .is_some_and(|requirement| matches!(requirement, "required" | "optional"))
 }
 
 #[cfg(test)]
@@ -488,6 +486,35 @@ mod tests {
             .unwrap()
             .iter()
             .any(|group| group == "jwt"));
+    }
+
+    #[test]
+    fn protected_requirement_without_explicit_profile_keeps_jwt_dormant() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-secured",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "required",
+                        "paginationRequired": false,
+                        "contractArtifactRequired": false,
+                        "compatibilityRequired": false,
+                        "operationalPolicies": []
+                    }
+                }]
+            }
+        });
+        let security_seed = json!({
+            "securityRequirement": {"applies": "required"},
+            "profiles": []
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, Some(&security_seed));
+        let groups = seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .expect("api groups");
+        assert!(groups.iter().any(|group| group == "security"));
+        assert!(!groups.iter().any(|group| group == "jwt"));
     }
 
     #[test]

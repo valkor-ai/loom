@@ -5986,7 +5986,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "dependencyAbstraction": "Use implement_dependency_abstraction only for a task that owns a consumer-facing interface/protocol/trait/adapter seam with concrete consumers, implementations, lifecycle/error semantics, and verification; do not create it only to mirror one implementation.",
                 "moduleStructure": "Use refactor_module_structure only for a task that owns module/package/project boundaries, entry-point placement, import visibility, workspace/module files, build tags, generated-code ownership, or dependency direction and verifies affected build targets.",
                 "runtimePerformance": "Use optimize_runtime_performance only for a task that owns a measured CPU, allocation, memory-layout, throughput, latency, binary-size, or runtime resource bottleneck and its benchmark/profile plus correctness evidence.",
-                "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
+                "security": "A task owning an interface authPolicy or an application interaction with required/optional authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization. deferred_with_risk records a risk without creating current-phase authentication work.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
                 "externalIntegration": "A task owning an external_adapter application interaction uses implement_external_service_integration.",
@@ -6414,9 +6414,7 @@ fn api_security_reference_load_plan(
                     interface
                         .pointer("/authPolicy/required")
                         .and_then(Value::as_str)
-                        .filter(|required| {
-                            matches!(*required, "required" | "optional" | "deferred_with_risk")
-                        })
+                        .filter(|required| matches!(*required, "required" | "optional"))
                         .and_then(|_| interface.pointer("/authPolicy/securityProfileRef"))
                         .and_then(Value::as_str)
                         .and_then(|profile_ref| profile_mechanisms.get(profile_ref).copied())
@@ -7174,7 +7172,7 @@ fn interface_requires_security(interface: &Value) -> bool {
     interface
         .pointer("/authPolicy/required")
         .and_then(Value::as_str)
-        .is_some_and(|required| matches!(required, "required" | "optional" | "deferred_with_risk"))
+        .is_some_and(|required| matches!(required, "required" | "optional"))
 }
 
 fn interaction_requires_security(interaction: &Value) -> bool {
@@ -7182,7 +7180,7 @@ fn interaction_requires_security(interaction: &Value) -> bool {
         interaction
             .pointer("/qualityTraits/authRequirement")
             .and_then(Value::as_str),
-        Some("required" | "optional" | "deferred_with_risk")
+        Some("required" | "optional")
     )
 }
 
@@ -8062,6 +8060,22 @@ mod tests {
             "codeQualityRequirementRefs": []
         }))
         .expect("browser task")
+    }
+
+    #[test]
+    fn deferred_security_does_not_create_authentication_task_signals() {
+        assert!(!interface_requires_security(&json!({
+            "authPolicy": {"required": "deferred_with_risk"}
+        })));
+        assert!(!interaction_requires_security(&json!({
+            "qualityTraits": {"authRequirement": "deferred_with_risk"}
+        })));
+        assert!(interface_requires_security(&json!({
+            "authPolicy": {"required": "required"}
+        })));
+        assert!(interaction_requires_security(&json!({
+            "qualityTraits": {"authRequirement": "optional"}
+        })));
     }
 
     #[test]

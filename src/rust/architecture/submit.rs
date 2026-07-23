@@ -1845,20 +1845,20 @@ fn validate_interface_auth_policy(
         .get("securityProfileRef")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let protected = matches!(required, "required" | "optional" | "deferred_with_risk");
-    if protected {
+    let profile_required = matches!(required, "required" | "optional");
+    if profile_required {
         if profile_ref.trim().is_empty() || !security_profile_ids.contains(profile_ref) {
             issues.push(issue(
                 "HTTP_INTERFACE_SECURITY_PROFILE_REF_INVALID",
                 &format!("{path}.authPolicy.securityProfileRef"),
-                "A protected authPolicy must reference a selected securityProfileSeed.profiles[].profileId.",
+                "An authPolicy with required or optional authentication must reference a selected securityProfileSeed.profiles[].profileId.",
             ));
         }
     } else if !profile_ref.trim().is_empty() {
         issues.push(issue(
             "HTTP_INTERFACE_SECURITY_PROFILE_REF_UNEXPECTED",
             &format!("{path}.authPolicy.securityProfileRef"),
-            "An unauthenticated interface must not reference a security profile.",
+            "An unauthenticated or deferred interface must not reference an active security profile.",
         ));
     }
 }
@@ -3857,6 +3857,10 @@ fn update_request_for_next_section(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let api_quality_seed = root.get("apiQualitySeed").cloned().unwrap_or(Value::Null);
+    let security_profile_seed = root
+        .get("securityProfileSeed")
+        .cloned()
+        .unwrap_or(Value::Null);
     root["requestReadPlan"]["groups"] = architecture_read_groups(
         next_section,
         include_repair_context,
@@ -3864,6 +3868,7 @@ fn update_request_for_next_section(
         source_refs,
         &frontend_experience_source,
         &api_quality_seed,
+        &security_profile_seed,
     );
     Ok(root)
 }
