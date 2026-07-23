@@ -729,7 +729,10 @@ fn continue_refreshes_a_technical_baseline_request_when_protocol_fingerprint_is_
     index["phases"][0]["latestRefs"]
         .as_object_mut()
         .expect("latest refs")
-        .remove("technicalBaselineRequestProtocolFingerprint");
+        .insert(
+            "technicalBaselineRequestProtocolFingerprint".to_string(),
+            json!("sha256:legacy-technical-baseline-contract"),
+        );
     write_json_atomic(&index_path, &index).expect("write stale delivery index");
 
     let refreshed = continue_delivery(fixture.root_str());
@@ -738,7 +741,7 @@ fn continue_refreshes_a_technical_baseline_request_when_protocol_fingerprint_is_
     let new_request_ref = technical_baseline_request_ref(&refreshed);
     assert_ne!(new_request_ref, old_request_ref);
     let root = read_request_root_value(fixture.root_str(), &new_request_ref);
-    assert_eq!(root["requestProtocol"]["version"], json!("2.0"));
+    assert_eq!(root["requestProtocol"]["version"], json!("2.1"));
     assert!(root["requestProtocol"]["fingerprint"].is_string());
 }
 
@@ -1410,6 +1413,24 @@ fn new_project_technical_baseline_needing_confirmation_uses_user_gate() {
         fixture.root_str(),
     );
     let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
+    let write_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: baseline_request_ref.clone(),
+        group_id: "technical_baseline_write_contract".to_string(),
+    })
+    .expect("read technical baseline write contract");
+    assert_eq!(
+        write_contract.fields["outputContract.schemaProjection"].value["nestedShapeHints"]
+            ["stack.tracks.externalServices.providers"]["items"]["capabilities"]["type"],
+        "array",
+        "agent write contract must expose the canonical capabilities array shape"
+    );
+    assert_eq!(
+        write_contract.fields["outputContract.schemaProjection"].value["nestedShapeHints"]
+            ["stack.tracks.externalServices.providers"]["items"]["capabilities"]["itemRequired"],
+        json!(["purpose", "durability", "startupRequirement"]),
+        "agent write contract must expose the canonical capability item fields"
+    );
     let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["status"] = json!("needs_user_confirmation");
     candidate["approval"] = json!({
@@ -1496,11 +1517,13 @@ fn redis_session_baseline_derives_server_session_without_jwt_user_gate() {
         "rationale": "Shared login sessions and role lookup are required.",
         "providers": [{
             "provider": "Redis",
-            "capabilities": [{
-                "purpose": "session",
-                "durability": "persistent",
-                "startupRequirement": "required"
-            }]
+            "capabilities": {
+                "session": {
+                    "purpose": "登录会话和共享会话状态",
+                    "durability": "persistent",
+                    "startupRequirement": "required"
+                }
+            }
         }]
     });
     write_candidate_target(&fixture, &baseline_request_ref, &candidate);

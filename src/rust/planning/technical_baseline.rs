@@ -28,7 +28,9 @@ use crate::{
     write_artifact_result,
 };
 
-const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.0";
+// Bump this whenever the agent-facing write shape or its validation boundary changes.
+// Existing requests are refreshed instead of handing an agent a stale producer contract.
+const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.1";
 
 struct TechnicalBaselineSelectionProjections {
     recommendation_context: Value,
@@ -381,7 +383,23 @@ fn build_request_root(
                     "securityProfiles",
                     "approval",
                     "confidence"
-                ]
+                ],
+                "nestedShapeHints": {
+                    "stack.tracks.externalServices.providers": {
+                        "type": "array",
+                        "items": {
+                            "required": ["provider", "capabilities"],
+                            "capabilities": {
+                                "type": "array",
+                                "itemRequired": [
+                                    "purpose",
+                                    "durability",
+                                    "startupRequirement"
+                                ]
+                            }
+                        }
+                    }
+                }
             }
         },
         "requestReadPlan": {
@@ -596,6 +614,34 @@ fn same_origin_browser_is_required(requirement: &SecurityRequirement) -> bool {
             .client_trust_models
             .iter()
             .all(|model| matches!(model, ClientTrustModel::SameOriginBrowser))
+}
+
+fn normalize_external_service_capability_shape(stack: &mut Value) {
+    let Some(providers) = stack
+        .pointer_mut("/tracks/externalServices/providers")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for provider in providers {
+        let Some(capabilities) = provider.get_mut("capabilities") else {
+            continue;
+        };
+        let Some(role_map) = capabilities.as_object() else {
+            continue;
+        };
+        let normalized = role_map
+            .iter()
+            .map(|(purpose, value)| {
+                let mut capability = value.as_object()?.clone();
+                capability.insert("purpose".to_string(), json!(purpose));
+                Some(Value::Object(capability))
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(normalized) = normalized {
+            *capabilities = Value::Array(normalized);
+        }
+    }
 }
 
 fn derive_server_session_profile(
@@ -1114,9 +1160,24 @@ fn technical_baseline_selection_guidance(
             "customTechnologyPolicy": "The ecosystem catalog and independent track options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
             "externalServicesProviderShape": {
                 "allowedProviderFields": ["provider", "capabilities"],
+                "capabilitiesType": "array",
+                "capabilityItemShape": {
+                    "purpose": "cache | session | queue | stream | lock_rate_limit",
+                    "durability": "ephemeral | persistent",
+                    "startupRequirement": "required | optional"
+                },
+                "canonicalExample": {
+                    "provider": "Redis",
+                    "capabilities": [{
+                        "purpose": "session",
+                        "durability": "persistent",
+                        "startupRequirement": "required"
+                    }]
+                },
                 "allowedCapabilityFields": ["purpose", "durability", "startupRequirement"],
                 "capabilityRoles": ["cache", "session", "queue", "stream", "lock_rate_limit"],
                 "ownership": "TechnicalBaseline confirms provider, capability role, durability, and startup requirement only. MCP derives dependencyId and kind. Failure handling, recovery, consumers, and observability belong to the Architecture quality model when they affect the current phase.",
+                "shapeRule": "In the candidate JSON, providers[].capabilities is always an array of capability objects. A user-facing role map such as session: {...} must be normalized to [{purpose: session, ...}] before writing the candidate; do not write capabilities as an object keyed by role.",
                 "unknownFieldPolicy": "Do not add dependencyId, kind, requiredFor, failureBehavior, recoveryStrategy, observability, TTL, key schema, queue acknowledgment, or deployment settings here. MCP derives dependency identity and the later stages own operational behavior."
             }
         },
@@ -1280,6 +1341,7 @@ fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
         "If the user accepts the recommendation directly, that reply can be the final technology baseline confirmation.",
         "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
         "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
+        "Write externalServices.providers[].capabilities as an array of objects with purpose, durability, and startupRequirement. Do not use an object keyed by session, cache, queue, or another capability role.",
         "Build commands, local run commands, and deployment preparation are derived later. For a selected Web client, include qualityAutomation in the same baseline confirmation; do not reopen confirmation only to update test commands or runtime details.",
         "JWT remains dormant. For same-origin browser work with an accepted Redis session capability, use the server_session profile and resolve identity/roles from the login session. Ask for an explicit security profile only when no deterministic session profile applies or the user requests another trust model.",
         "A deferred_with_risk security requirement may be accepted without a security profile, but the current phase must not create authentication or JWT implementation work.",
@@ -1386,6 +1448,7 @@ where
 
     let now = state::store::now_string();
     normalize_user_confirmed_approval(&mut candidate, &now);
+    normalize_external_service_capability_shape(&mut candidate.stack);
     derive_server_session_profile(&mut candidate, &security_requirement);
     let issues = validate_candidate(&candidate, &security_requirement);
     if !issues.is_empty() {
@@ -2747,6 +2810,37 @@ mod tests {
         assert!(
             issues.is_empty(),
             "derived session profile is valid: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn normalizes_capability_role_map_to_canonical_array() {
+        let mut stack = json!({
+            "tracks": {
+                "externalServices": {
+                    "status": "selected",
+                    "providers": [{
+                        "provider": "Redis",
+                        "capabilities": {
+                            "session": {
+                                "durability": "persistent",
+                                "startupRequirement": "required"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+
+        normalize_external_service_capability_shape(&mut stack);
+
+        assert_eq!(
+            stack["tracks"]["externalServices"]["providers"][0]["capabilities"],
+            json!([{
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }])
         );
     }
 
