@@ -1,9 +1,10 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
-    BrainstormContract, ProjectKind, SecurityKeySource, SecurityMechanism, SecurityRequirement,
-    SecurityRequirementApplicability, SecurityTransport, TechnicalBaselineApprovalType,
-    TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
+    BrainstormContract, ClientTrustModel, ProjectKind, SecurityKeySource, SecurityMechanism,
+    SecurityProfile, SecurityRequirement, SecurityRequirementApplicability, SecurityTransport,
+    TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
+    TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
@@ -319,8 +320,9 @@ fn build_request_root(
         },
         "securityRequirement": brainstorm.security_requirement,
         "securityProfileGuidance": security_profile_guidance(
-            &brainstorm.security_requirement.applies,
+            &brainstorm.security_requirement,
             baseline_exists,
+            previous_baseline.map(|(_, baseline)| &baseline.stack),
         ),
         "decisionNeeds": technical_baseline_decision_needs(project_kind, baseline_exists),
         "previousBaselineContext": previous_baseline_context,
@@ -342,7 +344,7 @@ fn build_request_root(
             "scope": ["project", "roadmap", "phase_override"],
             "approvalType": ["user_confirmed", "policy_auto_accept", "manual_override", "none"],
             "confidence": ["low", "medium", "high", "unknown"],
-            "securityMechanism": ["none", "bearer_jwt"],
+            "securityMechanism": ["none", "server_session", "bearer_jwt"],
             "securityAlgorithm": ["RS256", "ES256", "EdDSA", "HS256"],
             "securityKeySource": ["existing_idp", "environment_secret", "file_mounted_key", "kms", "user_specified", "not_applicable"],
             "securityTransport": ["bearer_header", "same_origin_cookie", "mutual_tls", "not_applicable"]
@@ -443,9 +445,11 @@ fn build_request_root(
 }
 
 fn security_profile_guidance(
-    applicability: &SecurityRequirementApplicability,
+    requirement: &SecurityRequirement,
     has_previous_baseline: bool,
+    baseline_stack: Option<&Value>,
 ) -> Value {
+    let applicability = &requirement.applies;
     let profile_required = matches!(
         applicability,
         SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
@@ -459,16 +463,36 @@ fn security_profile_guidance(
         "authority": "securityRequirement from the accepted Brainstorm contract",
         "profileRequired": profile_required,
         "capabilityState": "dormant",
-        "activationRule": "A bearer JWT profile is an explicit opt-in capability. Never recommend or create one from a greenfield default, a backend framework, or a generic protected requirement.",
+        "activationRule": "A bearer JWT profile is an explicit opt-in capability. A same-origin browser requirement with an accepted server-session dependency uses server_session instead; never recommend JWT from a greenfield default, backend framework, Redis alone, or a generic protected requirement.",
+        "supportedProfiles": [
+            {
+                "mechanism": "server_session",
+                "label": "Server-managed browser session",
+                "transport": "same_origin_cookie",
+                "when": "Use for same-origin browser clients when the accepted baseline includes a server-session store such as Redis.",
+                "identityRule": "The backend resolves the authenticated user and roles from the server-side session before applying interface permissions; this is not a bearer-token contract."
+            },
+            {
+                "mechanism": "bearer_jwt",
+                "label": "Bearer JWT",
+                "transport": "bearer_header",
+                "when": "Use only after the user explicitly selects a token-authority scenario and its complete profile.",
+                "identityRule": "The backend validates the selected token profile before applying interface permissions."
+            }
+        ],
         "agentFields": []
     });
+    guidance["serverSessionFactsAvailable"] =
+        json!(baseline_stack.is_some_and(has_accepted_redis_session_capability));
     if profile_required {
         guidance["existingBaselineRule"] = json!(if has_previous_baseline {
             "Reuse an existing accepted security profile when it satisfies the current requirement; do not change its algorithm without explicit user confirmation."
         } else {
-            "When authentication is required or optional and no profile is explicitly selected, keep status=needs_user_confirmation with securityProfiles=[] and ask the user to choose the supported security scenario before continuing."
+            "When authentication is required or optional, use the structured trust model and runtime capability facts. Same-origin browser plus an accepted Redis session capability uses MCP-derived server_session; only an unresolved trust model needs an explicit user profile selection."
         });
-        if has_previous_baseline {
+        if has_previous_baseline
+            && !baseline_stack.is_some_and(has_accepted_redis_session_capability)
+        {
             guidance["algorithmPolicy"] = json!([
                 "Only an explicitly selected bearer JWT profile may declare an algorithm.",
                 "Do not derive an algorithm from an incoming token header or choose one as a greenfield default.",
@@ -489,8 +513,13 @@ fn security_profile_guidance(
             ]);
         } else {
             guidance["selectionRule"] = json!(
-                "Keep securityProfiles empty until the user explicitly selects a supported profile. If the user selects bearer_jwt, write the complete profile from that explicit decision; do not invent its scenario, algorithm, issuer, audience, claims, or transport."
+                "For same-origin_browser plus an accepted Redis session capability, use the MCP-derived server_session profile; the agent must not ask the user to choose JWT or write token fields. Otherwise keep securityProfiles empty until the user explicitly selects a supported profile. If the user selects bearer_jwt, write the complete profile from that explicit decision; do not invent its scenario, algorithm, issuer, audience, claims, or transport."
             );
+            guidance["derivedProfileRule"] = json!({
+                "mechanism": "server_session",
+                "condition": "securityRequirement.applies is required or optional, clientTrustModels contains same_origin_browser, and stack.tracks.externalServices.providers contains Redis with capabilities.purpose=session",
+                "owner": "MCP derives and persists the profile; the agent does not author securityProfiles for this case."
+            });
         }
     } else if matches!(
         applicability,
@@ -504,7 +533,100 @@ fn security_profile_guidance(
             "No authentication profile applies to the accepted scope; securityProfiles must remain an empty array."
         );
     }
+    if baseline_stack.is_some_and(has_accepted_redis_session_capability)
+        && profile_required
+        && same_origin_browser_is_required(requirement)
+    {
+        guidance["derivedProfileRule"] = json!({
+            "mechanism": "server_session",
+            "condition": "The accepted baseline contains Redis with capability purpose=session and the accepted security requirement contains same_origin_browser.",
+            "owner": "MCP derives and persists the profile; the agent does not author securityProfiles for this case."
+        });
+        guidance["agentFields"] = json!([]);
+    }
     guidance
+}
+
+fn has_accepted_redis_session_capability(stack: &Value) -> bool {
+    let Some(track) = stack
+        .pointer("/tracks/externalServices")
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    if !matches!(
+        track.get("status").and_then(Value::as_str),
+        Some("selected" | "user_custom")
+    ) {
+        return false;
+    }
+    track
+        .get("providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|provider| {
+            let is_redis = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|name| technology_matches_any(name, &["redis"]));
+            is_redis
+                && provider
+                    .get("capabilities")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|capability| {
+                        capability
+                            .get("purpose")
+                            .and_then(Value::as_str)
+                            .is_some_and(|purpose| normalize_stack_token(purpose) == "session")
+                    })
+        })
+}
+
+fn same_origin_browser_is_required(requirement: &SecurityRequirement) -> bool {
+    matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    ) && requirement
+        .client_trust_models
+        .contains(&ClientTrustModel::SameOriginBrowser)
+        && requirement
+            .client_trust_models
+            .iter()
+            .all(|model| matches!(model, ClientTrustModel::SameOriginBrowser))
+}
+
+fn derive_server_session_profile(
+    candidate: &mut TechnicalBaselineCandidateAgentWritable,
+    requirement: &SecurityRequirement,
+) -> bool {
+    if !candidate.security_profiles.is_empty()
+        || !same_origin_browser_is_required(requirement)
+        || !has_accepted_redis_session_capability(&candidate.stack)
+    {
+        return false;
+    }
+    candidate.security_profiles.push(SecurityProfile {
+        profile_id: "security_server_session".to_string(),
+        name: "Redis-backed server session".to_string(),
+        mechanism: SecurityMechanism::ServerSession,
+        algorithm: None,
+        key_source: SecurityKeySource::NotApplicable,
+        transport: SecurityTransport::SameOriginCookie,
+        issuer: None,
+        audiences: Vec::new(),
+        claims: Vec::new(),
+        source_refs: requirement.source_refs.clone(),
+        rationale: "Same-origin browser requests use a server-managed login session; the backend resolves the authenticated user and roles from Redis before applying permissions.".to_string(),
+    });
+    if candidate.approval.r#type == TechnicalBaselineApprovalType::UserConfirmed
+        && candidate.status == TechnicalBaselineStatus::NeedsUserConfirmation
+    {
+        candidate.status = TechnicalBaselineStatus::Confirmed;
+    }
+    true
 }
 
 fn scope_item_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
@@ -1029,7 +1151,7 @@ fn technical_baseline_selection_guidance(
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
                 "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems. For every displayed ecosystem, list every compatible backend and dataAccess option supplied by that bundle; the JVM/Spring bundle must include Java + Spring Boot with Spring Data JPA, MyBatis Plus, and jOOQ.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
-                "When securityRequirement is required or optional, show the security decision state and ask for an explicit supported profile selection; do not propose or enable JWT as a greenfield default. When security is deferred, show the deferred risk and keep the current phase free of authentication implementation.",
+                "When securityRequirement is required or optional, use the structured trust model and accepted runtime capabilities to select server_session for same-origin browser sessions; do not propose or enable JWT as a greenfield default. Ask for explicit profile selection only when the structured facts do not determine the mechanism. When security is deferred, show the deferred risk and keep the current phase free of authentication implementation.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
             ],
             "wordingRules": [
@@ -1078,8 +1200,8 @@ fn technical_baseline_selection_guidance(
             },
             "securityProfile": {
                 "label": "Authentication profile when protected",
-                "examples": ["An explicitly selected bearer JWT profile for a confirmed scenario", "An existing accepted security profile reused without change"],
-                "rule": "JWT is dormant and must not be selected from a default or keyword. Only an explicit user choice or an existing accepted profile can activate the current JWT path; do not claim support for an unmodeled session or gateway profile."
+                "examples": ["MCP-derived server session for a same-origin browser backed by Redis", "An explicitly selected bearer JWT profile for a confirmed external-client scenario", "An existing accepted security profile reused without change"],
+                "rule": "For same-origin browser plus an accepted Redis session capability, use server_session and resolve identity/roles from the login session. JWT is dormant and must not be selected from a default or keyword; activate it only from an explicit user choice or an existing accepted profile."
             }
         },
         "backendEcosystems": backend_ecosystem_guidance(),
@@ -1159,7 +1281,7 @@ fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
         "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
         "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
         "Build commands, local run commands, and deployment preparation are derived later. For a selected Web client, include qualityAutomation in the same baseline confirmation; do not reopen confirmation only to update test commands or runtime details.",
-        "JWT remains dormant. A protected requirement without an explicitly selected supported security profile must remain needs_user_confirmation; never fill bearer_jwt from a greenfield recommendation.",
+        "JWT remains dormant. For same-origin browser work with an accepted Redis session capability, use the server_session profile and resolve identity/roles from the login session. Ask for an explicit security profile only when no deterministic session profile applies or the user requests another trust model.",
         "A deferred_with_risk security requirement may be accepted without a security profile, but the current phase must not create authentication or JWT implementation work.",
     ];
     if has_previous_baseline {
@@ -1264,6 +1386,7 @@ where
 
     let now = state::store::now_string();
     normalize_user_confirmed_approval(&mut candidate, &now);
+    derive_server_session_profile(&mut candidate, &security_requirement);
     let issues = validate_candidate(&candidate, &security_requirement);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
@@ -1295,7 +1418,7 @@ where
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
-            "Authentication is in scope, but no security profile was explicitly selected. JWT remains dormant and is not a default. Ask the user to choose a supported security scenario or adjust the scope, then rewrite the same candidate before continuing.".to_string(),
+            "Authentication is in scope, but the structured facts do not determine a security profile. JWT remains dormant and is not a default. Ask the user to choose the authentication scenario or adjust the scope, then rewrite the same candidate before continuing.".to_string(),
             "security_profile_confirmation".to_string(),
         ));
     }
@@ -1508,12 +1631,12 @@ fn validate_security_profiles(
         && !candidate
             .security_profiles
             .iter()
-            .any(|profile| matches!(profile.mechanism, SecurityMechanism::BearerJwt))
+            .any(|profile| !matches!(profile.mechanism, SecurityMechanism::None))
     {
         issues.push(issue(
             "TECHNICAL_BASELINE_PROTECTED_PROFILE_REQUIRED",
             "securityProfiles",
-            "A required or optional security requirement must include an explicitly selected supported non-none security profile; Loom must not silently substitute bearer_jwt.",
+            "A required or optional security requirement must include a supported non-none security profile. Same-origin browser sessions backed by an accepted Redis session use server_session; bearer_jwt remains explicit opt-in.",
         ));
     }
     let mut profile_ids = BTreeSet::new();
@@ -1543,6 +1666,23 @@ fn validate_security_profiles(
                         "TECHNICAL_BASELINE_SECURITY_PROFILE_NONE_INVALID",
                         &path,
                         "A none security profile must not declare an algorithm, key material, or a transport.",
+                    ));
+                }
+            }
+            SecurityMechanism::ServerSession => {
+                if !same_origin_browser_is_required(requirement)
+                    || !has_accepted_redis_session_capability(&candidate.stack)
+                    || profile.algorithm.is_some()
+                    || !matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || !matches!(profile.transport, SecurityTransport::SameOriginCookie)
+                    || profile.issuer.is_some()
+                    || !profile.audiences.is_empty()
+                    || !profile.claims.is_empty()
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SERVER_SESSION_PROFILE_INVALID",
+                        &path,
+                        "A server_session profile is valid only for same-origin browser requirements with an accepted Redis session capability; it must use same_origin_cookie and must not declare token algorithms or issuer/audience/claim fields.",
                     ));
                 }
             }
@@ -2519,10 +2659,39 @@ mod tests {
         .expect("candidate shape")
     }
 
+    fn candidate_with_redis_session() -> TechnicalBaselineCandidateAgentWritable {
+        let mut candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        candidate.stack = json!({
+            "tracks": {
+                "externalServices": {
+                    "status": "selected",
+                    "selection": "Redis",
+                    "providers": [{
+                        "provider": "Redis",
+                        "capabilities": [{
+                            "purpose": "session",
+                            "durability": "persistent",
+                            "startupRequirement": "required"
+                        }]
+                    }]
+                }
+            }
+        });
+        candidate
+    }
+
     #[test]
     fn jwt_guidance_is_dormant_and_has_no_greenfield_default() {
-        let guidance =
-            security_profile_guidance(&SecurityRequirementApplicability::Required, false);
+        let guidance = security_profile_guidance(
+            &SecurityRequirement {
+                applies: SecurityRequirementApplicability::Required,
+                client_trust_models: vec![],
+                source_refs: vec![],
+                rationale: "test".to_string(),
+            },
+            false,
+            None,
+        );
 
         assert_eq!(guidance["capabilityState"], json!("dormant"));
         assert!(guidance.get("newProjectDefault").is_none());
@@ -2550,6 +2719,50 @@ mod tests {
             issues.is_empty(),
             "pending security selection should reach the user gate"
         );
+    }
+
+    #[test]
+    fn redis_session_and_same_origin_browser_derive_server_session_without_jwt() {
+        let mut candidate = candidate_with_redis_session();
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![ClientTrustModel::SameOriginBrowser],
+            source_refs: vec!["req-001".to_string()],
+            rationale: "Roles are resolved from the login session.".to_string(),
+        };
+
+        derive_server_session_profile(&mut candidate, &requirement);
+
+        assert_eq!(candidate.security_profiles.len(), 1);
+        let profile = &candidate.security_profiles[0];
+        assert_eq!(profile.mechanism, SecurityMechanism::ServerSession);
+        assert_eq!(profile.transport, SecurityTransport::SameOriginCookie);
+        assert_eq!(profile.key_source, SecurityKeySource::NotApplicable);
+        assert!(profile.algorithm.is_none());
+        assert!(profile.claims.is_empty());
+        assert_eq!(candidate.status, TechnicalBaselineStatus::Confirmed);
+
+        let mut issues = Vec::new();
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+        assert!(
+            issues.is_empty(),
+            "derived session profile is valid: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn redis_session_does_not_derive_for_external_api_clients() {
+        let mut candidate = candidate_with_redis_session();
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![ClientTrustModel::ExternalApi],
+            source_refs: vec![],
+            rationale: "External clients need an explicit token contract.".to_string(),
+        };
+
+        derive_server_session_profile(&mut candidate, &requirement);
+
+        assert!(candidate.security_profiles.is_empty());
     }
 
     #[test]

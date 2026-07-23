@@ -423,6 +423,9 @@ pub(crate) fn architecture_read_groups(
         if security_profile_seed.pointer("/algorithmPolicy").is_some() {
             core_fields.push("securityProfileSeed.algorithmPolicy");
         }
+        if security_profile_seed.pointer("/sessionPolicy").is_some() {
+            core_fields.push("securityProfileSeed.sessionPolicy");
+        }
     }
     let mut contract_fields = vec![
         "sectionState.currentSection",
@@ -773,6 +776,18 @@ fn security_profile_seed(
             "Do not accept an algorithm from an incoming token header.",
             "Do not add a second JWT profile or a second algorithm in Architecture.",
             "Reference the selected profile by securityProfileRef from each protected interface."
+        ]);
+    }
+    if baseline
+        .security_profiles
+        .iter()
+        .any(|profile| matches!(profile.mechanism, SecurityMechanism::ServerSession))
+    {
+        seed["sessionPolicy"] = json!([
+            "Use same-origin cookie-backed server sessions for the accepted browser trust model.",
+            "Resolve the authenticated user and roles from the accepted server-side session dependency before applying actorRefs and permissionRefs.",
+            "Do not add bearer headers, JWT claims, issuer, audience, or token algorithm configuration for this profile.",
+            "Keep CSRF protection and secure HttpOnly cookie settings aligned with the selected browser session framework."
         ]);
     }
     seed

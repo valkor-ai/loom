@@ -2,7 +2,7 @@
 
 Implement the authentication and authorization policy already owned by the current interfaces and architecture. Do not introduce JWT, OAuth2, sessions, roles, refresh tokens, or account management when protected operations are not part of the task.
 
-The accepted JWT algorithm, issuer, audience, token type, and key-source contract lives in `tech/api/jwt.md`. This file owns Spring Security wiring and framework-specific verification only.
+The accepted JWT algorithm, issuer, audience, token type, and key-source contract lives in `tech/api/jwt.md` when a bearer JWT profile is active. This file owns Spring Security wiring and framework-specific verification only. A `server_session` profile is a separate cookie-backed session path and must not be implemented as JWT.
 
 ## Security Mechanism Boundary
 
@@ -38,6 +38,8 @@ SecurityFilterChain apiSecurity(HttpSecurity http) throws Exception {
 Keep matcher order from specific to general. Avoid broad `permitAll`, accidental catch-all protection that blocks health/static assets, and parallel filter chains with overlapping matchers. Preserve the established role-versus-authority convention.
 
 Do not disable CSRF by habit. Stateless bearer-token APIs that do not authenticate with cookies can disable it deliberately. Browser sessions and cookie-based authentication require CSRF protection. Document the actual client mechanism in configuration or tests.
+
+For a `server_session` profile, load the authenticated principal from the server-side session store, map its stable user id and roles to Spring authorities, and protect unsafe browser requests with CSRF validation. Do not create an OAuth2 resource-server filter, bearer token parser, issuer/audience configuration, or JWT algorithm configuration for this profile. Redis is the session store when the accepted runtime dependency declares the `session` capability; session lifecycle and cookie settings remain framework/configuration concerns owned by the backend task.
 
 ## Authentication Material
 

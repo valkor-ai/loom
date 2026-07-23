@@ -2953,6 +2953,7 @@ mod tests {
             concept_refs: vec![],
             concept_responsibilities: vec![],
             concept_verification_intents: vec![],
+            implementation_obligations: vec![],
             frontend_experience_requirement: None,
             runtime_delivery_requirement: None,
             engineering_quality_requirement_refs: vec![],

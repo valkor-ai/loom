@@ -518,6 +518,35 @@ mod tests {
     }
 
     #[test]
+    fn server_session_profile_selects_security_without_jwt_reference() {
+        let foundation = json!({
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-session",
+                    "interactionType": "http_api",
+                    "qualityTraits": {
+                        "authRequirement": "required",
+                        "paginationRequired": false,
+                        "contractArtifactRequired": false,
+                        "compatibilityRequired": false,
+                        "operationalPolicies": []
+                    }
+                }]
+            }
+        });
+        let security_seed = json!({
+            "securityRequirement": {"applies": "required"},
+            "profiles": [{"mechanism": "server_session"}]
+        });
+        let seed = build_api_quality_seed_from_foundation(&foundation, None, Some(&security_seed));
+        let groups = seed["techReferenceProfile"]["groups"]["api"]
+            .as_array()
+            .expect("api groups");
+        assert!(groups.iter().any(|group| group == "security"));
+        assert!(!groups.iter().any(|group| group == "jwt"));
+    }
+
+    #[test]
     fn accepted_security_requirement_selects_security_without_prose_or_quality_trait() {
         let foundation = json!({
             "engineeringBoundary": {

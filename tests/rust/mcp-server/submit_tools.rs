@@ -1469,6 +1469,67 @@ fn new_project_technical_baseline_autofills_confirmed_at() {
 }
 
 #[test]
+fn redis_session_baseline_derives_server_session_without_jwt_user_gate() {
+    let fixture = Fixture::new("technical-baseline-redis-server-session");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let mut brainstorm = valid_candidate_json();
+    brainstorm["securityRequirement"] = json!({
+        "applies": "required",
+        "clientTrustModels": ["same_origin_browser"],
+        "sourceRefs": ["req-001"],
+        "rationale": "The backend must resolve the current user and roles from the login session."
+    });
+    write_candidate_target(&fixture, &request_ref, &brainstorm);
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = technical_baseline_request_ref(&brainstorm_result);
+    let mut candidate = new_project_technical_baseline_candidate_json();
+    candidate["status"] = json!("needs_user_confirmation");
+    candidate["stack"]["tracks"]["externalServices"] = json!({
+        "status": "selected",
+        "selection": "Redis",
+        "source": "user_confirmed",
+        "rationale": "Shared login sessions and role lookup are required.",
+        "providers": [{
+            "provider": "Redis",
+            "capabilities": [{
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
+        }]
+    });
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &baseline_request_ref);
+    let baseline_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(baseline_ref)).unwrap())
+            .expect("parse technical baseline");
+    assert_eq!(persisted["status"], json!("confirmed"));
+    assert_eq!(
+        persisted["securityProfiles"][0]["mechanism"],
+        json!("server_session")
+    );
+    assert_eq!(
+        persisted["securityProfiles"][0]["transport"],
+        json!("same_origin_cookie")
+    );
+    assert!(persisted["securityProfiles"][0].get("algorithm").is_none());
+}
+
+#[test]
 fn technical_baseline_accepts_legacy_greenfield_project_kind_alias() {
     let fixture = Fixture::new("technical-baseline-greenfield-alias");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);

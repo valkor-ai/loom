@@ -96,6 +96,7 @@ pub struct TechnicalBaselineAlternative {
 #[serde(rename_all = "snake_case")]
 pub enum SecurityMechanism {
     None,
+    ServerSession,
     BearerJwt,
 }
 
