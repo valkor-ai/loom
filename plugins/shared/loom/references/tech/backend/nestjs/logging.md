@@ -35,7 +35,7 @@ The task must identify whether it owns provider selection, event instrumentation
 
 Keep provider lifecycle at bootstrap and shutdown boundaries. Feature modules receive the repository logger abstraction and do not configure transports independently.
 
-## Verification
+## Verification Focus
 
 - Bootstrap the real Nest application or testing module with the selected logger provider.
 - Capture one owned event and assert level, stable fields, correlation, and redaction.

@@ -34,7 +34,7 @@ The task must identify whether it owns provider selection, event instrumentation
 
 Keep provider registration and lifecycle in the host composition root. Feature services use `ILogger<T>` or the repository abstraction and do not configure sinks independently.
 
-## Verification
+## Verification Focus
 
 - Host the application with the real provider registration and assert duplicate providers are absent.
 - Capture owned events and verify level, event id/name, structured properties, scope correlation, and redaction.

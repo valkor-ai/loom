@@ -4,11 +4,13 @@
 
 Use this reference only when the task owns Django logging infrastructure. Views, services, commands, and jobs otherwise use the configured logger only at their task-owned diagnostic boundaries.
 
-## Implementation Focus
+## Provider Decision
 
 1. Preserve the repository's existing Django/Python logging configuration.
 2. For greenfield projects, use standard Python `logging` through Django's `LOGGING`/`dictConfig` boundary.
 3. Keep structlog or another provider only when the repository already selects it or an accepted structured-event requirement justifies it.
+
+## Implementation Focus
 
 Use module loggers and Django categories deliberately. Do not disable Django's existing logging tree wholesale or attach the same handler to parent and child categories with propagation enabled.
 

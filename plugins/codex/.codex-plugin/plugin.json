@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Mandatory Codex adapter for Loom: route every explicit @loom delivery request through Loom MCP before any repository work.",
   "author": {
     "name": "Loom"

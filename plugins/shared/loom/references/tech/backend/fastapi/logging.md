@@ -4,11 +4,13 @@
 
 Use this reference only when the task owns FastAPI logging infrastructure. Route and service tasks that only emit owned events use the configured logger and do not redesign global logging.
 
-## Implementation Focus
+## Provider Decision
 
 1. Preserve the repository's existing Python logging provider and configuration.
 2. For greenfield FastAPI applications, use the standard `logging` API configured through `dictConfig`.
 3. Keep structlog or Loguru only when already established or explicitly required. Do not introduce a second event pipeline beside an existing provider.
+
+## Implementation Focus
 
 Application modules obtain named loggers with `logging.getLogger(__name__)`. Keep Uvicorn access/error integration deliberate so application errors and access events are not duplicated.
 

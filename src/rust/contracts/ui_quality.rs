@@ -2693,7 +2693,7 @@ mod tests {
         for (pointer, expected) in [
             ("/actionModel/0/kind", "read_only"),
             ("/stateModel/0/state", "loading"),
-            ("/layoutModel/forbiddenPresentations/0", "table"),
+            ("/layoutModel/desktop/forbiddenPresentations/0", "table"),
             (
                 "/compositionConstraints/forbiddenComposition/0",
                 "no_marketing_hero",
