@@ -58,6 +58,8 @@ Use Flyway/Liquibase in the integration path when migrations are part of runtime
 
 Test both repository result and persisted state. For write workflows, verify commit/readback where commit behavior matters; a test-level rollback can hide post-commit events, constraint timing, or transaction synchronization.
 
+When the accepted data-access selection is MyBatis-Plus, use the repository's Mapper and `SqlSessionFactory` configuration in the smallest suitable test boundary. Verify mapper scanning, XML namespace resolution, wrapper SQL, pagination, logical deletion, optimistic locking, TypeHandlers, interceptor scope, and provider-specific behavior. Do not replace a selected provider with H2 when testing SQL, plugins, migrations, locking, JSON, collation, or generated defaults.
+
 ## Testcontainers
 
 Reuse the repository's container lifecycle and selected provider. Spring Boot service connections are suitable when supported; `@DynamicPropertySource` remains valid for explicit property binding.

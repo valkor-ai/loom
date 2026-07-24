@@ -73,6 +73,7 @@ pub struct DependencyService {
     pub service_name: String,
     pub image: String,
     pub port: u16,
+    pub startup_requirement: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

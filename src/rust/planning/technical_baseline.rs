@@ -1,8 +1,10 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
-    BrainstormContract, ProjectKind, TechnicalBaselineApprovalType,
-    TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
+    BrainstormContract, ClientTrustModel, ProjectKind, SecurityKeySource, SecurityMechanism,
+    SecurityProfile, SecurityRequirement, SecurityRequirementApplicability, SecurityTransport,
+    TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
+    TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
@@ -25,6 +27,15 @@ use crate::{
     },
     write_artifact_result,
 };
+
+// Bump this whenever the agent-facing write shape or its validation boundary changes.
+// Existing requests are refreshed instead of handing an agent a stale producer contract.
+const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.1";
+
+struct TechnicalBaselineSelectionProjections {
+    recommendation_context: Value,
+    user_confirmation_view: Value,
+}
 
 pub fn materialize_request(
     project_root: &str,
@@ -71,27 +82,6 @@ fn materialize_request_inner(
                 phase_id, delivery_id
             ))
         })?;
-    if let Some(existing_request_ref) = phase
-        .latest_refs
-        .get("technicalBaselineRequestRef")
-        .cloned()
-    {
-        let inspected = state::inspect_request(delivery_core::InspectRequestInput {
-            project_root: project_root.to_string(),
-            request_ref: existing_request_ref.clone(),
-        });
-        if inspected
-            .as_ref()
-            .map(|request| request.request_kind == "technical_baseline_request")
-            .unwrap_or(false)
-        {
-            return write_artifact_result(
-                project_root,
-                &existing_request_ref,
-                ArtifactKind::TechnicalBaselineCandidate,
-            );
-        }
-    }
     let brainstorm_ref = phase
         .latest_refs
         .get("brainstormContract")
@@ -102,15 +92,6 @@ fn materialize_request_inner(
         })?
         .clone();
     let brainstorm = read_brainstorm_contract(root, &brainstorm_ref)?;
-    let request_id = format!("tbr_{}", state::store::now_millis());
-    let candidate_file = to_project_relative(
-        root,
-        &technical_baseline_candidate_file(root, &locator, &request_id),
-    )?;
-    let request_file = to_project_relative(
-        root,
-        &technical_baseline_request_file(root, &locator, &request_id),
-    )?;
     let previous_baseline_file = technical_baseline_file(root, delivery_id);
     let previous_baseline = if previous_baseline_file.exists() {
         let previous_baseline_ref = to_project_relative(root, &previous_baseline_file)?;
@@ -121,6 +102,59 @@ fn materialize_request_inner(
     };
     let project_kind =
         infer_project_kind_for_baseline(root, &delivery, phase_id, previous_baseline.is_some());
+    let selection_projections =
+        technical_baseline_selection_projections(project_kind, previous_baseline.is_some());
+    let protocol_fingerprint = technical_baseline_protocol_fingerprint(
+        project_kind,
+        previous_baseline.is_some(),
+        &brainstorm,
+        selection_projections.as_ref(),
+    );
+
+    if let Some(existing_request_ref) = phase
+        .latest_refs
+        .get("technicalBaselineRequestRef")
+        .cloned()
+    {
+        let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+            project_root: project_root.to_string(),
+            request_ref: existing_request_ref.clone(),
+        });
+        let request_is_current = phase
+            .latest_refs
+            .get("technicalBaselineRequestProtocolFingerprint")
+            .is_some_and(|fingerprint| fingerprint == &protocol_fingerprint);
+        if request_is_current
+            && inspected
+                .as_ref()
+                .map(|request| request.request_kind == "technical_baseline_request")
+                .unwrap_or(false)
+        {
+            if matches!(project_kind, ProjectKind::NewProject) && previous_baseline.is_none() {
+                return Ok(technical_baseline_recommendation_gate(
+                    project_root,
+                    &existing_request_ref,
+                    delivery_id,
+                    phase_id,
+                ));
+            }
+            return write_artifact_result(
+                project_root,
+                &existing_request_ref,
+                ArtifactKind::TechnicalBaselineCandidate,
+            );
+        }
+    }
+
+    let request_id = format!("tbr_{}", state::store::now_millis());
+    let candidate_file = to_project_relative(
+        root,
+        &technical_baseline_candidate_file(root, &locator, &request_id),
+    )?;
+    let request_file = to_project_relative(
+        root,
+        &technical_baseline_request_file(root, &locator, &request_id),
+    )?;
     let request_root = build_request_root(
         root,
         &brainstorm,
@@ -130,6 +164,8 @@ fn materialize_request_inner(
         &candidate_file,
         project_kind,
         previous_baseline.as_ref(),
+        selection_projections.as_ref(),
+        &protocol_fingerprint,
     );
     let stored = state::write_native_request(
         project_root,
@@ -154,16 +190,29 @@ fn materialize_request_inner(
             "technicalBaselineRequestRef".to_string(),
             stored.request_ref.clone(),
         );
+        active_phase.latest_refs.insert(
+            "technicalBaselineRequestProtocolFingerprint".to_string(),
+            protocol_fingerprint,
+        );
     }
     delivery.updated_at = state::store::now_string();
     store
         .save_delivery_index(project_root, &delivery)
         .map_err(to_state_error)?;
-    write_artifact_result(
-        project_root,
-        &stored.request_ref,
-        ArtifactKind::TechnicalBaselineCandidate,
-    )
+    if matches!(project_kind, ProjectKind::NewProject) && previous_baseline.is_none() {
+        Ok(technical_baseline_recommendation_gate(
+            project_root,
+            &stored.request_ref,
+            delivery_id,
+            phase_id,
+        ))
+    } else {
+        write_artifact_result(
+            project_root,
+            &stored.request_ref,
+            ArtifactKind::TechnicalBaselineCandidate,
+        )
+    }
 }
 
 fn build_request_root(
@@ -175,6 +224,8 @@ fn build_request_root(
     candidate_file: &str,
     project_kind: ProjectKind,
     previous_baseline: Option<&(String, TechnicalBaselineContract)>,
+    selection_projections: Option<&TechnicalBaselineSelectionProjections>,
+    protocol_fingerprint: &str,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(TechnicalBaselineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -189,21 +240,32 @@ fn build_request_root(
             "stack": previous.stack,
             "constraints": previous.constraints,
             "confidence": previous.confidence,
+            "securityProfiles": previous.security_profiles,
             "updatedAt": previous.updated_at
         })
     });
-    let selection_guidance = technical_baseline_selection_guidance(project_kind, baseline_exists);
     let repo_evidence =
         technical_baseline_repo_evidence(project_root, project_kind, baseline_exists);
     let baseline_context_fields =
         technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
     let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
+    let mut security_selection_fields = vec!["userConfirmationView"];
+    if !matches!(
+        brainstorm.security_requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    ) {
+        security_selection_fields.extend(["securityRequirement", "securityProfileGuidance"]);
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "requestId": request_id,
+        "requestProtocol": {
+            "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
+            "fingerprint": protocol_fingerprint
+        },
         "projectKind": project_kind,
         "operation": if matches!(project_kind, ProjectKind::ExistingProject) {
             "infer_existing_project_baseline"
@@ -258,6 +320,12 @@ fn build_request_root(
             "includedScopeRefs": brainstorm.phase_plan.current.scope_refs,
             "acceptanceRefs": brainstorm.phase_plan.current.acceptance_refs,
         },
+        "securityRequirement": brainstorm.security_requirement,
+        "securityProfileGuidance": security_profile_guidance(
+            &brainstorm.security_requirement,
+            baseline_exists,
+            previous_baseline.map(|(_, baseline)| &baseline.stack),
+        ),
         "decisionNeeds": technical_baseline_decision_needs(project_kind, baseline_exists),
         "previousBaselineContext": previous_baseline_context,
         "constraints": {
@@ -267,14 +335,21 @@ fn build_request_root(
             "deploymentPreference": "local_first"
         },
         "repoEvidence": repo_evidence,
-        "selectionGuidance": selection_guidance,
+        "recommendationContext": selection_projections
+            .map(|projections| projections.recommendation_context.clone()),
+        "userConfirmationView": selection_projections
+            .map(|projections| projections.user_confirmation_view.clone()),
         "enumRefs": {
             "projectKind": ["new_project", "existing_project", "unknown"],
             "status": ["draft", "needs_user_confirmation", "auto_accepted", "confirmed", "blocked", "superseded"],
             "source": ["user_specified", "user_confirmed", "detected_from_repo", "agent_inferred_from_repo_signals", "agent_recommended_for_new_project"],
             "scope": ["project", "roadmap", "phase_override"],
             "approvalType": ["user_confirmed", "policy_auto_accept", "manual_override", "none"],
-            "confidence": ["low", "medium", "high", "unknown"]
+            "confidence": ["low", "medium", "high", "unknown"],
+            "securityMechanism": ["none", "server_session", "bearer_jwt"],
+            "securityAlgorithm": ["RS256", "ES256", "EdDSA", "HS256"],
+            "securityKeySource": ["existing_idp", "environment_secret", "file_mounted_key", "kms", "user_specified", "not_applicable"],
+            "securityTransport": ["bearer_header", "same_origin_cookie", "mutual_tls", "not_applicable"]
         },
         "rules": {
             "context": [
@@ -305,9 +380,26 @@ fn build_request_root(
                     "projectKind",
                     "scope",
                     "stack",
+                    "securityProfiles",
                     "approval",
                     "confidence"
-                ]
+                ],
+                "nestedShapeHints": {
+                    "stack.tracks.externalServices.providers": {
+                        "type": "array",
+                        "items": {
+                            "required": ["provider", "capabilities"],
+                            "capabilities": {
+                                "type": "array",
+                                "itemRequired": [
+                                    "purpose",
+                                    "durability",
+                                    "startupRequirement"
+                                ]
+                            }
+                        }
+                    }
+                }
             }
         },
         "requestReadPlan": {
@@ -327,13 +419,22 @@ fn build_request_root(
                     "selectors": read_selectors_value_from_paths(repo_evidence_fields)
                 },
                 {
-                    "groupId": "technical_baseline_selection_guidance",
-                    "required": selection_guidance.is_some(),
-                    "purpose": "Read the new-project confirmation discipline before asking the user to confirm the baseline.",
-                    "whenToRead": "Read only when the projectKind is new_project or the baseline still needs explicit user confirmation.",
-                    "selectors": read_selectors_value_from_paths([
-                        "selectionGuidance"
-                    ])
+                    "groupId": "technical_baseline_recommendation",
+                    "required": selection_projections.is_some(),
+                    "purpose": "Read the full-scope recommendation basis and track ownership before presenting a baseline recommendation.",
+                    "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
+                    "selectors": read_selectors_value_from_paths(["recommendationContext"])
+                },
+                {
+                    "groupId": "technical_baseline_user_confirmation",
+                    "required": selection_projections.is_some()
+                        || !matches!(
+                            brainstorm.security_requirement.applies,
+                            SecurityRequirementApplicability::NotApplicable
+                        ),
+                    "purpose": "Read the exact user-facing option matrix and single-message confirmation contract before presenting the baseline.",
+                    "whenToRead": "Read before presenting the baseline recommendation or asking for user confirmation.",
+                    "selectors": read_selectors_value_from_paths(security_selection_fields)
                 },
                 {
                     "groupId": "technical_baseline_write_contract",
@@ -349,12 +450,229 @@ fn build_request_root(
                         "enumRefs.source",
                         "enumRefs.scope",
                         "enumRefs.approvalType",
-                        "enumRefs.confidence"
+                        "enumRefs.confidence",
+                        "enumRefs.securityMechanism",
+                        "enumRefs.securityAlgorithm",
+                        "enumRefs.securityKeySource",
+                        "enumRefs.securityTransport"
                     ])
                 }
             ]
         }
     })
+}
+
+fn security_profile_guidance(
+    requirement: &SecurityRequirement,
+    has_previous_baseline: bool,
+    baseline_stack: Option<&Value>,
+) -> Value {
+    let applicability = &requirement.applies;
+    let profile_required = matches!(
+        applicability,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    );
+    let protected_scope = !matches!(
+        applicability,
+        SecurityRequirementApplicability::NotApplicable
+    );
+    let mut guidance = json!({
+        "applies": protected_scope,
+        "authority": "securityRequirement from the accepted Brainstorm contract",
+        "profileRequired": profile_required,
+        "capabilityState": "dormant",
+        "activationRule": "A bearer JWT profile is an explicit opt-in capability. A same-origin browser requirement with an accepted server-session dependency uses server_session instead; never recommend JWT from a greenfield default, backend framework, Redis alone, or a generic protected requirement.",
+        "supportedProfiles": [
+            {
+                "mechanism": "server_session",
+                "label": "Server-managed browser session",
+                "transport": "same_origin_cookie",
+                "when": "Use for same-origin browser clients when the accepted baseline includes a server-session store such as Redis.",
+                "identityRule": "The backend resolves the authenticated user and roles from the server-side session before applying interface permissions; this is not a bearer-token contract."
+            },
+            {
+                "mechanism": "bearer_jwt",
+                "label": "Bearer JWT",
+                "transport": "bearer_header",
+                "when": "Use only after the user explicitly selects a token-authority scenario and its complete profile.",
+                "identityRule": "The backend validates the selected token profile before applying interface permissions."
+            }
+        ],
+        "agentFields": []
+    });
+    guidance["serverSessionFactsAvailable"] =
+        json!(baseline_stack.is_some_and(has_accepted_redis_session_capability));
+    if profile_required {
+        guidance["existingBaselineRule"] = json!(if has_previous_baseline {
+            "Reuse an existing accepted security profile when it satisfies the current requirement; do not change its algorithm without explicit user confirmation."
+        } else {
+            "When authentication is required or optional, use the structured trust model and runtime capability facts. Same-origin browser plus an accepted Redis session capability uses MCP-derived server_session; only an unresolved trust model needs an explicit user profile selection."
+        });
+        if has_previous_baseline
+            && !baseline_stack.is_some_and(has_accepted_redis_session_capability)
+        {
+            guidance["algorithmPolicy"] = json!([
+                "Only an explicitly selected bearer JWT profile may declare an algorithm.",
+                "Do not derive an algorithm from an incoming token header or choose one as a greenfield default.",
+                "Keep the algorithm closed to the explicitly selected profile; do not add a second algorithm for flexibility."
+            ]);
+            guidance["agentFields"] = json!([
+                "securityProfiles[].profileId",
+                "securityProfiles[].name",
+                "securityProfiles[].mechanism",
+                "securityProfiles[].algorithm",
+                "securityProfiles[].keySource",
+                "securityProfiles[].transport",
+                "securityProfiles[].issuer",
+                "securityProfiles[].audiences",
+                "securityProfiles[].claims",
+                "securityProfiles[].sourceRefs",
+                "securityProfiles[].rationale"
+            ]);
+        } else {
+            guidance["selectionRule"] = json!(
+                "For same-origin_browser plus an accepted Redis session capability, use the MCP-derived server_session profile; the agent must not ask the user to choose JWT or write token fields. Otherwise keep securityProfiles empty until the user explicitly selects a supported profile. If the user selects bearer_jwt, write the complete profile from that explicit decision; do not invent its scenario, algorithm, issuer, audience, claims, or transport."
+            );
+            guidance["derivedProfileRule"] = json!({
+                "mechanism": "server_session",
+                "condition": "securityRequirement.applies is required or optional, clientTrustModels contains same_origin_browser, and stack.tracks.externalServices.providers contains Redis with capabilities.purpose=session",
+                "owner": "MCP derives and persists the profile; the agent does not author securityProfiles for this case."
+            });
+        }
+    } else if matches!(
+        applicability,
+        SecurityRequirementApplicability::DeferredWithRisk
+    ) {
+        guidance["profilePolicy"] = json!(
+            "Security is deferred for the current scope. Keep securityProfiles empty and record the deferred risk; do not activate JWT or another authentication implementation in this phase."
+        );
+    } else {
+        guidance["profilePolicy"] = json!(
+            "No authentication profile applies to the accepted scope; securityProfiles must remain an empty array."
+        );
+    }
+    if baseline_stack.is_some_and(has_accepted_redis_session_capability)
+        && profile_required
+        && same_origin_browser_is_required(requirement)
+    {
+        guidance["derivedProfileRule"] = json!({
+            "mechanism": "server_session",
+            "condition": "The accepted baseline contains Redis with capability purpose=session and the accepted security requirement contains same_origin_browser.",
+            "owner": "MCP derives and persists the profile; the agent does not author securityProfiles for this case."
+        });
+        guidance["agentFields"] = json!([]);
+    }
+    guidance
+}
+
+fn has_accepted_redis_session_capability(stack: &Value) -> bool {
+    let Some(track) = stack
+        .pointer("/tracks/externalServices")
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    if !matches!(
+        track.get("status").and_then(Value::as_str),
+        Some("selected" | "user_custom")
+    ) {
+        return false;
+    }
+    track
+        .get("providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|provider| {
+            let is_redis = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|name| technology_matches_any(name, &["redis"]));
+            is_redis
+                && provider
+                    .get("capabilities")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|capability| {
+                        capability
+                            .get("purpose")
+                            .and_then(Value::as_str)
+                            .is_some_and(|purpose| normalize_stack_token(purpose) == "session")
+                    })
+        })
+}
+
+fn same_origin_browser_is_required(requirement: &SecurityRequirement) -> bool {
+    matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    ) && requirement
+        .client_trust_models
+        .contains(&ClientTrustModel::SameOriginBrowser)
+        && requirement
+            .client_trust_models
+            .iter()
+            .all(|model| matches!(model, ClientTrustModel::SameOriginBrowser))
+}
+
+fn normalize_external_service_capability_shape(stack: &mut Value) {
+    let Some(providers) = stack
+        .pointer_mut("/tracks/externalServices/providers")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for provider in providers {
+        let Some(capabilities) = provider.get_mut("capabilities") else {
+            continue;
+        };
+        let Some(role_map) = capabilities.as_object() else {
+            continue;
+        };
+        let normalized = role_map
+            .iter()
+            .map(|(purpose, value)| {
+                let mut capability = value.as_object()?.clone();
+                capability.insert("purpose".to_string(), json!(purpose));
+                Some(Value::Object(capability))
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(normalized) = normalized {
+            *capabilities = Value::Array(normalized);
+        }
+    }
+}
+
+fn derive_server_session_profile(
+    candidate: &mut TechnicalBaselineCandidateAgentWritable,
+    requirement: &SecurityRequirement,
+) -> bool {
+    if !candidate.security_profiles.is_empty()
+        || !same_origin_browser_is_required(requirement)
+        || !has_accepted_redis_session_capability(&candidate.stack)
+    {
+        return false;
+    }
+    candidate.security_profiles.push(SecurityProfile {
+        profile_id: "security_server_session".to_string(),
+        name: "Redis-backed server session".to_string(),
+        mechanism: SecurityMechanism::ServerSession,
+        algorithm: None,
+        key_source: SecurityKeySource::NotApplicable,
+        transport: SecurityTransport::SameOriginCookie,
+        issuer: None,
+        audiences: Vec::new(),
+        claims: Vec::new(),
+        source_refs: requirement.source_refs.clone(),
+        rationale: "Same-origin browser requests use a server-managed login session; the backend resolves the authenticated user and roles from Redis before applying permissions.".to_string(),
+    });
+    if candidate.approval.r#type == TechnicalBaselineApprovalType::UserConfirmed
+        && candidate.status == TechnicalBaselineStatus::NeedsUserConfirmation
+    {
+        candidate.status = TechnicalBaselineStatus::Confirmed;
+    }
+    true
 }
 
 fn scope_item_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
@@ -426,6 +744,8 @@ fn technical_baseline_context_fields(
         "currentPhaseLens.includedScopeRefs",
         "currentPhaseLens.acceptanceRefs",
         "decisionNeeds",
+        "securityRequirement",
+        "securityProfileGuidance",
         "constraints.mustUse",
         "constraints.mustAvoid",
         "constraints.userPreferences",
@@ -461,6 +781,7 @@ fn technical_baseline_context_fields(
             "previousBaselineContext.stack",
             "previousBaselineContext.constraints",
             "previousBaselineContext.confidence",
+            "previousBaselineContext.securityProfiles",
         ]);
     }
     fields
@@ -669,6 +990,133 @@ fn collect_go_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
     signals.package_managers.insert("go".to_string());
 }
 
+#[derive(Clone, Copy)]
+struct BackendEcosystemDefinition {
+    ecosystem_id: &'static str,
+    label: &'static str,
+    runtime_family: &'static str,
+    backend_options: &'static [&'static str],
+    backend_matchers: &'static [&'static str],
+    data_access_options: &'static [&'static str],
+    data_access_matchers: &'static [&'static str],
+}
+
+const BACKEND_ECOSYSTEMS: &[BackendEcosystemDefinition] = &[
+    BackendEcosystemDefinition {
+        ecosystem_id: "nextjs_fullstack",
+        label: "Next.js full-stack",
+        runtime_family: "typescript_node",
+        backend_options: &["Next.js + Server Actions / Route Handlers / SSR"],
+        backend_matchers: &["next.js", "nextjs"],
+        data_access_options: &["Prisma", "Drizzle"],
+        data_access_matchers: &["prisma", "drizzle"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "node_http",
+        label: "Node.js HTTP service",
+        runtime_family: "typescript_node",
+        backend_options: &["Node.js + Fastify", "Node.js + Express"],
+        backend_matchers: &["node.js", "nodejs", "typescript", "fastify", "express"],
+        data_access_options: &["Prisma", "Drizzle", "Kysely"],
+        data_access_matchers: &["prisma", "drizzle", "kysely"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "nestjs_service",
+        label: "NestJS service",
+        runtime_family: "typescript_node",
+        backend_options: &["Node.js + NestJS"],
+        backend_matchers: &["nestjs"],
+        data_access_options: &["Prisma", "TypeORM"],
+        data_access_matchers: &["prisma", "typeorm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "python_fastapi",
+        label: "FastAPI service",
+        runtime_family: "python",
+        backend_options: &["Python + FastAPI"],
+        backend_matchers: &["python", "fastapi"],
+        data_access_options: &["SQLAlchemy", "SQLModel"],
+        data_access_matchers: &["sqlalchemy", "sqlmodel"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "python_django",
+        label: "Django application",
+        runtime_family: "python",
+        backend_options: &["Python + Django"],
+        backend_matchers: &["django"],
+        data_access_options: &["Django ORM"],
+        data_access_matchers: &["django orm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "jvm_spring",
+        label: "Spring Boot service",
+        runtime_family: "jvm",
+        backend_options: &["Java + Spring Boot"],
+        backend_matchers: &["java", "kotlin", "spring boot"],
+        data_access_options: &["Spring Data JPA", "MyBatis Plus", "jOOQ"],
+        data_access_matchers: &[
+            "spring data jpa",
+            "mybatis plus",
+            "mybatis-plus",
+            "mybatisplus",
+            "jooq",
+        ],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "dotnet_aspnetcore",
+        label: "ASP.NET Core service",
+        runtime_family: "dotnet",
+        backend_options: &[".NET + ASP.NET Core"],
+        backend_matchers: &[".net", "asp.net", "dotnet"],
+        data_access_options: &["Entity Framework Core", "Dapper"],
+        data_access_matchers: &["entity framework", "ef core", "dapper"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "go_http",
+        label: "Go HTTP service",
+        runtime_family: "go",
+        backend_options: &["Go + net/http or Gin"],
+        backend_matchers: &["go", "net/http", "gin"],
+        data_access_options: &["database/sql", "sqlc", "GORM"],
+        data_access_matchers: &["database/sql", "sqlc", "gorm"],
+    },
+    BackendEcosystemDefinition {
+        ecosystem_id: "no_independent_backend",
+        label: "No independent backend",
+        runtime_family: "none",
+        backend_options: &["No independent backend"],
+        backend_matchers: &["no independent backend", "no backend"],
+        data_access_options: &["No ORM"],
+        data_access_matchers: &["no orm"],
+    },
+];
+
+const PORTABLE_DATA_ACCESS_OPTIONS: &[&str] = &["Raw SQL / framework-native wrapper", "No ORM"];
+const PORTABLE_DATA_ACCESS_MATCHERS: &[&str] = &[
+    "raw sql",
+    "framework native wrapper",
+    "lightweight wrapper",
+    "no orm",
+];
+
+fn backend_ecosystem_guidance() -> Value {
+    json!({
+        "sourceOfTruth": "This catalog is the single source for backend/dataAccess recommendation relationships and known runtime-family compatibility checks.",
+        "renderingRule": "Render backend and dataAccess as one grouped choice. Do not present an independent flat dataAccess option list.",
+        "optionEnumerationRule": "When presenting an ecosystem in the adjustable range, enumerate every backendOptions entry and every recommendedDataAccessOptions entry from that ecosystem. Do not collapse the list to a single default or show only a representative option.",
+        "coverageRule": "When backend choice is open and no confirmed constraint excludes an ecosystem, keep the adjustable range diverse across TypeScript/Node, Python, JVM/Spring, and .NET. Do not truncate by catalog order; include Go when requirement or user preference makes it relevant.",
+        "customTechnologyPolicy": "Bundles are mainstream recommendations, not a whitelist. Keep user-specified backend and data-access technologies when their relationship is intentional and explain the custom pairing in the final confirmation summary.",
+        "portableDataAccessOptions": PORTABLE_DATA_ACCESS_OPTIONS,
+        "bundles": BACKEND_ECOSYSTEMS.iter().map(|ecosystem| json!({
+            "ecosystemId": ecosystem.ecosystem_id,
+            "label": ecosystem.label,
+            "runtimeFamily": ecosystem.runtime_family,
+            "backendOptions": ecosystem.backend_options,
+            "recommendedDataAccessOptions": ecosystem.data_access_options
+        })).collect::<Vec<_>>()
+    })
+}
+
 fn technical_baseline_selection_guidance(
     project_kind: ProjectKind,
     has_previous_baseline: bool,
@@ -699,14 +1147,39 @@ fn technical_baseline_selection_guidance(
         },
         "confirmationRules": confirmation_rules(has_previous_baseline),
         "trackModel": {
-            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. When web is selected, also include qualityAutomation. Each track should include status, selection, source, and rationale.",
+            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. When web is selected, also include qualityAutomation. Each track should include status, selection, source, and rationale. A selected externalServices track must also include structured providers with confirmed capability roles.",
             "trackStatusValues": ["selected", "not_needed", "not_applicable", "user_custom"],
             "sourceValues": ["agent_recommended_user_confirmed", "user_adjusted", "user_specified", "previous_baseline", "not_applicable"],
             "coreTracks": ["web", "app", "backend", "persistence", "dataAccess", "externalServices"],
             "conditionalTracks": {
                 "qualityAutomation": "Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline."
             },
-            "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary."
+            "coupledTracks": {
+                "backendDataAccess": "backend and dataAccess remain separate final tracks, but recommendation and confirmation must present them as one compatible ecosystem choice."
+            },
+            "customTechnologyPolicy": "The ecosystem catalog and independent track options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
+            "externalServicesProviderShape": {
+                "allowedProviderFields": ["provider", "capabilities"],
+                "capabilitiesType": "array",
+                "capabilityItemShape": {
+                    "purpose": "cache | session | queue | stream | lock_rate_limit",
+                    "durability": "ephemeral | persistent",
+                    "startupRequirement": "required | optional"
+                },
+                "canonicalExample": {
+                    "provider": "Redis",
+                    "capabilities": [{
+                        "purpose": "session",
+                        "durability": "persistent",
+                        "startupRequirement": "required"
+                    }]
+                },
+                "allowedCapabilityFields": ["purpose", "durability", "startupRequirement"],
+                "capabilityRoles": ["cache", "session", "queue", "stream", "lock_rate_limit"],
+                "ownership": "TechnicalBaseline confirms provider, capability role, durability, and startup requirement only. MCP derives dependencyId and kind. Failure handling, recovery, consumers, and observability belong to the Architecture quality model when they affect the current phase.",
+                "shapeRule": "In the candidate JSON, providers[].capabilities is always an array of capability objects. A user-facing role map such as session: {...} must be normalized to [{purpose: session, ...}] before writing the candidate; do not write capabilities as an object keyed by role.",
+                "unknownFieldPolicy": "Do not add dependencyId, kind, requiredFor, failureBehavior, recoveryStrategy, observability, TTL, key schema, queue acknowledgment, or deployment settings here. MCP derives dependency identity and the later stages own operational behavior."
+            }
         },
         "recommendationBasis": {
             "authority": "Use the complete BrainstormContract as the product-scope authority for the first new-project TechnicalBaseline recommendation.",
@@ -721,23 +1194,42 @@ fn technical_baseline_selection_guidance(
             "recommendationRule": "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs."
         },
         "userFacingConfirmationProtocol": {
+            "responseContract": {
+                "responseId": "technical_baseline_confirmation",
+                "mode": "single_user_message",
+                "maxMessages": 1,
+                "requiredSections": [
+                    "recommendation_basis",
+                    "recommended_final_baseline",
+                    "adjustable_technology_range",
+                    "confirmation_or_adjustment_prompt"
+                ],
+                "backendDataAccessRendering": "Render every backendEcosystems bundle with its label, every backendOptions entry, and every recommendedDataAccessOptions entry. Do not abbreviate, collapse, or repeat the matrix.",
+                "deduplicationRule": "Emit the confirmation response once. Do not repeat the same recommendation in commentary and final output."
+            },
             "mandatorySections": [
                 "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
                 "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
-                "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
+                "Adjustable technology range: show independent options for web, app, persistence, and externalServices, then show backend and dataAccess as grouped ecosystem choices from backendEcosystems. For every displayed ecosystem, list every compatible backend and dataAccess option supplied by that bundle; the JVM/Spring bundle must include Java + Spring Boot with Spring Data JPA, MyBatis Plus, and jOOQ.",
                 "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
+                "When securityRequirement is required or optional, use the structured trust model and accepted runtime capabilities to select server_session for same-origin browser sessions; do not propose or enable JWT as a greenfield default. Ask for explicit profile selection only when the structured facts do not determine the mechanism. When security is deferred, show the deferred risk and keep the current phase free of authentication implementation.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
             ],
             "wordingRules": [
                 "Do not present the recommendation as based only on the first phase or current small implementation slice.",
                 "Do not omit the adjustable technology range.",
                 "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
+                "Do not present backend and dataAccess as unrelated option lists. Keep every displayed data-access choice under its compatible backend ecosystem.",
+                "Do not replace a compatible dataAccess list with only its most familiar default. Preserve every catalog option, including MyBatis Plus and jOOQ under Java + Spring Boot.",
+                "Do not truncate backend alternatives by catalog order. When no confirmed constraint excludes them, preserve mainstream ecosystem coverage including Java + Spring Boot.",
                 "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
+                "When externalServices includes Redis, explain the business role in plain language, allow multiple roles, and ask only the persistence or startup questions needed by the selected roles.",
+                "Do not ask users to choose Redis data structures, TTL values, Lua scripts, or Compose settings during TechnicalBaseline confirmation; those decisions belong to Architecture.",
                 "Do not mention Loom internals, gates, submit permission, workflow blocking, or phrases like Loom allows, Loom requires, Loom is stuck, or Loom will not continue in user-facing text.",
                 "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess."
             ]
         },
-        "commonOptions": {
+        "independentTrackOptions": {
             "web": {
                 "label": "Web client",
                 "examples": ["Next.js", "React + Vite", "Vue + Vite", "SvelteKit", "Astro", "No Web client"]
@@ -746,38 +1238,40 @@ fn technical_baseline_selection_guidance(
                 "label": "App client",
                 "examples": ["No App client", "React Native + Expo", "Flutter", "iOS Native (Swift / SwiftUI)", "Android Native (Kotlin / Jetpack Compose)", "Hybrid WebView (Capacitor / Ionic)", "PWA"]
             },
-            "backend": {
-                "label": "Backend / service",
-                "examples": ["Next.js + Server Actions / Route Handlers / SSR", "Node.js + Fastify", "Node.js + Express", "Node.js + NestJS", "Python + FastAPI", "Python + Django", "Java + Spring Boot", "Go + net/http or Gin", ".NET + ASP.NET Core", "No independent backend"]
-            },
             "persistence": {
                 "label": "Database / persistence",
                 "examples": ["SQLite", "PostgreSQL", "MySQL", "MongoDB", "File storage / local JSON", "No persistence yet"]
             },
-            "dataAccess": {
-                "label": "ORM / data access",
-                "examples": ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "MyBatis Plus", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"]
-            },
             "externalServices": {
                 "label": "External services",
-                "examples": ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"]
+                "examples": ["None", "Redis for cache, sessions, or background jobs", "User specified", "Only recommend services explicitly required by the confirmed requirement"],
+                "capabilityRoles": {
+                    "redis": [
+                        "Login state and shared sessions",
+                        "Background jobs and message processing",
+                        "Query result acceleration",
+                        "Atomic locks or rate limiting"
+                    ]
+                },
+                "confirmationRule": "Show only capability roles supported by the confirmed requirement. Allow multiple roles. Do not choose a Redis role from a keyword alone; ask the user when the role is ambiguous."
             },
             "qualityAutomation": {
                 "label": "Browser quality automation",
                 "examples": ["Playwright", "User-specified existing browser test stack"]
+            },
+            "securityProfile": {
+                "label": "Authentication profile when protected",
+                "examples": ["MCP-derived server session for a same-origin browser backed by Redis", "An explicitly selected bearer JWT profile for a confirmed external-client scenario", "An existing accepted security profile reused without change"],
+                "rule": "For same-origin browser plus an accepted Redis session capability, use server_session and resolve identity/roles from the login session. JWT is dormant and must not be selected from a default or keyword; activate it only from an explicit user choice or an existing accepted profile."
             }
         },
+        "backendEcosystems": backend_ecosystem_guidance(),
         "shorthandNormalization": {
             "backend": [
                 "If the user writes backend=Java without a framework, normalize it to Java + Spring Boot unless they explicitly name a different Java backend stack.",
                 "If the user writes backend=Python without a framework, normalize it to Python + FastAPI for service/backend work unless the requirement or user explicitly points to Django-style site/admin/content capabilities.",
                 "If the user writes backend=Node.js without a framework, ask for or summarize a concrete Node.js framework choice such as Fastify, Express, or NestJS before final confirmation.",
                 "If the user writes backend=.NET without a framework, normalize it to .NET + ASP.NET Core unless they explicitly name another .NET backend stack."
-            ],
-            "dataAccessCompatibility": [
-                "When backend is Java + Spring Boot and dataAccess is not specified, recommend Spring Data JPA or MyBatis Plus explicitly before final confirmation; do not leave it as generic Java persistence.",
-                "When backend is Python + FastAPI and dataAccess is not specified, recommend SQLAlchemy or SQLModel explicitly before final confirmation.",
-                "When backend is Python + Django and dataAccess is not specified, recommend Django ORM explicitly before final confirmation."
             ]
         },
         "recommendationPrinciples": [
@@ -792,9 +1286,52 @@ fn technical_baseline_selection_guidance(
         "replyProtocolForUser": {
             "acceptRecommendation": "确认推荐方案",
             "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, qualityAutomation=Playwright, app=不需要, externalServices=不需要",
-            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
+            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Node.js+Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
+            "redisCapabilityExample": "externalServices=Redis，用于登录会话和后台任务；登录会话重启后保留，后台任务失败可重试",
             "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
         }
+    }))
+}
+
+fn technical_baseline_selection_projections(
+    project_kind: ProjectKind,
+    has_previous_baseline: bool,
+) -> Option<TechnicalBaselineSelectionProjections> {
+    let guidance = technical_baseline_selection_guidance(project_kind, has_previous_baseline)?;
+    Some(TechnicalBaselineSelectionProjections {
+        recommendation_context: json!({
+            "schemaVersion": guidance["schemaVersion"],
+            "purpose": guidance["purpose"],
+            "runtimeBoundary": guidance["runtimeBoundary"],
+            "confirmationRules": guidance["confirmationRules"],
+            "trackModel": guidance["trackModel"],
+            "recommendationBasis": guidance["recommendationBasis"],
+            "recommendationPrinciples": guidance["recommendationPrinciples"],
+            "shorthandNormalization": guidance["shorthandNormalization"]
+        }),
+        user_confirmation_view: json!({
+            "schemaVersion": guidance["schemaVersion"],
+            "userFacingConfirmationProtocol": guidance["userFacingConfirmationProtocol"],
+            "independentTrackOptions": guidance["independentTrackOptions"],
+            "backendEcosystems": guidance["backendEcosystems"],
+            "replyProtocolForUser": guidance["replyProtocolForUser"]
+        }),
+    })
+}
+
+fn technical_baseline_protocol_fingerprint(
+    project_kind: ProjectKind,
+    has_previous_baseline: bool,
+    brainstorm: &BrainstormContract,
+    projections: Option<&TechnicalBaselineSelectionProjections>,
+) -> String {
+    delivery_core::contract_fingerprint(&json!({
+        "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
+        "projectKind": project_kind,
+        "hasPreviousBaseline": has_previous_baseline,
+        "securityApplicability": brainstorm.security_requirement.applies,
+        "recommendationContext": projections.map(|item| &item.recommendation_context),
+        "userConfirmationView": projections.map(|item| &item.user_confirmation_view)
     }))
 }
 
@@ -804,7 +1341,10 @@ fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
         "If the user accepts the recommendation directly, that reply can be the final technology baseline confirmation.",
         "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
         "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
+        "Write externalServices.providers[].capabilities as an array of objects with purpose, durability, and startupRequirement. Do not use an object keyed by session, cache, queue, or another capability role.",
         "Build commands, local run commands, and deployment preparation are derived later. For a selected Web client, include qualityAutomation in the same baseline confirmation; do not reopen confirmation only to update test commands or runtime details.",
+        "JWT remains dormant. For same-origin browser work with an accepted Redis session capability, use the server_session profile and resolve identity/roles from the login session. Ask for an explicit security profile only when no deterministic session profile applies or the user requests another trust model.",
+        "A deferred_with_risk security requirement may be accepted without a security profile, but the current phase must not create authentication or JWT implementation work.",
     ];
     if has_previous_baseline {
         rules.extend([
@@ -877,6 +1417,16 @@ where
         return Ok(result);
     }
     let project_root = Path::new(&input.project_root);
+    let request_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+        fields: vec!["securityRequirement".to_string()],
+    })?;
+    let security_requirement = request_fields
+        .fields
+        .get("securityRequirement")
+        .and_then(|field| serde_json::from_value::<SecurityRequirement>(field.value.clone()).ok())
+        .unwrap_or_default();
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
     let mut candidate: TechnicalBaselineCandidateAgentWritable =
@@ -898,7 +1448,9 @@ where
 
     let now = state::store::now_string();
     normalize_user_confirmed_approval(&mut candidate, &now);
-    let issues = validate_candidate(&candidate);
+    normalize_external_service_capability_shape(&mut candidate.stack);
+    derive_server_session_profile(&mut candidate, &security_requirement);
+    let issues = validate_candidate(&candidate, &security_requirement);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
     }
@@ -920,12 +1472,23 @@ where
             "new_project_baseline_confirmation".to_string(),
         ));
     }
-    if candidate.requires_user_confirmation.unwrap_or(false)
-        || matches!(
-            candidate.status,
-            TechnicalBaselineStatus::NeedsUserConfirmation
-        )
-    {
+    let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
+    let security_profile_required = matches!(
+        security_requirement.applies,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    );
+    if security_profile_required && candidate.security_profiles.is_empty() {
+        return Ok(technical_baseline_user_gate(
+            input,
+            authorized,
+            "Authentication is in scope, but the structured facts do not determine a security profile. JWT remains dormant and is not a default. Ask the user to choose the authentication scenario or adjust the scope, then rewrite the same candidate before continuing.".to_string(),
+            "security_profile_confirmation".to_string(),
+        ));
+    }
+    if matches!(
+        candidate.status,
+        TechnicalBaselineStatus::NeedsUserConfirmation
+    ) {
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
@@ -933,7 +1496,6 @@ where
             "technical_baseline_confirmation".to_string(),
         ));
     }
-    let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
     if previous_baseline_file.exists() {
         let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
         let stack_or_baseline_changed = technical_baseline_conflicts(&previous, &candidate);
@@ -965,11 +1527,11 @@ where
         project_kind: candidate.project_kind,
         scope: candidate.scope,
         stack: candidate.stack,
+        security_profiles: candidate.security_profiles,
         constraints: candidate.constraints,
         evidence: candidate.evidence,
         approval: candidate.approval,
         confidence: candidate.confidence,
-        requires_user_confirmation: candidate.requires_user_confirmation,
         reasoning_summary: candidate.reasoning_summary,
         alternatives: candidate.alternatives,
         created_at: now.clone(),
@@ -1079,6 +1641,7 @@ fn normalize_user_confirmed_approval(
 
 fn validate_candidate(
     candidate: &TechnicalBaselineCandidateAgentWritable,
+    security_requirement: &SecurityRequirement,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     if !candidate.stack.is_object() {
@@ -1088,6 +1651,8 @@ fn validate_candidate(
             "stack must be a JSON object that describes the selected technology baseline.",
         ));
     }
+    validate_external_services_track(&candidate.stack, &mut issues);
+    validate_security_profiles(candidate, security_requirement, &mut issues);
     if candidate.approval.r#type == TechnicalBaselineApprovalType::None
         && matches!(candidate.status, TechnicalBaselineStatus::Confirmed)
     {
@@ -1101,6 +1666,213 @@ fn validate_candidate(
         validate_new_project_candidate(candidate, &mut issues);
     }
     issues
+}
+
+fn validate_security_profiles(
+    candidate: &TechnicalBaselineCandidateAgentWritable,
+    requirement: &SecurityRequirement,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let not_applicable = matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::NotApplicable
+    );
+    let profile_required = matches!(
+        requirement.applies,
+        SecurityRequirementApplicability::Required | SecurityRequirementApplicability::Optional
+    );
+    if not_applicable && !candidate.security_profiles.is_empty() {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_SECURITY_PROFILE_UNEXPECTED",
+            "securityProfiles",
+            "securityProfiles must be empty when the accepted security requirement is not_applicable.",
+        ));
+        return;
+    }
+    if profile_required
+        && !candidate.security_profiles.is_empty()
+        && !candidate
+            .security_profiles
+            .iter()
+            .any(|profile| !matches!(profile.mechanism, SecurityMechanism::None))
+    {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_PROTECTED_PROFILE_REQUIRED",
+            "securityProfiles",
+            "A required or optional security requirement must include a supported non-none security profile. Same-origin browser sessions backed by an accepted Redis session use server_session; bearer_jwt remains explicit opt-in.",
+        ));
+    }
+    let mut profile_ids = BTreeSet::new();
+    for (index, profile) in candidate.security_profiles.iter().enumerate() {
+        let path = format!("securityProfiles[{index}]");
+        if profile.profile_id.trim().is_empty() || !profile_ids.insert(profile.profile_id.clone()) {
+            issues.push(issue(
+                "TECHNICAL_BASELINE_SECURITY_PROFILE_ID_INVALID",
+                &format!("{path}.profileId"),
+                "Every security profile needs a unique non-empty profileId.",
+            ));
+        }
+        if profile.name.trim().is_empty() || profile.rationale.trim().is_empty() {
+            issues.push(issue(
+                "TECHNICAL_BASELINE_SECURITY_PROFILE_DESCRIPTION_REQUIRED",
+                &path,
+                "Every security profile needs a non-empty name and rationale.",
+            ));
+        }
+        match profile.mechanism {
+            SecurityMechanism::None => {
+                if profile.algorithm.is_some()
+                    || !matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || !matches!(profile.transport, SecurityTransport::NotApplicable)
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_PROFILE_NONE_INVALID",
+                        &path,
+                        "A none security profile must not declare an algorithm, key material, or a transport.",
+                    ));
+                }
+            }
+            SecurityMechanism::ServerSession => {
+                if !same_origin_browser_is_required(requirement)
+                    || !has_accepted_redis_session_capability(&candidate.stack)
+                    || profile.algorithm.is_some()
+                    || !matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || !matches!(profile.transport, SecurityTransport::SameOriginCookie)
+                    || profile.issuer.is_some()
+                    || !profile.audiences.is_empty()
+                    || !profile.claims.is_empty()
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SERVER_SESSION_PROFILE_INVALID",
+                        &path,
+                        "A server_session profile is valid only for same-origin browser requirements with an accepted Redis session capability; it must use same_origin_cookie and must not declare token algorithms or issuer/audience/claim fields.",
+                    ));
+                }
+            }
+            SecurityMechanism::BearerJwt => {
+                if profile.algorithm.is_none() {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_ALGORITHM_REQUIRED",
+                        &format!("{path}.algorithm"),
+                        "A bearer JWT profile must explicitly select one signing algorithm.",
+                    ));
+                }
+                if matches!(profile.key_source, SecurityKeySource::NotApplicable)
+                    || matches!(profile.transport, SecurityTransport::NotApplicable)
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_SECURITY_PROFILE_BOUNDARY_REQUIRED",
+                        &path,
+                        "A bearer JWT profile must declare a key source and transport.",
+                    ));
+                }
+                if profile
+                    .issuer
+                    .as_deref()
+                    .is_none_or(|issuer| issuer.trim().is_empty())
+                    || profile.audiences.is_empty()
+                    || !profile.claims.iter().any(|claim| claim.trim() == "sub")
+                {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_JWT_CLAIMS_INCOMPLETE",
+                        &path,
+                        "A bearer JWT profile must declare issuer, at least one audience, and the subject claim before it can be used by an API contract.",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn validate_external_services_track(stack: &Value, issues: &mut Vec<delivery_core::RepairIssue>) {
+    let Some(track) = stack
+        .pointer("/tracks/externalServices")
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let status = track
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(status, "selected" | "user_custom")
+        && !external_services_track_complete(track, status)
+    {
+        issues.push(issue(
+            "TECHNICAL_BASELINE_EXTERNAL_SERVICES_UNSTRUCTURED",
+            "stack.tracks.externalServices.providers",
+            "A selected externalServices track must include at least one provider with one or more structured capability roles, each declaring purpose, durability, and startupRequirement.",
+        ));
+    }
+    if let Some(providers) = track.get("providers").and_then(Value::as_array) {
+        let mut provider_ids = BTreeSet::new();
+        for (provider_index, provider) in providers.iter().enumerate() {
+            let Some(provider) = provider.as_object() else {
+                continue;
+            };
+            let provider_path =
+                format!("stack.tracks.externalServices.providers[{provider_index}]");
+            if let Some(provider_name) = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .filter(|value| !value.is_empty())
+            {
+                if !provider_ids.insert(provider_name) {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_EXTERNAL_SERVICE_PROVIDER_DUPLICATE",
+                        &format!("{provider_path}.provider"),
+                        "Each external service provider may appear once; combine its capability roles in one providers entry so MCP can derive one stable runtime dependency.",
+                    ));
+                }
+            }
+            for field in provider.keys() {
+                if !matches!(field.as_str(), "provider" | "capabilities") {
+                    issues.push(issue(
+                        "TECHNICAL_BASELINE_EXTERNAL_SERVICE_FIELD_UNKNOWN",
+                        &format!("{provider_path}.{field}"),
+                        "TechnicalBaseline external service providers may only declare provider and capabilities; MCP derives dependency identity and operational fields belong to Architecture.",
+                    ));
+                }
+            }
+            if let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) {
+                let mut purposes = BTreeSet::new();
+                for (capability_index, capability) in capabilities.iter().enumerate() {
+                    let Some(capability) = capability.as_object() else {
+                        continue;
+                    };
+                    let capability_path =
+                        format!("{provider_path}.capabilities[{capability_index}]");
+                    if let Some(purpose) = capability
+                        .get("purpose")
+                        .and_then(Value::as_str)
+                        .map(normalize_stack_token)
+                        .filter(|value| !value.is_empty())
+                    {
+                        if !purposes.insert(purpose) {
+                            issues.push(issue(
+                                "TECHNICAL_BASELINE_EXTERNAL_SERVICE_PURPOSE_DUPLICATE",
+                                &format!("{capability_path}.purpose"),
+                                "Each provider may declare a capability purpose once; merge duplicate role entries before accepting the TechnicalBaseline.",
+                            ));
+                        }
+                    }
+                    for field in capability.keys() {
+                        if !matches!(
+                            field.as_str(),
+                            "purpose" | "durability" | "startupRequirement"
+                        ) {
+                            issues.push(issue(
+                                "TECHNICAL_BASELINE_CAPABILITY_FIELD_UNKNOWN",
+                                &format!("{capability_path}.{field}"),
+                                "TechnicalBaseline capability roles may only declare purpose, durability, and startupRequirement; consumer, failure, recovery, and observability fields are not part of this contract.",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 const NEW_PROJECT_CORE_TRACKS: [&str; 6] = [
@@ -1149,7 +1921,7 @@ fn validate_new_project_candidate(
         issues.push(issue(
             "NEW_PROJECT_BASELINE_TRACKS_INCOMPLETE",
             "stack.tracks",
-            "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
+            "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection. A selected externalServices track must provide structured providers and capability roles.",
         ));
     }
     if new_project_web_selected(&candidate.stack)
@@ -1161,6 +1933,95 @@ fn validate_new_project_candidate(
             "New-project Web baselines must include a selected qualityAutomation track with a concrete browser automation stack.",
         ));
     }
+    if let Some(compatibility_issue) = backend_data_access_compatibility_issue(&candidate.stack) {
+        issues.push(compatibility_issue);
+    }
+}
+
+fn backend_data_access_compatibility_issue(stack: &Value) -> Option<delivery_core::RepairIssue> {
+    let backend = active_track_selection(stack, "backend")?;
+    let data_access = active_track_selection(stack, "dataAccess")?;
+    if technology_matches_any(data_access, PORTABLE_DATA_ACCESS_MATCHERS) {
+        return None;
+    }
+    let backend_families = backend_runtime_families(backend);
+    let data_access_families = data_access_runtime_families(data_access);
+    if backend_families.is_empty()
+        || data_access_families.is_empty()
+        || !backend_families.is_disjoint(&data_access_families)
+    {
+        return None;
+    }
+    let compatible_options = BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| backend_families.contains(ecosystem.runtime_family))
+        .flat_map(|ecosystem| ecosystem.data_access_options.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(issue(
+        "NEW_PROJECT_BACKEND_DATA_ACCESS_INCOMPATIBLE",
+        "stack.tracks.dataAccess.selection",
+        &format!(
+            "backend selection '{backend}' and dataAccess selection '{data_access}' belong to different known runtime ecosystems. Use a compatible option such as {compatible_options}, or provide a genuinely custom data-access selection whose relationship can be explained during confirmation."
+        ),
+    ))
+}
+
+fn active_track_selection<'a>(stack: &'a Value, track: &str) -> Option<&'a str> {
+    let track = stack.pointer(&format!("/tracks/{track}"))?.as_object()?;
+    if !matches!(
+        track.get("status").and_then(Value::as_str),
+        Some("selected" | "user_custom")
+    ) {
+        return None;
+    }
+    track
+        .get("selection")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|selection| !selection.is_empty())
+}
+
+fn backend_runtime_families(selection: &str) -> BTreeSet<&'static str> {
+    BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| technology_matches_any(selection, ecosystem.backend_matchers))
+        .map(|ecosystem| ecosystem.runtime_family)
+        .collect()
+}
+
+fn data_access_runtime_families(selection: &str) -> BTreeSet<&'static str> {
+    BACKEND_ECOSYSTEMS
+        .iter()
+        .filter(|ecosystem| technology_matches_any(selection, ecosystem.data_access_matchers))
+        .map(|ecosystem| ecosystem.runtime_family)
+        .collect()
+}
+
+fn technology_matches_any(selection: &str, matchers: &[&str]) -> bool {
+    let selection = format!(" {} ", normalize_technology_phrase(selection));
+    matchers.iter().any(|matcher| {
+        let matcher = format!(" {} ", normalize_technology_phrase(matcher));
+        selection.contains(&matcher)
+    })
+}
+
+fn normalize_technology_phrase(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn new_project_stack_tracks_complete(stack: &Value) -> bool {
@@ -1181,8 +2042,63 @@ fn new_project_stack_tracks_complete(stack: &Value) -> bool {
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        NEW_PROJECT_TRACK_STATUSES.contains(&status) && !selection.is_empty()
+        let track_valid = NEW_PROJECT_TRACK_STATUSES.contains(&status) && !selection.is_empty();
+        track_valid
+            && (*track != "externalServices" || external_services_track_complete(value, status))
     })
+}
+
+fn external_services_track_complete(track: &serde_json::Map<String, Value>, status: &str) -> bool {
+    let Some(providers) = track.get("providers") else {
+        return !matches!(status, "selected" | "user_custom");
+    };
+    let Some(providers) = providers.as_array() else {
+        return false;
+    };
+    if !matches!(status, "selected" | "user_custom") {
+        return providers.is_empty();
+    }
+    !providers.is_empty()
+        && providers.iter().all(|provider| {
+            let Some(provider) = provider.as_object() else {
+                return false;
+            };
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) else {
+                return false;
+            };
+            !provider_name.is_empty()
+                && !capabilities.is_empty()
+                && capabilities.iter().all(|capability| {
+                    let Some(capability) = capability.as_object() else {
+                        return false;
+                    };
+                    let purpose = capability
+                        .get("purpose")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let durability = capability
+                        .get("durability")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let startup_requirement = capability
+                        .get("startupRequirement")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    matches!(
+                        purpose,
+                        "cache" | "session" | "queue" | "stream" | "lock_rate_limit"
+                    ) && matches!(durability, "ephemeral" | "persistent")
+                        && matches!(
+                            startup_requirement,
+                            "required" | "optional" | "not_applicable"
+                        )
+                })
+        })
 }
 
 fn new_project_web_selected(stack: &Value) -> bool {
@@ -1256,6 +2172,7 @@ fn technical_baseline_conflicts(
         || previous.scope != candidate.scope
         || !stable_stack_equivalent(&previous.stack, &candidate.stack)
         || previous.constraints != candidate.constraints
+        || previous.security_profiles != candidate.security_profiles
 }
 
 fn stable_stack_equivalent(left: &Value, right: &Value) -> bool {
@@ -1269,6 +2186,7 @@ struct StableStack {
     frameworks: BTreeSet<String>,
     package_managers: BTreeSet<String>,
     databases: BTreeSet<String>,
+    external_services: BTreeSet<String>,
     tracks: BTreeSet<String>,
 }
 
@@ -1287,8 +2205,54 @@ fn normalize_stack_for_comparison(stack: &Value) -> StableStack {
         ),
         package_managers: values_for_keys(stack, &["packageManager", "packageManagers"]),
         databases: values_for_keys(stack, &["database", "databases", "databaseProvider"]),
+        external_services: external_service_values(stack),
         tracks: stack_track_selections_for_comparison(stack),
     }
+}
+
+fn external_service_values(stack: &Value) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    let Some(track) = stack.pointer("/tracks/externalServices") else {
+        return values;
+    };
+    if let Some(providers) = track.get("providers").and_then(Value::as_array) {
+        for provider in providers {
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            for capability in provider
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let purpose = capability
+                    .get("purpose")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                let durability = capability
+                    .get("durability")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                let startup = capability
+                    .get("startupRequirement")
+                    .and_then(Value::as_str)
+                    .map(normalize_stack_token)
+                    .unwrap_or_default();
+                values.insert(format!("{provider_name}:{purpose}:{durability}:{startup}"));
+            }
+        }
+    } else if let Some(selection) = track.get("selection").and_then(Value::as_str) {
+        let normalized = normalize_stack_token(selection);
+        if !normalized.is_empty() {
+            values.insert(normalized);
+        }
+    }
+    values
 }
 
 fn values_for_keys(value: &Value, keys: &[&str]) -> BTreeSet<String> {
@@ -1540,18 +2504,68 @@ fn technical_baseline_user_gate(
     prompt: String,
     gate_id: String,
 ) -> LoomMcpActionResult {
+    technical_baseline_confirmation_gate(
+        &input.project_root,
+        &input.request_ref,
+        authorized.delivery_id.as_deref().unwrap_or_default(),
+        authorized.phase_id.as_deref().unwrap_or_default(),
+        prompt,
+        gate_id,
+    )
+}
+
+fn technical_baseline_recommendation_gate(
+    project_root: &str,
+    request_ref: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> LoomMcpActionResult {
+    technical_baseline_confirmation_gate(
+        project_root,
+        request_ref,
+        delivery_id,
+        phase_id,
+        "Present the recommended technology baseline and complete adjustable option matrix to the user. Wait for explicit confirmation or adjustments; after confirmation, write and submit the same TechnicalBaseline candidate request.".to_string(),
+        "new_project_baseline_confirmation".to_string(),
+    )
+}
+
+fn technical_baseline_confirmation_gate(
+    project_root: &str,
+    request_ref: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    prompt: String,
+    gate_id: String,
+) -> LoomMcpActionResult {
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
-        input.project_root.clone(),
+        project_root.to_string(),
         prompt,
         vec!["reply_in_chat".to_string()],
-        Some(input.request_ref.clone()),
-        authorized.delivery_id.clone(),
-        authorized.phase_id.clone(),
-        Some(json!({
-            "gateId": gate_id,
-            "kind": "technical_baseline_confirmation"
-        })),
+        Some(request_ref.to_string()),
+        Some(delivery_id.to_string()),
+        Some(phase_id.to_string()),
+        Some(technical_baseline_gate_details(&gate_id)),
     ))
+}
+
+fn technical_baseline_gate_details(gate_id: &str) -> Value {
+    json!({
+        "gateId": gate_id,
+        "kind": "technical_baseline_confirmation",
+        "responseContract": {
+            "responseId": "technical_baseline_confirmation",
+            "mode": "single_user_message",
+            "maxMessages": 1,
+            "doNotRepeatInFinal": true,
+            "requiredSections": [
+                "recommendation_basis",
+                "recommended_final_baseline",
+                "adjustable_technology_range",
+                "confirmation_or_adjustment_prompt"
+            ]
+        }
+    })
 }
 
 fn repairable(
@@ -1604,4 +2618,283 @@ fn issue(code: &str, field_path: &str, message: &str) -> delivery_core::RepairIs
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack_with_backend_and_data_access(backend: &str, data_access: &str) -> Value {
+        json!({
+            "tracks": {
+                "backend": {
+                    "status": "selected",
+                    "selection": backend
+                },
+                "dataAccess": {
+                    "status": "selected",
+                    "selection": data_access
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn backend_ecosystem_guidance_groups_spring_with_data_access_options() {
+        let guidance = backend_ecosystem_guidance();
+        let spring = guidance["bundles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|bundle| bundle["ecosystemId"] == "jvm_spring")
+            .expect("Spring ecosystem bundle");
+
+        assert!(spring["backendOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Java + Spring Boot")));
+        assert!(spring["recommendedDataAccessOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Spring Data JPA")));
+        assert!(spring["recommendedDataAccessOptions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("MyBatis Plus")));
+        assert!(guidance["renderingRule"]
+            .as_str()
+            .unwrap()
+            .contains("Do not present an independent flat dataAccess option list"));
+        assert!(guidance["optionEnumerationRule"]
+            .as_str()
+            .unwrap()
+            .contains("every recommendedDataAccessOptions entry"));
+    }
+
+    #[test]
+    fn known_cross_runtime_data_access_is_rejected() {
+        let stack = stack_with_backend_and_data_access("Java + Spring Boot", "Prisma");
+
+        let issue = backend_data_access_compatibility_issue(&stack).expect("compatibility issue");
+
+        assert_eq!(issue.code, "NEW_PROJECT_BACKEND_DATA_ACCESS_INCOMPATIBLE");
+        assert_eq!(
+            issue.field_path.as_deref(),
+            Some("stack.tracks.dataAccess.selection")
+        );
+        assert!(issue.message.contains("Spring Data JPA"));
+    }
+
+    #[test]
+    fn compatible_portable_and_custom_data_access_remain_open() {
+        for (backend, data_access) in [
+            ("Java + Spring Boot", "Spring Data JPA"),
+            ("Python + Django", "SQLAlchemy"),
+            ("Node.js + Fastify", "Raw SQL / lightweight wrapper"),
+            ("Java + Spring Boot", "Custom JDBC Adapter"),
+        ] {
+            let stack = stack_with_backend_and_data_access(backend, data_access);
+            assert!(
+                backend_data_access_compatibility_issue(&stack).is_none(),
+                "{backend} + {data_access} should remain valid"
+            );
+        }
+    }
+
+    fn candidate_without_security_profile(
+        status: &str,
+        approval_type: &str,
+    ) -> TechnicalBaselineCandidateAgentWritable {
+        serde_json::from_value(json!({
+            "status": status,
+            "source": "agent_recommended_for_new_project",
+            "projectKind": "new_project",
+            "scope": "project",
+            "stack": {},
+            "securityProfiles": [],
+            "constraints": [],
+            "evidence": [],
+            "approval": {"type": approval_type},
+            "confidence": "unknown",
+            "reasoningSummary": [],
+            "alternatives": []
+        }))
+        .expect("candidate shape")
+    }
+
+    fn candidate_with_redis_session() -> TechnicalBaselineCandidateAgentWritable {
+        let mut candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        candidate.stack = json!({
+            "tracks": {
+                "externalServices": {
+                    "status": "selected",
+                    "selection": "Redis",
+                    "providers": [{
+                        "provider": "Redis",
+                        "capabilities": [{
+                            "purpose": "session",
+                            "durability": "persistent",
+                            "startupRequirement": "required"
+                        }]
+                    }]
+                }
+            }
+        });
+        candidate
+    }
+
+    #[test]
+    fn jwt_guidance_is_dormant_and_has_no_greenfield_default() {
+        let guidance = security_profile_guidance(
+            &SecurityRequirement {
+                applies: SecurityRequirementApplicability::Required,
+                client_trust_models: vec![],
+                source_refs: vec![],
+                rationale: "test".to_string(),
+            },
+            false,
+            None,
+        );
+
+        assert_eq!(guidance["capabilityState"], json!("dormant"));
+        assert!(guidance.get("newProjectDefault").is_none());
+        assert!(guidance.get("algorithmPolicy").is_none());
+        assert!(guidance["activationRule"]
+            .as_str()
+            .expect("activation rule")
+            .contains("explicit opt-in"));
+    }
+
+    #[test]
+    fn pending_protected_baseline_can_wait_for_explicit_security_selection() {
+        let candidate = candidate_without_security_profile("needs_user_confirmation", "none");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![contracts::ClientTrustModel::ExternalApi],
+            source_refs: vec![],
+            rationale: "External clients need an explicit authentication decision.".to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "pending security selection should reach the user gate"
+        );
+    }
+
+    #[test]
+    fn redis_session_and_same_origin_browser_derive_server_session_without_jwt() {
+        let mut candidate = candidate_with_redis_session();
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![ClientTrustModel::SameOriginBrowser],
+            source_refs: vec!["req-001".to_string()],
+            rationale: "Roles are resolved from the login session.".to_string(),
+        };
+
+        derive_server_session_profile(&mut candidate, &requirement);
+
+        assert_eq!(candidate.security_profiles.len(), 1);
+        let profile = &candidate.security_profiles[0];
+        assert_eq!(profile.mechanism, SecurityMechanism::ServerSession);
+        assert_eq!(profile.transport, SecurityTransport::SameOriginCookie);
+        assert_eq!(profile.key_source, SecurityKeySource::NotApplicable);
+        assert!(profile.algorithm.is_none());
+        assert!(profile.claims.is_empty());
+        assert_eq!(candidate.status, TechnicalBaselineStatus::Confirmed);
+
+        let mut issues = Vec::new();
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+        assert!(
+            issues.is_empty(),
+            "derived session profile is valid: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn normalizes_capability_role_map_to_canonical_array() {
+        let mut stack = json!({
+            "tracks": {
+                "externalServices": {
+                    "status": "selected",
+                    "providers": [{
+                        "provider": "Redis",
+                        "capabilities": {
+                            "session": {
+                                "durability": "persistent",
+                                "startupRequirement": "required"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+
+        normalize_external_service_capability_shape(&mut stack);
+
+        assert_eq!(
+            stack["tracks"]["externalServices"]["providers"][0]["capabilities"],
+            json!([{
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }])
+        );
+    }
+
+    #[test]
+    fn redis_session_does_not_derive_for_external_api_clients() {
+        let mut candidate = candidate_with_redis_session();
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![ClientTrustModel::ExternalApi],
+            source_refs: vec![],
+            rationale: "External clients need an explicit token contract.".to_string(),
+        };
+
+        derive_server_session_profile(&mut candidate, &requirement);
+
+        assert!(candidate.security_profiles.is_empty());
+    }
+
+    #[test]
+    fn confirmed_protected_baseline_without_profile_waits_for_security_gate() {
+        let candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::Required,
+            client_trust_models: vec![contracts::ClientTrustModel::ServiceToService],
+            source_refs: vec![],
+            rationale: "Service clients need an explicit authentication decision.".to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "the submit route should return the security user gate"
+        );
+    }
+
+    #[test]
+    fn deferred_security_does_not_require_an_active_profile() {
+        let candidate = candidate_without_security_profile("confirmed", "user_confirmed");
+        let requirement = SecurityRequirement {
+            applies: SecurityRequirementApplicability::DeferredWithRisk,
+            client_trust_models: vec![contracts::ClientTrustModel::SameOriginBrowser],
+            source_refs: vec![],
+            rationale: "Authentication is deferred to a later phase with an explicit risk."
+                .to_string(),
+        };
+        let mut issues = Vec::new();
+
+        validate_security_profiles(&candidate, &requirement, &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "deferred security should not activate JWT"
+        );
+    }
 }

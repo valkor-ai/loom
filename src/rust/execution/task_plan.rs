@@ -12,11 +12,12 @@ use contracts::{
     BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
     BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
     EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
-    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
-    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
-    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
-    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
-    TaskWriteBoundary, VerificationEvidence, VerificationIntent,
+    TaskDefinitionProposalAgentWritable, TaskGroupRunState, TaskImplementationObligation, TaskKind,
+    TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanGroupProposalAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
+    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
+    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
+    TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -574,9 +575,6 @@ fn taskplan_candidate_contract_fields(
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
-        "enumRefs.implementationAction",
-        "enumRefs.verificationEvidence",
-        "enumRefs.uiQuality",
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
@@ -812,19 +810,22 @@ where
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
-    let mut groups = Vec::new();
-    let mut tasks = Vec::new();
+    let mut group_candidates = Vec::<(
+        TaskPlanGroupProposalAgentWritable,
+        Vec<TaskDefinitionProposalAgentWritable>,
+    )>::new();
+    let mut proposal_ids = BTreeSet::new();
+    let mut repair_target = outline_ref.clone();
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let mut group_value = read_project_json_value(root, &group_file)?;
-        normalize_taskplan_candidate_null_arrays(&mut group_value);
         normalize_taskplan_group_envelope(
             &mut group_value,
             &authorized.request_id,
             &delivery_id,
             &phase_id,
         );
-        let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
+        let candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
             "TASKPLAN_GROUP_SCHEMA_INVALID",
@@ -835,11 +836,25 @@ where
                 return Ok(repairable(input, authorized, group_file, vec![issue], mode));
             }
         };
-        normalize_taskplan_write_boundaries(&mut candidate.tasks, &allowed_refs);
-        issues.extend(validate_group_candidate(&candidate, group));
-        groups.push(candidate.group.clone());
-        tasks.extend(candidate.tasks);
+        let group_issues = validate_group_candidate(&candidate, group);
+        if !group_issues.is_empty() {
+            repair_target = group_file.clone();
+        }
+        issues.extend(group_issues);
+        for task in &candidate.tasks {
+            if !proposal_ids.insert(task.proposal_id.clone()) {
+                repair_target = group_file.clone();
+                issues.push(issue(
+                    "DUPLICATE_TASK_PROPOSAL_ID",
+                    "tasks[].proposalId",
+                    "Task proposal ids must be unique across the current TaskPlan generation.",
+                    Some(&group.group_id),
+                ));
+            }
+        }
+        group_candidates.push((candidate.group, candidate.tasks));
     }
+    let (mut groups, mut tasks) = materialize_task_plan_proposals(&group_candidates);
     let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
     let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
     let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
@@ -854,9 +869,10 @@ where
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements =
-        normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
+        normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs, &baseline);
     normalize_structured_verification_intents(&aac, &mut tasks);
     normalize_task_verification_detail_refs(&mut tasks, &pgc, &aac);
+    normalize_implementation_obligations(&baseline, &aac, &mut tasks);
     let code_quality_requirements =
         normalize_code_quality_requirements(&baseline, &aac, &mut tasks);
     issues.extend(validate_quality_requirement_ownership(
@@ -882,7 +898,9 @@ where
         // with no eligible owner is reported only as a generic preflight
         // failure and the agent cannot repair the missing assignment.
         issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
-        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+        issues.extend(validate_frontend_task_presence(&tasks, &aac));
+        issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
+        return Ok(repairable(input, authorized, repair_target, issues, mode));
     }
 
     issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
@@ -896,7 +914,7 @@ where
         aac.runtime_delivery.as_ref(),
     ));
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+        return Ok(repairable(input, authorized, repair_target, issues, mode));
     }
     normalize_taskplan_write_boundaries(&mut tasks, &allowed_refs);
     let now = state::store::now_string();
@@ -961,6 +979,14 @@ where
         created_at: outline.created_at.clone(),
         updated_at: now.clone(),
     };
+    let mut task_plan = task_plan;
+    for task in &mut task_plan.tasks {
+        *task = crate::task_execution::task_with_execution_guidance(
+            task.clone(),
+            &aac,
+            &pgc.planning_inputs.user_facing_language,
+        );
+    }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
@@ -1197,56 +1223,6 @@ fn normalize_taskplan_group_envelope(
     object.insert("createdAt".to_string(), json!(state::store::now_string()));
 }
 
-fn normalize_taskplan_candidate_null_arrays(raw: &mut Value) {
-    const ARRAY_FIELDS: &[&str] = &[
-        "acceptanceRefs",
-        "acceptableEvidence",
-        "affectedContractFields",
-        "conceptRefs",
-        "conceptResponsibilities",
-        "conceptVerificationIntents",
-        "consumedInterfaces",
-        "dependsOn",
-        "decisions",
-        "entities",
-        "forbiddenActions",
-        "forbiddenPaths",
-        "implementationActions",
-        "interfaces",
-        "modules",
-        "nfrs",
-        "preferredEvidence",
-        "requirementDetailRefs",
-        "requiredCodeLevelChecks",
-        "risks",
-        "scopeRefs",
-        "stateMachines",
-        "userFlows",
-        "verificationIntents",
-    ];
-    normalize_named_null_arrays(raw, ARRAY_FIELDS);
-}
-
-fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                normalize_named_null_arrays(item, array_fields);
-            }
-        }
-        Value::Object(object) => {
-            for (key, value) in object.iter_mut() {
-                if value.is_null() && array_fields.contains(&key.as_str()) {
-                    *value = Value::Array(vec![]);
-                } else {
-                    normalize_named_null_arrays(value, array_fields);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 fn validate_outline(
     outline: &TaskPlanOutlineCandidateAgentWritable,
 ) -> Vec<delivery_core::RepairIssue> {
@@ -1259,12 +1235,31 @@ fn validate_outline(
             Some("outline"),
         ));
     }
+    let mut group_ids = BTreeSet::new();
+    for group in &outline.groups {
+        if group.group_id.trim().is_empty() || !group_ids.insert(group.group_id.clone()) {
+            issues.push(issue(
+                "GROUP_PROPOSAL_ID_INVALID",
+                "outline.groups[].groupId",
+                "Each group must have a unique non-empty proposal id.",
+                Some("outline"),
+            ));
+        }
+        if group.title.trim().is_empty() || group.objective.trim().is_empty() {
+            issues.push(issue(
+                "GROUP_PROPOSAL_CONTENT_MISSING",
+                "outline.groups[]",
+                "Each group proposal must include a title and objective.",
+                Some(&group.group_id),
+            ));
+        }
+    }
     issues
 }
 
 fn validate_group_candidate(
     candidate: &TaskPlanGroupCandidateAgentWritable,
-    expected: &TaskPlanGroup,
+    expected: &TaskPlanGroupProposalAgentWritable,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let target = Some(candidate.group.group_id.as_str());
@@ -1284,51 +1279,185 @@ fn validate_group_candidate(
             target,
         ));
     }
-    let task_ids = candidate
-        .tasks
-        .iter()
-        .map(|task| task.task_id.clone())
-        .collect::<Vec<_>>();
-    if task_ids != expected.task_ids {
-        issues.push(issue(
-            "TASK_IDS_MISMATCH",
-            "group.taskIds",
-            "TaskPlan group taskIds must equal the task ids in its group file.",
-            target,
-        ));
-    }
     for task in &candidate.tasks {
-        if task.group_id != candidate.group.group_id {
-            issues.push(issue(
-                "TASK_GROUP_ID_MISMATCH",
-                "tasks[].groupId",
-                "Each task.groupId must equal its group.groupId.",
-                target,
-            ));
-        }
-        if !task
-            .write_boundary
-            .forbidden_paths
-            .iter()
-            .any(|path| path == ".loom")
+        if task.proposal_id.trim().is_empty()
+            || task.title.trim().is_empty()
+            || task.objective.trim().is_empty()
         {
             issues.push(issue(
-                "WRITE_BOUNDARY_MISSING_LOOM",
-                "tasks[].writeBoundary.forbiddenPaths",
-                "Each task must protect .loom from source edits.",
+                "TASK_PROPOSAL_CONTENT_MISSING",
+                "tasks[]",
+                "Each task proposal must include a unique proposalId, title, and objective.",
                 target,
             ));
         }
-        if task.verification_intents.is_empty() {
+        if task
+            .task_kind_hint
+            .as_deref()
+            .is_some_and(|hint| parse_task_kind_hint(hint).is_none())
+        {
             issues.push(issue(
-                "VERIFICATION_INTENTS_REQUIRED",
-                "tasks[].verificationIntents",
-                "Each task must include verification intents.",
+                "TASK_KIND_HINT_INVALID",
+                "tasks[].taskKindHint",
+                "taskKindHint must be one of the TaskKind enum values; MCP derives the canonical task kind and actions from it.",
                 target,
             ));
         }
     }
     issues
+}
+
+fn materialize_task_plan_proposals(
+    candidates: &[(
+        TaskPlanGroupProposalAgentWritable,
+        Vec<TaskDefinitionProposalAgentWritable>,
+    )],
+) -> (Vec<TaskPlanGroup>, Vec<TaskDefinition>) {
+    let mut group_ids = BTreeMap::new();
+    let mut used_group_ids = BTreeSet::<String>::new();
+    for (index, (group, _)) in candidates.iter().enumerate() {
+        let proposal_id = if group.group_id.trim().is_empty() {
+            format!("proposal-{index}")
+        } else {
+            group.group_id.clone()
+        };
+        let preferred = normalized_identifier(&proposal_id);
+        let canonical =
+            next_unique_identifier(&preferred, used_group_ids.iter().map(String::as_str));
+        used_group_ids.insert(canonical.clone());
+        group_ids.insert(group.group_id.clone(), canonical);
+    }
+
+    let mut task_ids = BTreeMap::new();
+    let mut used_task_ids = BTreeSet::<String>::new();
+    for (_, proposals) in candidates {
+        for (index, proposal) in proposals.iter().enumerate() {
+            let proposal_id = if proposal.proposal_id.trim().is_empty() {
+                format!("proposal-{index}")
+            } else {
+                proposal.proposal_id.clone()
+            };
+            let preferred = normalized_identifier(&proposal_id);
+            let canonical =
+                next_unique_identifier(&preferred, used_task_ids.iter().map(String::as_str));
+            used_task_ids.insert(canonical.clone());
+            task_ids.insert(proposal_id, canonical);
+        }
+    }
+
+    let groups = candidates
+        .iter()
+        .map(|(group, proposals)| {
+            let group_id = group_ids
+                .get(&group.group_id)
+                .cloned()
+                .unwrap_or_else(|| "group-unassigned".to_string());
+            TaskPlanGroup {
+                group_id,
+                title: group.title.clone(),
+                objective: group.objective.clone(),
+                depends_on: group
+                    .depends_on
+                    .iter()
+                    .filter_map(|dependency| group_ids.get(dependency).cloned())
+                    .collect(),
+                scope_refs: Vec::new(),
+                acceptance_refs: Vec::new(),
+                task_ids: proposals
+                    .iter()
+                    .filter_map(|proposal| task_ids.get(&proposal.proposal_id).cloned())
+                    .collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut tasks = Vec::new();
+    for (group, proposals) in candidates {
+        let canonical_group_id = group_ids
+            .get(&group.group_id)
+            .cloned()
+            .unwrap_or_else(|| "group-unassigned".to_string());
+        for proposal in proposals {
+            let proposal_id = proposal.proposal_id.clone();
+            let task_id = task_ids.get(&proposal_id).cloned().unwrap_or_else(|| {
+                format!(
+                    "task-{}-unassigned",
+                    normalized_identifier(&canonical_group_id)
+                )
+            });
+            let task_kind = proposal
+                .task_kind_hint
+                .as_deref()
+                .and_then(parse_task_kind_hint)
+                .unwrap_or(TaskKind::FeatureIncrement);
+            let objective = if proposal.objective.trim().is_empty() {
+                proposal.description.clone()
+            } else {
+                proposal.objective.clone()
+            };
+            tasks.push(TaskDefinition {
+                task_id,
+                group_id: canonical_group_id.clone(),
+                title: proposal.title.clone(),
+                task_kind,
+                implementation_actions: implementation_actions_for_task_kind(task_kind),
+                implementation_obligations: Vec::new(),
+                objective,
+                depends_on: proposal
+                    .depends_on
+                    .iter()
+                    .filter_map(|dependency| task_ids.get(dependency).cloned())
+                    .collect(),
+                scope_refs: Vec::new(),
+                acceptance_refs: Vec::new(),
+                requirement_detail_refs: Vec::new(),
+                write_boundary: TaskWriteBoundary {
+                    forbidden_paths: vec![".loom".to_string()],
+                    artifact_refs: TaskArtifactRefs::default(),
+                },
+                verification_intents: Vec::new(),
+                concept_refs: Vec::new(),
+                concept_responsibilities: Vec::new(),
+                concept_verification_intents: Vec::new(),
+                frontend_experience_requirement: None,
+                runtime_delivery_requirement: None,
+                engineering_quality_requirement_refs: Vec::new(),
+                architecture_quality_requirement_refs: Vec::new(),
+                api_contract_requirement_refs: Vec::new(),
+                code_quality_requirement_refs: Vec::new(),
+            });
+        }
+    }
+    (groups, tasks)
+}
+
+fn parse_task_kind_hint(value: &str) -> Option<TaskKind> {
+    serde_json::from_value(json!(value.trim())).ok()
+}
+
+fn implementation_actions_for_task_kind(task_kind: TaskKind) -> Vec<ImplementationAction> {
+    match task_kind {
+        TaskKind::DataModelIncrement => vec![
+            ImplementationAction::CreateOrUpdateEntity,
+            ImplementationAction::CreateOrUpdatePersistence,
+            ImplementationAction::CreateEntityRepository,
+        ],
+        TaskKind::InterfaceIncrement => vec![ImplementationAction::CreateOrUpdateInterface],
+        TaskKind::UiFlowIncrement | TaskKind::FrontendExperience => vec![
+            ImplementationAction::CreateOrUpdateUiFlow,
+            ImplementationAction::ImplementFrontendExperienceContract,
+        ],
+        TaskKind::IntegrationIncrement => vec![ImplementationAction::WireReferenceInApiOrUi],
+        TaskKind::RuntimeDelivery | TaskKind::RuntimeDeliveryClosure => {
+            vec![ImplementationAction::ImplementRuntimeDeliveryContract]
+        }
+        TaskKind::BrowserQualityClosure | TaskKind::VerificationIncrement => {
+            vec![ImplementationAction::AddOrUpdateTests]
+        }
+        TaskKind::ConfigurationSupport => vec![ImplementationAction::AddOrUpdateConfig],
+        TaskKind::RefactorSupport => vec![ImplementationAction::RefactorSupportingCode],
+        TaskKind::FeatureIncrement => vec![ImplementationAction::CreateOrUpdateBusinessRule],
+    }
 }
 
 fn validate_taskplan_graph(
@@ -1715,7 +1844,181 @@ fn canonicalize_task_ownership(
     canonicalize_acceptance_owners(tasks, pgc);
     normalize_artifact_refs(tasks, aac);
     canonicalize_workflow_closure_owners(tasks, aac);
+    derive_api_interface_ownership(tasks, aac);
+    derive_consumed_interface_ownership(tasks, aac);
     canonicalize_group_ownership(groups, tasks);
+}
+
+fn derive_api_interface_ownership(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let interfaces = aac
+        .interfaces
+        .iter()
+        .filter(|interface| is_http_api_interface(interface))
+        .filter_map(|interface| {
+            string_at(interface, "interfaceId").map(|interface_id| (interface_id, interface))
+        })
+        .collect::<Vec<_>>();
+    if interfaces.is_empty() {
+        return;
+    }
+
+    let owner_indices = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task_can_own_api_interface(task))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if owner_indices.is_empty() {
+        return;
+    }
+
+    for (interface_id, interface) in interfaces {
+        let interface_modules = string_array_at(interface, "moduleRefs")
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut candidates = owner_indices
+            .iter()
+            .copied()
+            .filter_map(|index| {
+                let task = &tasks[index];
+                let module_match = task
+                    .write_boundary
+                    .artifact_refs
+                    .modules
+                    .iter()
+                    .filter(|module| interface_modules.contains(*module))
+                    .count() as u32;
+                Some((
+                    index,
+                    module_match,
+                    task_owner_rank(task),
+                    task.task_id.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let matching = candidates
+            .iter()
+            .filter(|(_, module_match, _, _)| *module_match > 0)
+            .map(|(index, _, _, _)| *index)
+            .collect::<BTreeSet<_>>();
+        if !matching.is_empty() {
+            candidates.retain(|(index, _, _, _)| matching.contains(index));
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        let Some((owner_index, _, _, _)) = candidates.first() else {
+            continue;
+        };
+        push_unique(
+            &mut tasks[*owner_index].write_boundary.artifact_refs.interfaces,
+            interface_id,
+        );
+    }
+}
+
+fn task_can_own_api_interface(task: &TaskDefinition) -> bool {
+    !task_is_frontend_task(task) && matches!(task.task_kind, TaskKind::InterfaceIncrement)
+        || (!task_is_frontend_task(task)
+            && task.implementation_actions.iter().any(|action| {
+                matches!(
+                    action,
+                    ImplementationAction::CreateOrUpdateInterface
+                        | ImplementationAction::CreateEntityCrud
+                )
+            }))
+}
+
+fn derive_consumed_interface_ownership(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let accepted_interfaces = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| string_at(interface, "interfaceId"))
+        .collect::<BTreeSet<_>>();
+    if accepted_interfaces.is_empty() {
+        return;
+    }
+
+    let closure_interfaces = workflow_closure_requirements(aac)
+        .iter()
+        .flat_map(|requirement| string_array_at(requirement, "interfaceRefs"))
+        .collect::<BTreeSet<_>>();
+    let frontend_interfaces = aac
+        .frontend_experience
+        .as_ref()
+        .map(|frontend| {
+            array_at(frontend, "operationPaths")
+                .into_iter()
+                .flat_map(|path| string_array_at(path, "interfaceRefs"))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    for task in tasks.iter_mut() {
+        if !task_can_consume_api_contract(task) {
+            continue;
+        }
+        let mut consumed = task
+            .write_boundary
+            .artifact_refs
+            .consumed_interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if task_is_frontend_task(task) {
+            if let Some(frontend) = aac.frontend_experience.as_ref() {
+                let (_, _, _, _, _, interfaces) = task_owned_frontend_ids(task, aac, frontend);
+                consumed.extend(interfaces);
+            }
+            // Frontend operation paths may describe their API binding through
+            // the structured behavior flow rather than repeating
+            // `interfaceRefs` on every path. Closure requirements are the
+            // canonical bridge for that shape.
+            consumed.extend(closure_interfaces.iter().cloned());
+            consumed.extend(frontend_interfaces.iter().cloned());
+            if consumed.is_empty() {
+                // A frontend requirement without an explicit operation-path
+                // binding still consumes the accepted phase API surface. This
+                // is a structured absence fallback, not a prose or framework
+                // keyword inference; later ownership filtering removes any
+                // interface the same task owns.
+                consumed.extend(accepted_interfaces.iter().cloned());
+            }
+        } else if matches!(
+            task.task_kind,
+            TaskKind::IntegrationIncrement
+                | TaskKind::VerificationIncrement
+                | TaskKind::BrowserQualityClosure
+        ) {
+            consumed.extend(closure_interfaces.iter().cloned());
+            if consumed.is_empty() {
+                consumed.extend(accepted_interfaces.iter().cloned());
+            }
+        }
+        let owned = task
+            .write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        task.write_boundary.artifact_refs.consumed_interfaces = consumed
+            .into_iter()
+            .filter(|interface| {
+                accepted_interfaces.contains(interface) && !owned.contains(interface)
+            })
+            .collect();
+    }
 }
 
 fn canonicalize_group_ownership(groups: &mut [TaskPlanGroup], tasks: &[TaskDefinition]) {
@@ -2121,12 +2424,7 @@ fn task_is_workflow_closure_artifact_owner(
     artifact_ref: &str,
     aac: &ArchitectureArtifactContract,
 ) -> bool {
-    if !task.frontend_experience_requirement.is_some()
-        || !task
-            .implementation_actions
-            .iter()
-            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
-    {
+    if !task_is_frontend_task(task) {
         return false;
     }
     workflow_closure_requirements(aac)
@@ -2139,16 +2437,7 @@ fn task_is_workflow_closure_artifact_owner(
                     .iter()
                     .any(|reference| reference == artifact_ref);
             (workflow_matches || interface_matches)
-                && requirement
-                    .get("workflowRef")
-                    .and_then(Value::as_str)
-                    .is_some_and(|workflow_ref| {
-                        task.write_boundary
-                            .artifact_refs
-                            .user_flows
-                            .iter()
-                            .any(|reference| reference == workflow_ref)
-                    })
+                && workflow_closure_task_scope_score(task, requirement, aac) > 0
         })
 }
 
@@ -2202,16 +2491,13 @@ fn canonicalize_workflow_closure_owners(
             .enumerate()
             .filter(|(_, task)| {
                 is_business_owner_task(task)
-                    && task.frontend_experience_requirement.is_some()
-                    && task
-                        .write_boundary
-                        .artifact_refs
-                        .user_flows
-                        .iter()
-                        .any(|reference| reference == workflow_ref)
-                    && task.implementation_actions.iter().any(|action| {
+                    && task_is_frontend_task(task)
+                    && (task.implementation_actions.iter().any(|action| {
                         matches!(action, ImplementationAction::WireReferenceInApiOrUi)
-                    })
+                    }) || matches!(
+                        task.task_kind,
+                        TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
+                    ))
             })
             .map(|(index, task)| {
                 let acceptance_match =
@@ -2226,7 +2512,10 @@ fn canonicalize_workflow_closure_owners(
                 }) as u32;
                 (
                     index,
-                    task_owner_rank(task) + acceptance_match * 10 + intent_match * 20,
+                    task_owner_rank(task)
+                        + workflow_closure_task_scope_score(task, &requirement, aac) * 100
+                        + acceptance_match * 10
+                        + intent_match * 20,
                     task.task_id.clone(),
                 )
             })
@@ -2236,6 +2525,19 @@ fn canonicalize_workflow_closure_owners(
             continue;
         };
         let owner = &mut tasks[*owner_index];
+        // Wiring a declared frontend workflow to its accepted interfaces is a
+        // canonical closure obligation. Derive the action from the AAC
+        // relationship instead of requiring the agent to duplicate it in the
+        // proposal and later repairing a valid UI task for omitting it.
+        if !owner
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+        {
+            owner
+                .implementation_actions
+                .push(ImplementationAction::WireReferenceInApiOrUi);
+        }
         push_unique(
             &mut owner.write_boundary.artifact_refs.user_flows,
             workflow_ref.to_string(),
@@ -2253,6 +2555,61 @@ fn canonicalize_workflow_closure_owners(
             }
         }
     }
+}
+
+fn workflow_closure_task_scope_score(
+    task: &TaskDefinition,
+    requirement: &Value,
+    aac: &ArchitectureArtifactContract,
+) -> u32 {
+    let workflow_ref = requirement.get("workflowRef").and_then(Value::as_str);
+    let required_interfaces = string_array_at(requirement, "interfaceRefs");
+    let required_acceptance = string_array_at(requirement, "acceptanceRefs");
+    let required_modules = string_array_at(requirement, "moduleRefs");
+    task.requirement_detail_refs
+        .iter()
+        .filter_map(|detail_id| {
+            aac.detail_coverage
+                .iter()
+                .find(|coverage| &coverage.detail_id == detail_id)
+        })
+        .map(|coverage| {
+            let mut score = 0;
+            if workflow_ref.is_some_and(|reference| {
+                coverage
+                    .artifact_refs
+                    .user_flows
+                    .iter()
+                    .any(|item| item == reference)
+            }) {
+                score += 4;
+            }
+            if coverage.artifact_refs.interfaces.iter().any(|item| {
+                required_interfaces
+                    .iter()
+                    .any(|reference| reference == item)
+            }) {
+                score += 3;
+            }
+            if task.acceptance_refs.iter().any(|item| {
+                required_acceptance
+                    .iter()
+                    .any(|reference| reference == item)
+            }) {
+                score += 2;
+            }
+            if coverage
+                .artifact_refs
+                .modules
+                .iter()
+                .any(|item| required_modules.iter().any(|reference| reference == item))
+            {
+                score += 1;
+            }
+            score
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn accepted_artifact_ref_sets(
@@ -3151,7 +3508,7 @@ fn artifact_ref_owner_score(
 
 fn structured_task_kind_owner_score(
     task: &TaskDefinition,
-    detail: &RequirementDetailItem,
+    _detail: &RequirementDetailItem,
     coverage: &ArchitectureDetailCoverageEntry,
 ) -> u32 {
     let refs = &coverage.artifact_refs;
@@ -3163,7 +3520,7 @@ fn structured_task_kind_owner_score(
         || !refs.frontend_operation_paths.is_empty();
     let has_flow = !refs.user_flows.is_empty();
     let has_state = !refs.state_machines.is_empty();
-    let mut score = 0;
+    let mut score: u32 = 0;
     if has_data && task_directly_owns_persistence_mapping(task) {
         score += 16;
     }
@@ -3186,17 +3543,11 @@ fn structured_task_kind_owner_score(
     }
     if !has_data && !has_api && !has_ui && !has_flow && !has_state {
         score += match task.task_kind {
-            TaskKind::FeatureIncrement | TaskKind::IntegrationIncrement => 6,
-            TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
-                if task_is_frontend_task(task) =>
-            {
-                6
-            }
-            TaskKind::InterfaceIncrement
-                if detail.impact_tags.iter().any(|tag| tag == "interface") =>
-            {
-                6
-            }
+            TaskKind::FeatureIncrement => 6,
+            TaskKind::InterfaceIncrement if task_owns_interface_behavior(task) => 5,
+            TaskKind::IntegrationIncrement => 3,
+            // A frontend task is not the owner of a generic requirement
+            // unless the accepted detail carries a frontend impact.
             _ => 0,
         };
     }
@@ -3208,7 +3559,7 @@ fn semantic_detail_owner_score(
     detail: &RequirementDetailItem,
     coverage: &ArchitectureDetailCoverageEntry,
 ) -> u32 {
-    let mut score = 0;
+    let mut score: u32 = 0;
     if (detail.impact_tags.iter().any(|tag| tag == "data_model")
         || detail.lifecycle_stage == "create")
         && task_directly_owns_persistence_mapping(task)
@@ -3237,6 +3588,39 @@ fn semantic_detail_owner_score(
     }
     if !coverage.artifact_refs.user_flows.is_empty() && task_owns_business_flow_behavior(task) {
         score += 3;
+    }
+    // These are structured requirement facts. They are the deterministic
+    // fallback when AAC has not attached a concrete artifact to a detail.
+    match detail.lifecycle_stage.as_str() {
+        "state_change" | "approve_or_process" => {
+            if task_owns_interface_behavior(task) {
+                score += 10;
+            }
+            if task_owns_business_flow_behavior(task) {
+                score += 4;
+            }
+        }
+        "create" | "update" | "query_select" => {
+            if task_directly_owns_persistence_mapping(task) {
+                score += 8;
+            }
+            if task_owns_interface_behavior(task) {
+                score += 5;
+            }
+        }
+        _ => {}
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "frontend") {
+        if task_is_frontend_task(task) {
+            score += 24;
+        } else {
+            score = score.saturating_sub(20);
+        }
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "data_model")
+        && task_directly_owns_persistence_mapping(task)
+    {
+        score += 10;
     }
     score
 }
@@ -3936,18 +4320,20 @@ fn validate_requirement_detail_assignments(
     if covered_detail_ids.is_empty() {
         return Vec::new();
     }
-    let task_detail_ids = tasks
-        .iter()
-        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let verification_detail_ids = tasks
+    let task_detail_owners = tasks
         .iter()
         .flat_map(|task| {
-            task.verification_intents
+            task.requirement_detail_refs
                 .iter()
-                .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+                .map(|detail_id| (detail_id.clone(), task.task_id.clone()))
         })
-        .collect::<BTreeSet<_>>();
+        .fold(
+            BTreeMap::<String, Vec<String>>::new(),
+            |mut owners, (detail, task)| {
+                owners.entry(detail).or_default().push(task);
+                owners
+            },
+        );
 
     let mut issues = Vec::new();
     for detail in pgc
@@ -3959,19 +4345,43 @@ fn validate_requirement_detail_assignments(
         if !covered_detail_ids.contains(&detail.detail_id) {
             continue;
         }
-        if !task_detail_ids.contains(&detail.detail_id) {
+        let owners = task_detail_owners
+            .get(&detail.detail_id)
+            .cloned()
+            .unwrap_or_default();
+        if owners.is_empty() {
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].requirementDetailRefs",
-                "Every covered current-phase requirement detail must be assigned to at least one task.",
+                "Every covered current-phase requirement detail must have exactly one MCP-derived implementation owner.",
+                Some(&detail.detail_id),
+            ));
+        } else if owners.len() != 1 {
+            issues.push(issue(
+                "DETAIL_TASK_OWNERSHIP_CONFLICT",
+                "tasks[].requirementDetailRefs",
+                "A requirement detail must be owned by exactly one implementation task; verification and closure tasks must not duplicate the business owner.",
                 Some(&detail.detail_id),
             ));
         }
-        if !verification_detail_ids.contains(&detail.detail_id) {
+        let verification_owned = owners.first().is_some_and(|owner_id| {
+            tasks
+                .iter()
+                .find(|task| &task.task_id == owner_id)
+                .is_some_and(|task| {
+                    task.verification_intents.iter().any(|intent| {
+                        intent
+                            .requirement_detail_refs
+                            .iter()
+                            .any(|item| item == &detail.detail_id)
+                    })
+                })
+        });
+        if !verification_owned {
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].verificationIntents[].requirementDetailRefs",
-                "Every covered current-phase requirement detail must be assigned to at least one verification intent.",
+                "The owning implementation task must include each covered detail in an assigned verification intent.",
                 Some(&detail.detail_id),
             ));
         }
@@ -4487,6 +4897,7 @@ fn materialize_browser_quality_closure(
         title: "Verify browser quality closure".to_string(),
         task_kind: TaskKind::BrowserQualityClosure,
         implementation_actions,
+        implementation_obligations: Vec::new(),
         objective: "Create or adapt the task-scoped browser checks and close required rendered, interaction, and workflow evidence.".to_string(),
         depends_on: Vec::new(),
         scope_refs: Vec::new(),
@@ -5857,34 +6268,29 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "groupedOutputRules": [
             "First write outputContract.outlineFile.",
             "Then write one group file per outline.groups[].groupId using outputContract.groupFilePattern.",
-            "Do not write the accepted final TaskPlan artifact."
+            "Do not write the accepted final TaskPlan artifact.",
+            "The outline and group files are semantic proposals only; Loom materializes canonical task and group ids after submission."
         ],
         "scopeAndReferenceRules": [
-            "Use only refs from allowedRefs.",
+            "Use the transferred detail and architecture context to describe task intent, but do not copy scope refs, acceptance refs, artifact refs, implementation actions, verification ids, or quality fields into proposals.",
             "Do not implement deferred or excluded scope.",
             "Keep next-phase seeds in deferred scope or next-phase preview only; do not create executable tasks for them."
         ],
         "writeBoundaryRules": [
-            "Every task.writeBoundary.forbiddenPaths must include .loom.",
+            "TaskPlan proposals contain no writeBoundary. MCP creates the .loom exclusion and canonical artifact ownership after acceptance.",
             "Project source edits happen only during TaskExecution, not during TaskPlan generation."
         ],
         "verificationEvidenceRules": [
-            "verificationIntents must use enumRefs.verificationEvidence.",
-            "Each implementation task must have at least one verification intent.",
-            "Every covered current-phase detailId from the detailId column in contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
-            "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
-            "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
-            "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
-            "Avoid broad snapshots or weak no-op checks as the primary verification evidence.",
-            "For a task with browser-owned UI surfaces, workflows, actions, states, rendered viewport rules, or Playwright suite setup, mark each verification intent that truly requires a browser with browser_automation in acceptableEvidence. Do not attach browser_automation to build, lint, unit-only, API-only, or static verification intents."
+            "Do not write verificationIntents in proposals. MCP derives one or more stable verification intents from accepted ownership and architecture behavior.",
+            "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation."
         ],
         "detailOwnershipRules": {
-            "source": "contextProjection.requirementDetailTransfer.requirementDetailAssignment.items",
-            "assignmentRule": "For every covered current-phase detail row, choose the task that owns the matching artifactRefHints through task.writeBoundary.artifactRefs. Use kind, impactTags, and lifecycleStage to break ties between implementation tasks.",
-            "ownerTaskBoundary": "Assign business requirement details to implementation owner tasks, not broad verification, runtime closure, or handoff tasks.",
-            "verificationRule": "After assigning a detail to a task, include the same detailId in that task's verificationIntents[].requirementDetailRefs.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically assigns each covered detail to exactly one owner task (the canonical implementation owner) and removes duplicate detail, scope, acceptance, and artifact ownership from verification or closure tasks.",
-            "artifactOwnershipNormalization": "When candidate tasks repeat the same accepted artifact ref, Loom keeps the detail-derived owner; otherwise it selects one deterministic implementation owner before deriving quality and API requirements."
+            "source": "accepted AAC detail coverage, module ownership, interface provider/consumer relations, and semantic proposal kind hints",
+            "assignmentRule": "The agent proposes semantic task slices only. Loom assigns every covered detail, module, entity, interface, flow, and state artifact to one canonical implementation owner before creating the final TaskPlan.",
+            "ownerTaskBoundary": "Business requirements belong to implementation owner tasks; verification, runtime closure, and browser closure tasks receive only consumed inputs and derived verification scope.",
+            "verificationRule": "Loom derives verification intents after ownership assignment; agents do not repeat detail or artifact ids.",
+            "acceptNormalization": "loom.taskPlanAcceptFile creates canonical task ids, artifact refs, scope refs, acceptance refs, implementation actions, obligations, and verification intents from accepted contracts and proposal boundaries.",
+            "artifactOwnershipNormalization": "No candidate artifact refs are accepted or discarded. The canonical owner projection is created once from AAC ownership facts."
         },
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",
@@ -5968,7 +6374,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "dependencyAbstraction": "Use implement_dependency_abstraction only for a task that owns a consumer-facing interface/protocol/trait/adapter seam with concrete consumers, implementations, lifecycle/error semantics, and verification; do not create it only to mirror one implementation.",
                 "moduleStructure": "Use refactor_module_structure only for a task that owns module/package/project boundaries, entry-point placement, import visibility, workspace/module files, build tags, generated-code ownership, or dependency direction and verifies affected build targets.",
                 "runtimePerformance": "Use optimize_runtime_performance only for a task that owns a measured CPU, allocation, memory-layout, throughput, latency, binary-size, or runtime resource bottleneck and its benchmark/profile plus correctness evidence.",
-                "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
+                "security": "A task owning an interface authPolicy or an application interaction with required/optional authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization. deferred_with_risk records a risk without creating current-phase authentication work.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
                 "externalIntegration": "A task owning an external_adapter application interaction uses implement_external_service_integration.",
@@ -5988,6 +6394,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "persistenceTest": ["add_or_update_persistence_tests"]
             },
             "dialectRule": "When the accepted persistence provider is MySQL or PostgreSQL, MCP adds only the provider overlay matching the assigned persistence subject. MariaDB is not silently treated as MySQL.",
+            "mybatisPlusRule": "When the accepted dataAccess selection is MyBatis Plus, MCP emits the mybatisplus reference group only for task-owned persistence capabilities. Agents must not select MyBatis-Plus references, JPA references, MyBatis-Flex, or plain MyBatis guidance themselves.",
             "nonSelectionRule": "Do not attach framework references solely because a language or framework is present in TechnicalBaseline. Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
         },
         "architectureQualityRules": {
@@ -6033,7 +6440,6 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "kind": "language_implementation_quality",
         "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
         "derivationAuthority": "loom.taskPlanAcceptFile derives reference groups and referenceLoadPlan from codeStackSignals plus accepted task ownership.",
-        "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
         "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
     })
@@ -6069,7 +6475,6 @@ fn api_contract_requirement_template(interfaces: &[Value]) -> Value {
         "requirementId": "api-contract-current-001",
         "kind": "api_contract",
         "interfaceRefs": interface_refs,
-        "implementationObligations": api_contract_implementation_obligations(),
         "verificationObligations": api_contract_verification_obligations(),
         "taskRefRule": "Loom attaches generated requirements through apiContractRequirementRefs during accept for API implementation, client binding, integration, and verification tasks; agents must not write that field or duplicate full API requirements inside every task."
     })
@@ -6141,13 +6546,6 @@ fn normalize_architecture_quality_requirements(
             decision_refs,
             nfr_refs,
             risk_refs,
-            implementation_obligations: vec![
-                "Respect referenced architecture decisions in the task-owned implementation."
-                    .to_string(),
-                "Implement referenced risk mitigations when the task owns affected code or configuration."
-                    .to_string(),
-                "Keep referenced NFRs verifiable through task verification evidence.".to_string(),
-            ],
             verification_obligations: vec![
                 "Use task.verificationIntents as verification id source.".to_string(),
                 "Record architectureQualityEvidence for every referenced architecture quality requirement."
@@ -6272,6 +6670,7 @@ fn normalize_api_contract_requirements(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
     allowed_refs: &Value,
+    baseline: &contracts::TechnicalBaselineContract,
 ) -> Vec<ApiContractRequirement> {
     let http_api_refs = aac
         .interfaces
@@ -6348,8 +6747,27 @@ fn normalize_api_contract_requirements(
             requirement_id,
             kind: "api_contract".to_string(),
             applies_to_task_ids: vec![task.task_id.clone()],
-            interface_refs,
-            implementation_obligations: api_contract_implementation_obligations(),
+            interface_refs: interface_refs.clone(),
+            security_profile_refs: interface_refs
+                .iter()
+                .filter_map(|interface_ref| {
+                    aac.interfaces
+                        .iter()
+                        .find(|interface| {
+                            string_at(interface, "interfaceId").as_deref() == Some(interface_ref)
+                        })
+                        .and_then(|interface| {
+                            interface
+                                .pointer("/authPolicy/securityProfileRef")
+                                .and_then(Value::as_str)
+                                .filter(|profile_ref| !profile_ref.trim().is_empty())
+                                .map(str::to_string)
+                        })
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            reference_load_plan: api_security_reference_load_plan(aac, &interface_refs, baseline),
             verification_obligations: api_contract_verification_obligations(),
         });
     }
@@ -6359,6 +6777,634 @@ fn normalize_api_contract_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn api_security_reference_load_plan(
+    aac: &ArchitectureArtifactContract,
+    interface_refs: &[String],
+    baseline: &contracts::TechnicalBaselineContract,
+) -> Vec<ReferenceLoadPlanItem> {
+    let profile_mechanisms = baseline
+        .security_profiles
+        .iter()
+        .map(|profile| (profile.profile_id.as_str(), profile.mechanism))
+        .collect::<BTreeMap<_, _>>();
+    let protected_profiles = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| {
+            interface_refs
+                .iter()
+                .any(|interface_ref| {
+                    string_at(interface, "interfaceId").as_deref() == Some(interface_ref)
+                })
+                .then(|| {
+                    interface
+                        .pointer("/authPolicy/required")
+                        .and_then(Value::as_str)
+                        .filter(|required| matches!(*required, "required" | "optional"))
+                        .and_then(|_| interface.pointer("/authPolicy/securityProfileRef"))
+                        .and_then(Value::as_str)
+                        .and_then(|profile_ref| profile_mechanisms.get(profile_ref).copied())
+                })
+        })
+        .collect::<Vec<_>>();
+    if protected_profiles.is_empty() {
+        return vec![];
+    }
+    let mut plan = vec![ReferenceLoadPlanItem {
+        ref_id: "tech.api.security".to_string(),
+        path: "tech/api/security.md".to_string(),
+        reason: "Selected API security contract for protected interfaces.".to_string(),
+    }];
+    if protected_profiles
+        .iter()
+        .any(|mechanism| matches!(mechanism, Some(contracts::SecurityMechanism::BearerJwt)))
+    {
+        plan.push(ReferenceLoadPlanItem {
+            ref_id: "tech.api.jwt".to_string(),
+            path: "tech/api/jwt.md".to_string(),
+            reason: "Selected JWT API contract for interfaces bound to a bearer JWT profile."
+                .to_string(),
+        });
+    }
+    plan
+}
+
+fn normalize_implementation_obligations(
+    baseline: &contracts::TechnicalBaselineContract,
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) {
+    let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    let persistence_selected = has_persistence_quality_signal(&stack_signals)
+        && !stack_signals
+            .get("persistence")
+            .is_some_and(|value| selection_is_absent(value));
+    for task in tasks {
+        let mut obligations = Vec::new();
+        let artifacts = &task.write_boundary.artifact_refs;
+
+        for action in &task.implementation_actions {
+            if action_is_persistence(*action) && !persistence_selected {
+                continue;
+            }
+            let Some((kind, outcome, evidence)) = implementation_obligation_for_action(*action)
+            else {
+                continue;
+            };
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                kind,
+                outcome,
+                evidence,
+                artifacts.clone(),
+                obligation_source_refs(task, &[]),
+            );
+        }
+
+        if !artifacts.entities.is_empty() {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "entity_contract",
+                "Implement the task-owned entities, field invariants, and serialization boundary declared by AAC.",
+                vec![VerificationEvidence::AutomatedTest, VerificationEvidence::StaticCheck],
+                artifact_refs_for(artifacts, "entities"),
+                obligation_source_refs(task, &[]),
+            );
+        }
+        if !artifacts.interfaces.is_empty() {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "interface_contract",
+                "Implement the task-owned interfaces with the accepted method, path, schemas, status behavior, and error behavior.",
+                vec![VerificationEvidence::AutomatedTest, VerificationEvidence::RuntimeApiCheck],
+                artifact_refs_for(artifacts, "interfaces"),
+                obligation_source_refs(task, &[]),
+            );
+        }
+        if !artifacts.state_machines.is_empty() {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "state_transition",
+                "Implement the task-owned state transitions and reject invalid transitions according to AAC.",
+                vec![VerificationEvidence::AutomatedTest, VerificationEvidence::RuntimeApiCheck],
+                artifact_refs_for(artifacts, "state_machines"),
+                obligation_source_refs(task, &[]),
+            );
+        }
+
+        if task_directly_owns_persistence_mapping(task) {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "persistence_mapping",
+                &format!(
+                    "Implement durable storage, data-access mapping, transaction boundaries, and readback for the accepted persistence provider{}.",
+                    stack_signals
+                        .get("dataAccess")
+                        .map(|value| format!(" `{value}`"))
+                        .unwrap_or_default()
+                ),
+                vec![VerificationEvidence::AutomatedTest, VerificationEvidence::RuntimeApiCheck, VerificationEvidence::StaticCheck],
+                artifact_refs_for(artifacts, "entities"),
+                obligation_source_refs(
+                    task,
+                    stack_signals
+                        .get("dataAccess")
+                        .into_iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                ),
+            );
+        }
+
+        let owned_interfaces = aac
+            .interfaces
+            .iter()
+            .filter(|interface| {
+                string_at(interface, "interfaceId")
+                    .is_some_and(|id| artifacts.interfaces.iter().any(|owned| owned == &id))
+            })
+            .collect::<Vec<_>>();
+        // Security belongs to the interface boundary. A persistence or domain
+        // task may touch a module that has secured interactions, but it must not
+        // inherit the API authentication obligation merely because the module
+        // is shared by that interaction.
+        let interaction_requires_security = task_owns_interface_behavior(task)
+            && task_owned_application_interactions(aac, task)
+                .iter()
+                .any(|interaction| interaction_requires_security(interaction));
+        if task_has_implementation_action(
+            task,
+            ImplementationAction::ImplementAuthenticationOrAuthorization,
+        ) || owned_interfaces
+            .iter()
+            .any(|interface| interface_requires_security(interface))
+            || interaction_requires_security
+        {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "authentication_authorization",
+                "Enforce the accepted authentication and authorization policy at the task-owned boundary and verify allowed and denied behavior.",
+                vec![VerificationEvidence::AutomatedTest, VerificationEvidence::RuntimeApiCheck, VerificationEvidence::StaticCheck],
+                artifact_refs_for(artifacts, "interfaces"),
+                obligation_source_refs(task, &[]),
+            );
+        }
+
+        if task.frontend_experience_requirement.is_some() {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "frontend_experience",
+                "Implement the task-owned frontend surfaces, actions, states, and feedback declared by AAC.",
+                vec![VerificationEvidence::BrowserAutomation, VerificationEvidence::AutomatedTest],
+                artifacts.clone(),
+                obligation_source_refs(task, &[]),
+            );
+        }
+        if task
+            .runtime_delivery_requirement
+            .as_ref()
+            .is_some_and(|requirement| requirement.applies_to_this_task)
+        {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "runtime_delivery",
+                "Implement the task-owned runtime command, configuration, and service binding required by the accepted RuntimeDelivery contract.",
+                vec![VerificationEvidence::StaticCheck, VerificationEvidence::RuntimeApiCheck],
+                artifacts.clone(),
+                obligation_source_refs(task, &[]),
+            );
+        }
+
+        if !task.code_quality_requirement_refs.is_empty() {
+            push_task_implementation_obligation(
+                &mut obligations,
+                task,
+                "reference_alignment",
+                "Implement the task using the MCP-selected language and framework references; reading a reference or running a build alone is not implementation evidence.",
+                vec![VerificationEvidence::StaticCheck, VerificationEvidence::AutomatedTest],
+                artifacts.clone(),
+                obligation_source_refs(task, &[]),
+            );
+        }
+
+        // Verification intents are MCP-owned as well. If the accepted
+        // architecture does not provide a scoped intent for an obligation,
+        // create one from the obligation itself instead of guessing by array
+        // position or attaching an unrelated last intent.
+        let missing_intents = obligations
+            .iter()
+            .filter(|obligation| {
+                !task.verification_intents.iter().any(|intent| {
+                    verification_intent_matches_obligation(intent, task)
+                        && verification_intent_matches_scope(intent, obligation)
+                        && verification_intent_matches_evidence(intent, obligation)
+                })
+            })
+            .map(|obligation| {
+                (
+                    format!(
+                        "verify-{}-{}",
+                        normalized_identifier(&task.task_id),
+                        normalized_identifier(&obligation.kind)
+                    ),
+                    obligation.acceptable_evidence.clone(),
+                    obligation.required_outcome.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (verification_id, acceptable_evidence, behavior) in missing_intents {
+            if task
+                .verification_intents
+                .iter()
+                .any(|intent| intent.verification_id == verification_id)
+            {
+                continue;
+            }
+            task.verification_intents.push(VerificationIntent {
+                verification_id,
+                acceptance_refs: task.acceptance_refs.clone(),
+                requirement_detail_refs: task.requirement_detail_refs.clone(),
+                behavior,
+                preferred_evidence: acceptable_evidence.clone(),
+                acceptable_evidence,
+            });
+        }
+
+        for obligation in obligations.iter_mut() {
+            obligation.verification_ids = verification_ids_for_obligation(task, obligation);
+        }
+        obligations.sort_by(|left, right| left.obligation_id.cmp(&right.obligation_id));
+        task.implementation_obligations = obligations;
+    }
+}
+
+fn action_is_persistence(action: ImplementationAction) -> bool {
+    matches!(
+        action,
+        ImplementationAction::CreateOrUpdatePersistence
+            | ImplementationAction::CreateEntityRepository
+            | ImplementationAction::CreateEntityMigration
+            | ImplementationAction::CreateEntityCrud
+            | ImplementationAction::CreateOrUpdatePersistenceQuery
+            | ImplementationAction::ImplementPersistenceTransaction
+            | ImplementationAction::OptimizePersistenceQuery
+            | ImplementationAction::ImplementAnalyticalQuery
+            | ImplementationAction::AddOrUpdatePersistenceTests
+            | ImplementationAction::CreateOrUpdateEntity
+    )
+}
+
+fn implementation_obligation_for_action(
+    action: ImplementationAction,
+) -> Option<(&'static str, &'static str, Vec<VerificationEvidence>)> {
+    let evidence = |behavioral: bool| {
+        if behavioral {
+            vec![
+                VerificationEvidence::AutomatedTest,
+                VerificationEvidence::RuntimeApiCheck,
+            ]
+        } else {
+            vec![
+                VerificationEvidence::StaticCheck,
+                VerificationEvidence::AutomatedTest,
+            ]
+        }
+    };
+    let result = match action {
+        ImplementationAction::CreateOrUpdatePersistence
+        | ImplementationAction::CreateEntityRepository
+        | ImplementationAction::CreateEntityMigration
+        | ImplementationAction::CreateEntityCrud
+        | ImplementationAction::CreateOrUpdatePersistenceQuery
+        | ImplementationAction::ImplementPersistenceTransaction
+        | ImplementationAction::OptimizePersistenceQuery
+        | ImplementationAction::ImplementAnalyticalQuery
+        | ImplementationAction::AddOrUpdatePersistenceTests => (
+            "persistence_mapping",
+            "Implement the task-owned persistence operation and its provider-compatible data-access behavior.",
+            evidence(true),
+        ),
+        ImplementationAction::CreateOrUpdateInterface => (
+            "interface_contract",
+            "Implement the task-owned API interface against the accepted method, schema, status, error, and security contract.",
+            evidence(true),
+        ),
+        ImplementationAction::WireReferenceInApiOrUi => (
+            "api_binding",
+            "Implement the task-owned API or client binding against the accepted interface contract.",
+            evidence(true),
+        ),
+        ImplementationAction::CreateOrUpdateStateMachine => (
+            "state_machine",
+            "Implement the task-owned state machine and its invalid-transition behavior.",
+            evidence(true),
+        ),
+        ImplementationAction::CreateOrUpdateBusinessRule => (
+            "business_rule",
+            "Implement the task-owned business rule and its blocking/error behavior.",
+            evidence(true),
+        ),
+        ImplementationAction::ImplementAuthenticationOrAuthorization => (
+            "authentication_authorization",
+            "Implement the accepted authentication and authorization policy at the task-owned boundary.",
+            evidence(true),
+        ),
+        ImplementationAction::ImplementAsyncProcessing => (
+            "async_processing",
+            "Implement the task-owned asynchronous processing, completion, retry, and failure boundary.",
+            evidence(true),
+        ),
+        ImplementationAction::ImplementCachePolicy => (
+            "cache_policy",
+            "Implement the accepted cache policy, invalidation behavior, and fallback behavior.",
+            evidence(true),
+        ),
+        ImplementationAction::ImplementExternalServiceIntegration => (
+            "external_integration",
+            "Implement the task-owned external service integration and failure handling.",
+            evidence(true),
+        ),
+        ImplementationAction::ImplementResiliencePolicy => (
+            "resilience_policy",
+            "Implement the accepted resilience policy and its bounded failure behavior.",
+            evidence(true),
+        ),
+        ImplementationAction::ConfigureServiceRoutingOrDiscovery => (
+            "service_routing",
+            "Implement the accepted service routing or discovery boundary.",
+            evidence(false),
+        ),
+        ImplementationAction::ImplementObservability => (
+            "observability",
+            "Implement the task-owned observability boundary without duplicating events across layers.",
+            evidence(false),
+        ),
+        ImplementationAction::ImplementRuntimeDeliveryContract => (
+            "runtime_delivery",
+            "Implement the task-owned runtime delivery contract.",
+            evidence(false),
+        ),
+        ImplementationAction::ImplementFrontendExperienceContract
+        | ImplementationAction::CreateOrUpdateUiFlow
+        | ImplementationAction::CreateOrUpdateFrontendNavigation
+        | ImplementationAction::ImplementReactiveClientFlow
+        | ImplementationAction::ImplementSharedClientState
+        | ImplementationAction::OptimizeFrontendPerformance
+        | ImplementationAction::ImplementServerRenderedComponent
+        | ImplementationAction::ImplementServerMutation
+        | ImplementationAction::ImplementFrontendFrameworkVersionFeature
+        | ImplementationAction::ImplementMobilePlatformBehavior
+        | ImplementationAction::ImplementClientStorage
+        | ImplementationAction::CreateEntityAdminPage => (
+            "frontend_experience",
+            "Implement the task-owned frontend behavior and its user-visible states and feedback.",
+            vec![VerificationEvidence::BrowserAutomation, VerificationEvidence::AutomatedTest],
+        ),
+        ImplementationAction::CreateOrUpdateEntity => (
+            "entity_contract",
+            "Implement the task-owned entity model and its invariants.",
+            evidence(false),
+        ),
+        ImplementationAction::ImplementEntityLifecycle => (
+            "entity_lifecycle",
+            "Implement the task-owned entity lifecycle and persistence effects.",
+            evidence(true),
+        ),
+        ImplementationAction::RefactorModuleStructure
+        | ImplementationAction::OptimizeRuntimePerformance
+        | ImplementationAction::ImplementLanguageVersionFeature
+        | ImplementationAction::ImplementGenericTypeAbstraction
+        | ImplementationAction::ImplementDependencyAbstraction
+        | ImplementationAction::MigrateFrameworkImplementation
+        | ImplementationAction::RefactorSupportingCode => (
+            "implementation_structure",
+            "Implement the task-owned code structure or framework change and keep affected behavior intact.",
+            evidence(false),
+        ),
+        ImplementationAction::AddReferenceField
+        | ImplementationAction::ValidateReferenceFormat
+        | ImplementationAction::UseFixtureOrMockData
+        | ImplementationAction::AddOrUpdateTests
+        | ImplementationAction::AddOrUpdateConfig => return None,
+    };
+    Some(result)
+}
+
+fn verification_intent_matches_obligation(
+    intent: &VerificationIntent,
+    task: &TaskDefinition,
+) -> bool {
+    intent
+        .acceptance_refs
+        .iter()
+        .any(|reference| task.acceptance_refs.iter().any(|owned| owned == reference))
+        || intent.requirement_detail_refs.iter().any(|reference| {
+            task.requirement_detail_refs
+                .iter()
+                .any(|owned| owned == reference)
+        })
+        || (intent.acceptance_refs.is_empty() && intent.requirement_detail_refs.is_empty())
+}
+
+fn verification_ids_for_obligation(
+    task: &TaskDefinition,
+    obligation: &TaskImplementationObligation,
+) -> Vec<String> {
+    let generated_id = format!(
+        "verify-{}-{}",
+        normalized_identifier(&task.task_id),
+        normalized_identifier(&obligation.kind)
+    );
+    if task
+        .verification_intents
+        .iter()
+        .any(|intent| intent.verification_id == generated_id)
+    {
+        return vec![generated_id];
+    }
+    let mut matching = task
+        .verification_intents
+        .iter()
+        .filter(|intent| {
+            verification_intent_matches_obligation(intent, task)
+                && verification_intent_matches_scope(intent, obligation)
+                && verification_intent_matches_evidence(intent, obligation)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect::<Vec<_>>();
+
+    // An empty match is intentional. The obligation normalizer creates a
+    // deterministic intent before this function is called; this function
+    // must never assign evidence by array position or by a generic fallback.
+    matching.sort();
+    matching.dedup();
+    matching
+}
+
+fn verification_intent_matches_scope(
+    intent: &VerificationIntent,
+    obligation: &TaskImplementationObligation,
+) -> bool {
+    let intent_refs = intent
+        .acceptance_refs
+        .iter()
+        .chain(intent.requirement_detail_refs.iter())
+        .collect::<BTreeSet<_>>();
+    intent_refs.is_empty()
+        || intent_refs.iter().any(|reference| {
+            obligation
+                .source_refs
+                .iter()
+                .any(|source| source == *reference)
+        })
+}
+
+fn verification_intent_matches_evidence(
+    intent: &VerificationIntent,
+    obligation: &TaskImplementationObligation,
+) -> bool {
+    obligation.acceptable_evidence.iter().any(|expected| {
+        intent
+            .preferred_evidence
+            .iter()
+            .chain(intent.acceptable_evidence.iter())
+            .any(|actual| actual == expected)
+    })
+}
+
+fn obligation_source_refs(task: &TaskDefinition, extra: &[&str]) -> Vec<String> {
+    task.acceptance_refs
+        .iter()
+        .chain(task.requirement_detail_refs.iter())
+        .map(String::as_str)
+        .chain(extra.iter().copied())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn push_task_implementation_obligation(
+    obligations: &mut Vec<TaskImplementationObligation>,
+    task: &TaskDefinition,
+    kind: &str,
+    required_outcome: &str,
+    acceptable_evidence: Vec<VerificationEvidence>,
+    artifact_refs: TaskArtifactRefs,
+    source_refs: Vec<String>,
+) {
+    let obligation_id = format!(
+        "obligation-{}-{}",
+        normalized_identifier(&task.task_id),
+        normalized_identifier(kind)
+    );
+    if obligations
+        .iter()
+        .any(|obligation| obligation.obligation_id == obligation_id)
+    {
+        return;
+    }
+    let source_refs = if obligations.is_empty() {
+        source_refs
+    } else {
+        compact_obligation_artifact_ref_set(kind, &task.write_boundary.artifact_refs)
+            .into_iter()
+            .collect()
+    };
+    obligations.push(TaskImplementationObligation {
+        obligation_id,
+        kind: kind.to_string(),
+        source_refs: compact_obligation_source_refs(source_refs),
+        artifact_refs: compact_obligation_artifact_refs(kind, artifact_refs),
+        required_outcome: required_outcome.to_string(),
+        required: true,
+        acceptable_evidence,
+        verification_ids: Vec::new(),
+        defer_policy: "must_be_satisfied_before_completed".to_string(),
+    });
+}
+
+fn compact_obligation_source_refs(source_refs: Vec<String>) -> Vec<String> {
+    source_refs
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn compact_obligation_artifact_refs(kind: &str, artifacts: TaskArtifactRefs) -> TaskArtifactRefs {
+    let mut compact = TaskArtifactRefs::default();
+    match kind {
+        "entity_contract" | "persistence_mapping" | "entity_lifecycle" => {
+            compact.modules = artifacts.modules;
+            compact.entities = artifacts.entities;
+            compact.state_machines = artifacts.state_machines;
+        }
+        "interface_contract"
+        | "api_binding"
+        | "authentication_authorization"
+        | "resilience_policy"
+        | "state_transition"
+        | "service_routing"
+        | "external_integration"
+        | "async_processing"
+        | "cache_policy" => {
+            compact.modules = artifacts.modules;
+            compact.interfaces = artifacts.interfaces;
+            compact.consumed_interfaces = artifacts.consumed_interfaces;
+        }
+        "frontend_experience" | "business_rule" => {
+            compact.modules = artifacts.modules;
+            compact.user_flows = artifacts.user_flows;
+            compact.consumed_interfaces = artifacts.consumed_interfaces;
+        }
+        "state_machine" => {
+            compact.modules = artifacts.modules;
+            compact.state_machines = artifacts.state_machines;
+        }
+        _ => compact.modules = artifacts.modules,
+    }
+    compact
+}
+
+fn compact_obligation_artifact_ref_set(
+    kind: &str,
+    artifacts: &TaskArtifactRefs,
+) -> BTreeSet<String> {
+    let compact = compact_obligation_artifact_refs(kind, artifacts.clone());
+    compact
+        .modules
+        .into_iter()
+        .chain(compact.entities)
+        .chain(compact.interfaces)
+        .chain(compact.consumed_interfaces)
+        .chain(compact.user_flows)
+        .chain(compact.state_machines)
+        .collect()
+}
+
+fn artifact_refs_for(artifacts: &TaskArtifactRefs, field: &str) -> TaskArtifactRefs {
+    let mut selected = TaskArtifactRefs::default();
+    match field {
+        "entities" => selected.entities = artifacts.entities.clone(),
+        "interfaces" => selected.interfaces = artifacts.interfaces.clone(),
+        "state_machines" => selected.state_machines = artifacts.state_machines.clone(),
+        _ => {}
+    }
+    selected
 }
 
 fn normalize_structured_verification_intents(
@@ -6554,11 +7600,10 @@ fn interface_has_idempotency(interface: &Value) -> bool {
 }
 
 fn interface_requires_auth(interface: &Value) -> bool {
-    match interface.pointer("/authPolicy/required") {
-        Some(Value::Bool(value)) => *value,
-        Some(Value::String(value)) => !matches!(value.as_str(), "" | "not_applicable" | "none"),
-        _ => false,
-    }
+    interface
+        .pointer("/authPolicy/required")
+        .and_then(Value::as_str)
+        .is_some_and(|value| matches!(value, "required" | "optional" | "deferred_with_risk"))
 }
 
 fn is_mutating_interface(method: &str) -> bool {
@@ -6598,9 +7643,6 @@ fn normalize_code_quality_requirements(
             ),
             reference_groups: selection.reference_groups.clone(),
             focus_tags: selection.focus_tags.clone(),
-            implementation_obligations: code_quality_implementation_obligations_for_selection(
-                &selection,
-            ),
             verification_obligations: code_quality_verification_obligations(),
         });
     }
@@ -6678,6 +7720,9 @@ fn code_reference_task_context(
                 && (task_quality_category_matches(aac, task, "integration")
                     || task_quality_category_matches(aac, task, "availability")
                     || task_quality_category_matches(aac, task, "reliability")));
+    let request_tracing = task_interfaces
+        .iter()
+        .any(|interface| interface_owns_operational_policy(interface, "request_id"));
     let observability =
         task_has_implementation_action(task, ImplementationAction::ImplementObservability)
             || task_quality_category_matches(aac, task, "observability")
@@ -6689,6 +7734,7 @@ fn code_reference_task_context(
         integration,
         resilience,
         observability,
+        request_tracing,
     }
 }
 
@@ -6699,14 +7745,10 @@ fn task_has_implementation_action(task: &TaskDefinition, expected: Implementatio
 }
 
 fn interface_requires_security(interface: &Value) -> bool {
-    match interface.pointer("/authPolicy/required") {
-        Some(Value::Bool(required)) => *required,
-        Some(Value::String(required)) => !matches!(
-            required.as_str(),
-            "" | "none" | "not_applicable" | "not_required" | "false"
-        ),
-        _ => false,
-    }
+    interface
+        .pointer("/authPolicy/required")
+        .and_then(Value::as_str)
+        .is_some_and(|required| matches!(required, "required" | "optional"))
 }
 
 fn interaction_requires_security(interaction: &Value) -> bool {
@@ -6714,13 +7756,21 @@ fn interaction_requires_security(interaction: &Value) -> bool {
         interaction
             .pointer("/qualityTraits/authRequirement")
             .and_then(Value::as_str),
-        Some("required" | "optional" | "deferred_with_risk")
+        Some("required" | "optional")
     )
 }
 
 fn interaction_owns_operational_policy(interaction: &Value, policy: &str) -> bool {
     interaction
         .pointer("/qualityTraits/operationalPolicies")
+        .and_then(Value::as_array)
+        .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
+}
+
+fn interface_owns_operational_policy(interface: &Value, policy: &str) -> bool {
+    interface
+        .pointer("/qualityTraits/operationalPolicies")
+        .or_else(|| interface.pointer("/operationalPolicies"))
         .and_then(Value::as_array)
         .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
 }
@@ -6783,25 +7833,6 @@ fn task_quality_category_matches(
     })
 }
 
-fn code_quality_implementation_obligations() -> Vec<String> {
-    vec![
-        "Load only the files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan for this task; do not scan the whole tech/code or tech/backend trees or infer group-to-file mappings.".to_string(),
-        "Follow existing repository structure and style before introducing new language or framework patterns.".to_string(),
-        "Keep API, UI, architecture, and persistence obligations in their own dedicated quality contracts; use code quality only for language and framework implementation discipline.".to_string(),
-    ]
-}
-
-fn code_quality_implementation_obligations_for_selection(
-    selection: &contracts::CodeReferenceSelection,
-) -> Vec<String> {
-    let mut obligations = code_quality_implementation_obligations();
-    if package_naming_policy_for_reference_groups(&selection.reference_groups).is_some() {
-        obligations.push("For JVM production source, choose a professional base package from existing package roots, build group metadata, or confirmed organization/project identity; if none exists, use app.<project_slug> and only fall back to app.generated when no stable project slug can be derived.".to_string());
-        obligations.push("Do not create or keep placeholder package roots such as com.example, org.example, com.company, com.demo, org.demo, com.sample, or org.sample in production source.".to_string());
-    }
-    obligations
-}
-
 fn code_quality_verification_obligations() -> Vec<String> {
     vec![
         "Use task.verificationIntents as verification id source.".to_string(),
@@ -6854,16 +7885,6 @@ fn task_can_consume_api_contract(task: &TaskDefinition) -> bool {
         .implementation_actions
         .iter()
         .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
-}
-
-fn api_contract_implementation_obligations() -> Vec<String> {
-    vec![
-        "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs or task-owned client/test bindings.".to_string(),
-        "Return actionable validation or business-blocking errors instead of silent success or generic server errors.".to_string(),
-        "Apply pagination, filtering, auth, and contract file obligations only when the AAC interface declares them.".to_string(),
-        "Apply each accepted request normalization rule before validation at the declared boundary.".to_string(),
-        "Keep frontend/client bindings aligned with the declared API response and error shapes when the task owns the binding.".to_string(),
-    ]
 }
 
 fn api_contract_verification_obligations() -> Vec<String> {
@@ -7044,7 +8065,8 @@ fn persistence_quality_task_ids(tasks: &[TaskDefinition]) -> Vec<String> {
 }
 
 fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
-    matches!(task.task_kind, TaskKind::DataModelIncrement)
+    !task.write_boundary.artifact_refs.entities.is_empty()
+        || matches!(task.task_kind, TaskKind::DataModelIncrement)
         || task.implementation_actions.iter().any(|action| {
             matches!(
                 action,
@@ -7057,6 +8079,7 @@ fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementPersistenceTransaction
                     | ImplementationAction::OptimizePersistenceQuery
                     | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::ImplementEntityLifecycle
                     | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
@@ -7617,8 +8640,77 @@ mod tests {
     }
 
     #[test]
-    fn taskplan_candidate_null_optional_arrays_are_normalized_before_deserialization() {
-        let mut candidate = json!({
+    fn implementation_obligations_keep_single_provenance_and_relevant_verifications() {
+        let mut task = browser_task(3);
+        task.task_kind = TaskKind::InterfaceIncrement;
+        task.frontend_experience_requirement = None;
+        task.implementation_actions = vec![
+            ImplementationAction::CreateOrUpdateInterface,
+            ImplementationAction::ImplementResiliencePolicy,
+        ];
+        task.scope_refs = vec!["scope-orders".to_string()];
+        task.acceptance_refs = vec!["accept-orders".to_string()];
+        task.requirement_detail_refs = vec![
+            "detail-orders-create".to_string(),
+            "detail-orders-retry".to_string(),
+        ];
+        task.write_boundary.artifact_refs.interfaces = vec!["api-orders".to_string()];
+
+        let mut obligations = Vec::new();
+        push_task_implementation_obligation(
+            &mut obligations,
+            &task,
+            "interface_contract",
+            "Implement the accepted interface.",
+            vec![VerificationEvidence::AutomatedTest],
+            task.write_boundary.artifact_refs.clone(),
+            obligation_source_refs(&task, &[]),
+        );
+        push_task_implementation_obligation(
+            &mut obligations,
+            &task,
+            "resilience_policy",
+            "Implement bounded retry behavior.",
+            vec![VerificationEvidence::AutomatedTest],
+            task.write_boundary.artifact_refs.clone(),
+            obligation_source_refs(&task, &[]),
+        );
+
+        assert_eq!(obligations[0].source_refs.len(), 3);
+        assert!(obligations[0]
+            .source_refs
+            .contains(&"detail-orders-create".to_string()));
+        assert!(!obligations[0]
+            .source_refs
+            .contains(&"technical-baseline".to_string()));
+        assert!(!obligations[1]
+            .source_refs
+            .contains(&"detail-orders-create".to_string()));
+        assert!(obligations[0]
+            .artifact_refs
+            .interfaces
+            .contains(&"api-orders".to_string()));
+    }
+
+    #[test]
+    fn deferred_security_does_not_create_authentication_task_signals() {
+        assert!(!interface_requires_security(&json!({
+            "authPolicy": {"required": "deferred_with_risk"}
+        })));
+        assert!(!interaction_requires_security(&json!({
+            "qualityTraits": {"authRequirement": "deferred_with_risk"}
+        })));
+        assert!(interface_requires_security(&json!({
+            "authPolicy": {"required": "required"}
+        })));
+        assert!(interaction_requires_security(&json!({
+            "qualityTraits": {"authRequirement": "optional"}
+        })));
+    }
+
+    #[test]
+    fn taskplan_candidate_nulls_are_not_silently_rewritten() {
+        let candidate = json!({
             "tasks": [{
                 "scopeRefs": null,
                 "verificationIntents": null,
@@ -7636,18 +8728,9 @@ mod tests {
             }]
         });
 
-        normalize_taskplan_candidate_null_arrays(&mut candidate);
-
-        assert_eq!(candidate["tasks"][0]["scopeRefs"], json!([]));
-        assert_eq!(candidate["tasks"][0]["verificationIntents"], json!([]));
-        assert_eq!(
-            candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"],
-            json!([])
-        );
-        assert_eq!(
-            candidate["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"],
-            json!([])
-        );
+        assert!(candidate["tasks"][0]["scopeRefs"].is_null());
+        assert!(candidate["tasks"][0]["verificationIntents"].is_null());
+        assert!(candidate["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"].is_null());
     }
 
     #[test]
@@ -7775,7 +8858,13 @@ mod tests {
             "dataModel": {},
             "interfaces": [{
                 "interfaceId": "api-orders-create",
-                "authPolicy": {"required": true}
+                "authPolicy": {
+                    "required": "required",
+                    "securityProfileRef": "security-api-default",
+                    "actorRefs": [],
+                    "permissionRefs": []
+                },
+                "qualityTraits": {"operationalPolicies": ["request_id"]}
             }, {
                 "interfaceId": "api-cache-hints-only",
                 "cachePolicy": {"strategy": "private", "validators": ["etag"]},
@@ -7890,7 +8979,9 @@ mod tests {
         assert!(context.integration);
         assert!(context.resilience);
         assert!(context.observability);
+        assert!(context.request_tracing);
         assert!(!api_policy_only_context.resilience);
+        assert!(!api_policy_only_context.request_tracing);
         assert!(!api_policy_only_context.application_architecture);
         assert_eq!(projected_interactions.len(), 2);
         assert_eq!(
@@ -7957,6 +9048,98 @@ mod tests {
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["runtimePerformance"],
             json!(["optimize_runtime_performance"])
+        );
+    }
+
+    #[test]
+    fn quality_requirements_do_not_duplicate_task_implementation_scope() {
+        let requirement = code_quality_requirement_template(&json!({"required": true}));
+        assert!(requirement.get("implementationObligations").is_none());
+        assert!(requirement.get("verificationObligations").is_some());
+    }
+
+    #[test]
+    fn implementation_obligations_use_structured_verification_refs_not_behavior_keywords() {
+        let task = TaskDefinition {
+            task_id: "task-owned".to_string(),
+            group_id: "group-owned".to_string(),
+            title: "Implement owned behavior".to_string(),
+            task_kind: TaskKind::FeatureIncrement,
+            implementation_actions: vec![],
+            implementation_obligations: vec![],
+            objective: "Implement the owned behavior".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec!["accept-owned".to_string()],
+            requirement_detail_refs: vec!["detail-owned".to_string()],
+            write_boundary: TaskWriteBoundary {
+                forbidden_paths: vec![".loom".to_string()],
+                artifact_refs: TaskArtifactRefs::default(),
+            },
+            verification_intents: vec![
+                VerificationIntent {
+                    verification_id: "verify-other".to_string(),
+                    acceptance_refs: vec!["accept-other".to_string()],
+                    requirement_detail_refs: vec!["detail-other".to_string()],
+                    behavior: "This text mentions persistence and storage but belongs elsewhere."
+                        .to_string(),
+                    preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+                    acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+                },
+                VerificationIntent {
+                    verification_id: "verify-owned".to_string(),
+                    acceptance_refs: vec!["accept-owned".to_string()],
+                    requirement_detail_refs: vec!["detail-owned".to_string()],
+                    behavior: "Verify the owned behavior.".to_string(),
+                    preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+                    acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+                },
+            ],
+            concept_refs: vec![],
+            concept_responsibilities: vec![],
+            concept_verification_intents: vec![],
+            frontend_experience_requirement: None,
+            runtime_delivery_requirement: None,
+            engineering_quality_requirement_refs: vec![],
+            architecture_quality_requirement_refs: vec![],
+            api_contract_requirement_refs: vec![],
+            code_quality_requirement_refs: vec![],
+        };
+
+        let ids = task
+            .verification_intents
+            .iter()
+            .filter(|intent| verification_intent_matches_obligation(intent, &task))
+            .map(|intent| intent.verification_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["verify-owned"]);
+        let obligation = TaskImplementationObligation {
+            obligation_id: "obligation-owned".to_string(),
+            kind: "persistence_mapping".to_string(),
+            source_refs: vec!["detail-owned".to_string()],
+            artifact_refs: TaskArtifactRefs::default(),
+            required_outcome: "Implement the owned persistence boundary.".to_string(),
+            required: true,
+            acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+            verification_ids: vec![],
+            defer_policy: "must_be_satisfied_before_completed".to_string(),
+        };
+        assert_eq!(
+            verification_ids_for_obligation(&task, &obligation),
+            vec!["verify-owned"]
+        );
+        assert_eq!(
+            implementation_obligation_for_action(ImplementationAction::CreateOrUpdatePersistence)
+                .expect("persistence action")
+                .0,
+            "persistence_mapping"
+        );
+        assert_eq!(
+            implementation_obligation_for_action(ImplementationAction::CreateOrUpdateEntity)
+                .expect("entity action")
+                .0,
+            "entity_contract"
         );
     }
 
@@ -8148,6 +9331,7 @@ mod tests {
                 title: "User task with reserved-looking id".to_string(),
                 task_kind: TaskKind::FeatureIncrement,
                 implementation_actions: vec![],
+                implementation_obligations: vec![],
                 objective: "Existing task".to_string(),
                 depends_on: vec![],
                 scope_refs: vec![],

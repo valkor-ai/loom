@@ -532,7 +532,8 @@ fn build_execution_request(
     let mut source_context = json!({
         "technicalBaseline": {
             "projectKind": baseline.project_kind,
-            "stack": baseline.stack
+            "stack": baseline.stack,
+            "securityProfiles": baseline.security_profiles
         },
         "architectureArtifactProjection": architecture_projection,
         "acceptanceSnapshot": pgc.phase_scope.acceptance_candidates.iter()
@@ -563,7 +564,7 @@ fn build_execution_request(
     if let Some(browser_verification_context) = browser_verification_context {
         source_context["browserVerificationContext"] = browser_verification_context;
     }
-    Ok(json!({
+    let request = json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
         "requestId": request_id,
@@ -615,7 +616,85 @@ fn build_execution_request(
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
-    }))
+    });
+    validate_task_execution_request_coverage(&request)?;
+    Ok(request)
+}
+
+fn validate_task_execution_request_coverage(
+    request: &Value,
+) -> Result<(), state::store::StateError> {
+    let task = request.get("task").ok_or_else(|| {
+        state::store::StateError::InvalidArgument(
+            "task execution request is missing task context".to_string(),
+        )
+    })?;
+    let groups = request
+        .pointer("/requestReadPlan/groups")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(
+                "task execution request is missing requestReadPlan.groups".to_string(),
+            )
+        })?;
+    let covered = groups
+        .iter()
+        .filter_map(|group| group.get("selectors"))
+        .filter_map(|selectors| {
+            serde_json::from_value::<Vec<delivery_core::ReadSelector>>(selectors.clone()).ok()
+        })
+        .flat_map(|selectors| delivery_core::expand_read_selectors(&selectors))
+        .collect::<BTreeSet<_>>();
+
+    let mut required = vec![
+        "task.objective".to_string(),
+        "task.writeBoundary".to_string(),
+    ];
+    for field in [
+        "implementationActions",
+        "implementationObligations",
+        "verificationIntents",
+    ] {
+        if task
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            required.push(format!("task.{field}"));
+        }
+    }
+    if let Some(projection) = request
+        .pointer("/sourceContext/architectureArtifactProjection")
+        .and_then(Value::as_object)
+    {
+        for (field, value) in projection {
+            if field != "compaction" && json_value_has_content(value) {
+                required.push(format!(
+                    "sourceContext.architectureArtifactProjection.{field}"
+                ));
+            }
+        }
+    }
+    for path in required {
+        if !covered.iter().any(|covered_path| {
+            covered_path == &path || covered_path.starts_with(&format!("{path}."))
+        }) {
+            return Err(state::store::StateError::InvalidArgument(format!(
+                "task execution request read plan does not cover authoritative field {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn json_value_has_content(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => fields.values().any(json_value_has_content),
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
 }
 
 pub(crate) fn task_execution_rules(
@@ -642,6 +721,13 @@ pub(crate) fn task_execution_rules(
             "taskResultField": "executionContinuity",
             "statusRule": "If agent-owned long-running work was started and its release state is unknown, use completed_with_notes with notes unless an independent failure or blocked condition remains."
         },
+        "implementationClosureContract": {
+            "source": "task.implementationObligations",
+            "ownership": "MCP",
+            "agentRule": "Implement every required obligation in this task before reporting completed. Report one implementationObligationResults entry for every obligation in the supplied canonical order; fill only status, evidenceRefs, and summary. Do not author obligationId or verificationIds.",
+            "completionRule": "A task is complete only when every required obligation is satisfied with concrete evidence and no obligation is partial, blocked, or not_verified.",
+            "repairRule": "When an obligation is incomplete, submit execution repair with the unchanged obligationId and the missing implementation or evidence; do not change the task contract."
+        },
         "verificationCommandSchedulingRules": verification_command_scheduling_rules(),
         "userFacingLanguage": {
             "constraint": user_facing_language,
@@ -653,7 +739,8 @@ pub(crate) fn task_execution_rules(
             "Do not implement deferred scope.",
             "Use confirmed business language in user-visible UI, feedback, test names, and TaskResult evidence when applicable.",
             "Write TaskResult JSON only to outputContract.resultFile."
-        ]
+        ],
+        "taskResponsibilityBoundary": task_responsibility_boundary(task)
     });
     let Some(object) = rules.as_object_mut() else {
         return rules;
@@ -705,6 +792,71 @@ pub(crate) fn task_execution_rules(
         );
     }
     rules
+}
+
+fn task_responsibility_boundary(task: &TaskDefinition) -> Value {
+    let owns_persistence = task_directly_owns_persistence(task);
+    let owns_interface = !task.write_boundary.artifact_refs.interfaces.is_empty()
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                contracts::ImplementationAction::CreateOrUpdateInterface
+                    | contracts::ImplementationAction::CreateEntityCrud
+            )
+        });
+    let owns_frontend = task.frontend_experience_requirement.is_some()
+        || matches!(
+            task.task_kind,
+            contracts::TaskKind::FrontendExperience | contracts::TaskKind::UiFlowIncrement
+        );
+    let owns_runtime = task
+        .runtime_delivery_requirement
+        .as_ref()
+        .is_some_and(|requirement| requirement.applies_to_this_task);
+    let mut rules = vec![
+        "Only implement the responsibilities listed in ownedResponsibilities and the supplied implementationObligations.".to_string(),
+        "A consumed interface is an integration input, not permission to rewrite the provider's persistence, domain, or API implementation.".to_string(),
+        "When another task owns a responsibility, call its accepted boundary and record the dependency; do not duplicate its implementation in this task.".to_string(),
+    ];
+    if !owns_persistence {
+        rules.push("This task does not own persistence mapping, schema, migration, repository, or transaction implementation. Do not add or modify those artifacts.".to_string());
+    }
+    if !owns_interface {
+        rules.push("This task does not own server API interfaces. Do not add controllers, routes, request handlers, or API contract changes.".to_string());
+    }
+    if !owns_frontend {
+        rules.push("This task does not own frontend surfaces. Do not add or modify client UI, browser flows, or frontend-only state.".to_string());
+    }
+    if !owns_runtime {
+        rules.push("This task does not own runtime delivery assets or package start commands. Do not rewrite deployment or runtime configuration.".to_string());
+    }
+    json!({
+        "ownedResponsibilities": task.implementation_actions,
+        "ownedArtifactRefs": task.write_boundary.artifact_refs,
+        "ownedObligationIds": task.implementation_obligations.iter().map(|item| item.obligation_id.clone()).collect::<Vec<_>>(),
+        "rules": rules
+    })
+}
+
+fn task_directly_owns_persistence(task: &TaskDefinition) -> bool {
+    !task.write_boundary.artifact_refs.entities.is_empty()
+        || matches!(task.task_kind, contracts::TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                contracts::ImplementationAction::CreateOrUpdateEntity
+                    | contracts::ImplementationAction::CreateOrUpdatePersistence
+                    | contracts::ImplementationAction::CreateEntityCrud
+                    | contracts::ImplementationAction::CreateEntityRepository
+                    | contracts::ImplementationAction::CreateEntityMigration
+                    | contracts::ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | contracts::ImplementationAction::ImplementEntityLifecycle
+                    | contracts::ImplementationAction::ImplementPersistenceTransaction
+                    | contracts::ImplementationAction::OptimizePersistenceQuery
+                    | contracts::ImplementationAction::ImplementAnalyticalQuery
+                    | contracts::ImplementationAction::AddOrUpdatePersistenceTests
+            )
+        })
 }
 
 fn source_edit_preparation_contract(result_file: &str) -> Value {
@@ -828,6 +980,9 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "If status is completed, every verification intent should have passed evidence.".to_string(),
         "If status is failed, failure is required.".to_string(),
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
+        "For every task.implementationObligations entry, provide exactly one implementationObligationResults entry in the supplied order, filling status, evidenceRefs, and summary only. Loom derives obligationId and verificationIds. Required obligations must be satisfied before status=completed; partial, blocked, or not_verified obligations require execution repair or a non-completed status.".to_string(),
+        "implementationObligationResults.evidenceRefs must point to concrete implementation or verification evidence. A build, compile, or reference-read result alone cannot satisfy a persistence, security, state transition, API behavior, or runtime obligation unless its declared evidence capability proves that target.".to_string(),
+        "implementationObligationResults.evidenceRefs must cite task-owned source or test files. Do not cite dist, target, build, coverage, report, log, cache, or node_modules output; verification provenance carries command and generated report references.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
@@ -858,11 +1013,13 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     }
     if !task.api_contract_requirement_refs.is_empty() {
         rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+        rules.push("For a protected API requirement, use only the referenced securityProfileRefs and the matching sourceContext.technicalBaseline.securityProfiles entry. Read every file in the requirement referenceLoadPlan, including tech/api/jwt.md when selected; do not choose an algorithm, issuer, audience, or token transport in the task result.".to_string());
         rules.push("The apiContractEvidence template starts as not_verified. Set status=satisfied only after the assigned API behavior has concrete passed verification evidence; for completed or completed_with_notes results, keep knownGaps empty and explain non-applicable checks in summary instead of recording a gap.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
+        rules.push("Treat task.implementationObligations as the implementation closure contract. task.implementationActions is only the normalized action classification; do not invent or duplicate obligations in TaskResult.".to_string());
         rules.push("The codeQualityEvidence template starts as not_verified. Set status=satisfied only after every selected reference file was read and the changed code is covered by concrete passed verification evidence; for completed or completed_with_notes results, knownGaps must be empty.".to_string());
     }
     json!(rules)
@@ -916,6 +1073,7 @@ fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
         "implementationRules": [
             "Before editing API or client binding code, compare sourceContext.apiContractRequirements with the task-owned AAC interfaces.",
             "Keep method, path, request schema, response schema, status code categories, error schema, auth policy, and pagination policy aligned with the AAC interface.",
+            "For protected interfaces, keep securityProfileRef and the selected profile's mechanism, algorithm, key source, transport, issuer, audience, and claims aligned; do not widen or replace the canonical profile.",
             "Do not replace business errors with generic 500 responses or silent success.",
             "Do not add versioned paths or OpenAPI files unless the AAC interface or requirement explicitly declares them."
         ],
@@ -941,8 +1099,10 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
             "opencodeHint": "Resolve as ../references/loom/<path> from the active OpenCode loom command/plugin files."
         },
         "implementationRules": [
+            "Use task.implementationActions and task.objective as the source-edit decisions within this task's write boundary; code quality references constrain implementation choices but do not create a second task scope.",
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
+            "When the selected reference plan contains tech/backend/springboot/mybatis-plus, use that plan as the only MyBatis-Plus guidance for the task; do not load JPA, MyBatis-Flex, plain MyBatis, or unlisted external persistence references.",
             "When a code quality requirement contains packageNamingPolicy, production source package declarations must follow that policy; placeholder package roots are not acceptable deliverable code.",
             "When a selected language or framework reference is not applicable to a changed file but the requirement is still satisfied, explain the non-applicability in the summary without adding knownGaps.",
             "If a selected Loom reference cannot be loaded from the installed reference root, do not mark codeQualityEvidence satisfied; report the unresolved reference as a blocking contract problem instead of treating the project workspace as missing source files."
@@ -950,7 +1110,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "Run the smallest available compile, type, lint, unit, or integration check that proves the changed code.",
-            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence.",
+            "Record selected reference groups and reference files in codeQualityEvidence. Changed files and commands belong to the canonical TaskResult changedFiles and verificationResults[].provenance fields; do not duplicate them inside codeQualityEvidence.",
             "For completed or completed_with_notes results, codeQualityEvidence.status must be satisfied and knownGaps must be an empty array; a reference that is irrelevant to one changed file is explained in summary, not recorded as a gap.",
             "Do not author requirementId or verificationIds when the result template marks them as MCP-derived; keep evidence entries in the assigned requirement order and let Loom normalize linkage fields."
         ]
@@ -1042,6 +1202,7 @@ fn task_execution_read_groups(
         "task.title",
         "task.taskKind",
         "task.implementationActions",
+        "task.implementationObligations",
         "task.objective",
         "task.dependsOn",
         "task.scopeRefs",
@@ -1054,6 +1215,7 @@ fn task_execution_read_groups(
         "sourceContext.userFacingLanguage",
         "executionRules.sourceEditPreparationContract",
         "executionRules.boundaryRules",
+        "executionRules.taskResponsibilityBoundary",
     ];
     let mut scope_fields = vec![
         "sourceContext.acceptanceSnapshot",
@@ -1184,6 +1346,7 @@ fn task_execution_read_groups(
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
+        "executionRules.implementationClosureContract",
         "executionRules.verificationCommandSchedulingRules",
     ];
     result_fields.extend(task_result_contract_read_fields(task));
@@ -3100,6 +3263,133 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn code_quality_task() -> TaskDefinition {
+        TaskDefinition {
+            task_id: "task-observability".to_string(),
+            group_id: "group-backend".to_string(),
+            title: "Implement application observability".to_string(),
+            task_kind: TaskKind::ConfigurationSupport,
+            implementation_actions: vec![ImplementationAction::ImplementObservability],
+            implementation_obligations: vec![],
+            objective: "Configure logging and implement owned diagnostic boundaries.".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            requirement_detail_refs: vec![],
+            write_boundary: contracts::TaskWriteBoundary {
+                forbidden_paths: vec![".loom".to_string()],
+                artifact_refs: contracts::TaskArtifactRefs::default(),
+            },
+            verification_intents: vec![],
+            concept_refs: vec![],
+            concept_responsibilities: vec![],
+            concept_verification_intents: vec![],
+            frontend_experience_requirement: None,
+            runtime_delivery_requirement: None,
+            engineering_quality_requirement_refs: vec![],
+            architecture_quality_requirement_refs: vec![],
+            api_contract_requirement_refs: vec![],
+            code_quality_requirement_refs: vec!["code-quality-task-observability".to_string()],
+        }
+    }
+
+    #[test]
+    fn task_execute_uses_task_scope_as_the_implementation_contract() {
+        let task = code_quality_task();
+        let execution_rules = code_quality_execution_rules(&task);
+        let result_rules = task_result_rules(&task, false);
+
+        assert!(execution_rules["implementationRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule
+                .as_str()
+                .is_some_and(|text| text.contains("task.implementationActions"))));
+        assert!(result_rules.as_array().unwrap().iter().any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("task.implementationActions"))));
+    }
+
+    #[test]
+    fn task_execute_restricts_mybatis_plus_guidance_to_selected_reference_plan() {
+        let rules = code_quality_execution_rules(&code_quality_task());
+
+        assert!(rules["implementationRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item
+                .as_str()
+                .is_some_and(|text| text.contains("mybatis-plus"))));
+    }
+
+    #[test]
+    fn task_execute_exposes_mcp_derived_responsibility_boundary() {
+        let task = code_quality_task();
+        let rules = task_execution_rules(".loom/result.json", &task, None);
+        let boundary = &rules["taskResponsibilityBoundary"];
+
+        assert!(boundary["ownedResponsibilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some("implement_observability")));
+        assert!(boundary["rules"].as_array().unwrap().iter().any(|item| item
+            .as_str()
+            .is_some_and(|text| text.contains("does not own persistence"))));
+    }
+
+    #[test]
+    fn task_execution_request_requires_authoritative_fields_in_read_plan() {
+        let request = json!({
+            "task": {
+                "objective": "Implement the task",
+                "implementationActions": ["create_or_update_interface"],
+                "writeBoundary": {"forbiddenPaths": []},
+                "verificationIntents": [{"verificationId": "verify-1"}]
+            },
+            "sourceContext": {
+                "architectureArtifactProjection": {
+                    "modules": [{"moduleId": "module-1"}]
+                }
+            },
+            "requestReadPlan": {"groups": [
+                {"selectors": read_selectors_value_from_paths([
+                    "task.objective",
+                    "task.implementationActions",
+                    "task.writeBoundary.forbiddenPaths",
+                    "task.verificationIntents"
+                ])},
+                {"selectors": read_selectors_value_from_paths([
+                    "sourceContext.architectureArtifactProjection.modules"
+                ])}
+            ]}
+        });
+
+        assert!(validate_task_execution_request_coverage(&request).is_ok());
+    }
+
+    #[test]
+    fn task_execution_request_rejects_read_plan_that_drops_implementation_actions() {
+        let request = json!({
+            "task": {
+                "objective": "Implement the task",
+                "implementationActions": ["create_or_update_interface"],
+                "writeBoundary": {"forbiddenPaths": []},
+                "verificationIntents": []
+            },
+            "sourceContext": {"architectureArtifactProjection": {}},
+            "requestReadPlan": {"groups": [{"selectors": read_selectors_value_from_paths([
+                "task.objective",
+                "task.writeBoundary.forbiddenPaths"
+            ])}]}
+        });
+
+        let error = validate_task_execution_request_coverage(&request).unwrap_err();
+        assert!(error.to_string().contains("task.implementationActions"));
+    }
 
     #[test]
     fn architecture_projection_links_structured_happy_path_refs() {

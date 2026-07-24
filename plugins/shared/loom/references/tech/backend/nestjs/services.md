@@ -59,7 +59,7 @@ Do not hold database transactions open across email, HTTP, queue, or file operat
 
 Inject external clients behind the repository's adapter/port convention. Define timeout, cancellation, retry, idempotency, and partial-failure behavior from accepted architecture decisions; do not add retries around non-idempotent writes by habit.
 
-Order durable state and external effects deliberately. Logging an exception and rethrowing at every layer creates duplicate noise; log once where correlation and operation context are available.
+Order durable state and external effects deliberately. The selected application observability reference owns the single correlation-aware logging boundary; do not log and rethrow the same exception at every provider layer.
 
 Use typed domain/application failures or focused Nest exceptions according to the existing layering. Never expose raw ORM/client errors, secrets, or stack traces.
 

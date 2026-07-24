@@ -202,9 +202,9 @@ pub fn source_model_from_runtime_contract(
             preview_service_id: frontend.service_id.clone(),
             build_context_path,
             services: vec![frontend, backend],
-            dependencies: dependencies_from_runtime_or_probe(runtime, fallback_probe),
+            dependencies: dependencies_from_runtime_authority(runtime, fallback_probe),
             notes: vec![
-                "Deployment source model was derived from RuntimeDelivery frontend and api services.".to_string(),
+                "Deployment source model was derived from RuntimeDelivery frontend and api services; repository probe supplies build-path facts only when the contract is accepted.".to_string(),
             ],
         };
     }
@@ -290,9 +290,9 @@ pub fn source_model_from_runtime_contract(
         preview_service_id: service.service_id.clone(),
         build_context_path,
         services: vec![service],
-        dependencies: dependencies_from_runtime_or_probe(runtime, fallback_probe),
+        dependencies: dependencies_from_runtime_authority(runtime, fallback_probe),
         notes: vec![
-            "Deployment source model was derived from RuntimeDelivery single service and repository code evidence.".to_string(),
+            "Deployment source model was derived from RuntimeDelivery single service; repository probe supplies build-path facts only when the contract is accepted.".to_string(),
         ],
     }
 }
@@ -381,14 +381,15 @@ fn source_model_from_probe(
     }
 }
 
-fn dependencies_from_runtime_or_probe(
+fn dependencies_from_runtime_authority(
     runtime: &DeploymentRuntimeContract,
     probe: &DeploymentCodeProbe,
 ) -> Vec<contracts::DependencyService> {
-    if runtime.dependency_services.is_empty() {
-        probe.services.clone()
-    } else {
-        runtime.dependency_services.clone()
+    match runtime.authority {
+        contracts::DeploymentContractAuthority::AcceptedContract => {
+            runtime.dependency_services.clone()
+        }
+        contracts::DeploymentContractAuthority::RepositoryHeuristic => probe.services.clone(),
     }
 }
 
@@ -1271,6 +1272,9 @@ fn start_command_is_runtime_safe(kind: RuntimeKind, command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use contracts::{
+        DeploymentCommandContract, DeploymentContractAuthority, RuntimeEnvironmentContract,
+    };
     use serde_json::json;
 
     #[test]
@@ -1302,6 +1306,49 @@ mod tests {
                 "package-lock.json",
                 "packages/shared/yarn.lock"
             ]
+        );
+    }
+
+    #[test]
+    fn accepted_runtime_empty_dependencies_do_not_fall_back_to_code_probe() {
+        let probe = DeploymentCodeProbe {
+            services: vec![crate::runtime_contract::service_definition(
+                contracts::DependencyServiceKind::Redis,
+            )],
+            ..DeploymentCodeProbe::unknown()
+        };
+        let accepted = DeploymentRuntimeContract {
+            authority: DeploymentContractAuthority::AcceptedContract,
+            r#ref: None,
+            status: "modified".to_string(),
+            dependency_service_policy: "contract_only".to_string(),
+            deployment_shape: Some(DeploymentShape::SingleService),
+            runtime_kind: Some("python".to_string()),
+            commands: DeploymentCommandContract::default(),
+            port: Some(8000),
+            preview_path: "/".to_string(),
+            health_path: None,
+            safe_http_probes: vec![],
+            frontend_output_dir: None,
+            probe_kind: "http".to_string(),
+            environment: RuntimeEnvironmentContract {
+                required: vec![],
+                optional: vec![],
+            },
+            frontend: None,
+            api: None,
+            api_contract: None,
+            dependency_services: vec![],
+        };
+        assert!(dependencies_from_runtime_authority(&accepted, &probe).is_empty());
+
+        let heuristic = DeploymentRuntimeContract {
+            authority: DeploymentContractAuthority::RepositoryHeuristic,
+            ..accepted
+        };
+        assert_eq!(
+            dependencies_from_runtime_authority(&heuristic, &probe).len(),
+            1
         );
     }
 }

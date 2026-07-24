@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::DocumentMut;
 
 const CODE_REFERENCE_FILES: &[&str] = &[
+    "observability",
     "cpp/build",
     "cpp/concurrency",
     "cpp/core",
@@ -94,16 +95,19 @@ const CODE_REFERENCE_FILES: &[&str] = &[
 const BACKEND_REFERENCE_FILES: &[&str] = &[
     "aspnetcore/architecture",
     "aspnetcore/data",
+    "aspnetcore/logging",
     "aspnetcore/minimal",
     "aspnetcore/runtime",
     "aspnetcore/security",
     "aspnetcore/testing",
     "django/models",
+    "django/logging",
     "django/security",
     "django/serializers",
     "django/testing",
     "django/views",
     "fastapi/data",
+    "fastapi/logging",
     "fastapi/migration",
     "fastapi/routing",
     "fastapi/schemas",
@@ -111,6 +115,7 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "fastapi/testing",
     "nestjs/controllers",
     "nestjs/dtos",
+    "nestjs/logging",
     "nestjs/migration",
     "nestjs/security",
     "nestjs/services",
@@ -120,12 +125,21 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "springboot/cloud",
     "springboot/data",
     "springboot/integration",
+    "springboot/logging",
     "springboot/observability",
     "springboot/resilience",
     "springboot/runtime",
     "springboot/security",
     "springboot/testing",
     "springboot/web",
+    "springboot/mybatis-plus/index",
+    "springboot/mybatis-plus/configuration",
+    "springboot/mybatis-plus/mapping",
+    "springboot/mybatis-plus/crud",
+    "springboot/mybatis-plus/wrappers",
+    "springboot/mybatis-plus/plugins",
+    "springboot/mybatis-plus/security",
+    "springboot/mybatis-plus/extensions",
 ];
 
 const FRONTEND_REFERENCE_FILES: &[&str] = &[
@@ -505,6 +519,17 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/code/{file}.md"))
                 .exists());
         }
+        for file in [
+            "redis/core",
+            "redis/cache",
+            "redis/session",
+            "redis/atomicity",
+            "redis/messaging",
+        ] {
+            assert!(root
+                .join(format!("skills/loom/references/tech/code/{file}.md"))
+                .exists());
+        }
         for file in BACKEND_REFERENCE_FILES {
             assert!(root
                 .join(format!("skills/loom/references/tech/backend/{file}.md"))
@@ -531,6 +556,7 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom-deploy/references/topology.md")
             .exists());
+        assert!(root.join("skills/loom-deploy/references/redis.md").exists());
     }
 
     assert!(env
@@ -2617,6 +2643,7 @@ impl Fixture {
             "core",
             "errors",
             "evolution",
+            "jwt",
             "operations",
             "pagination",
             "resource",
@@ -2659,6 +2686,20 @@ impl Fixture {
                 &format!("# {path} Code Reference\n"),
             );
         }
+        for path in [
+            "redis/core",
+            "redis/cache",
+            "redis/session",
+            "redis/atomicity",
+            "redis/messaging",
+        ] {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/code/{path}.md"
+                )),
+                &format!("# {path} Code Reference\n"),
+            );
+        }
         for path in BACKEND_REFERENCE_FILES {
             write_file(
                 &self.package_root.join(format!(
@@ -2688,6 +2729,7 @@ impl Fixture {
             "php",
             "providers",
             "python",
+            "redis",
             "repair",
             "ruby",
             "source-model",

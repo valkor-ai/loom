@@ -56,7 +56,7 @@ Match queryset loading and annotations to the selected list/detail serializer. A
 
 Translate expected domain/integrity failures to the accepted DRF error envelope through focused exceptions/handlers. Distinguish validation, not found, conflict, authentication, authorization, throttling, temporary dependency failure, and unexpected errors.
 
-Do not catch `Exception` in every action or expose database/provider messages. Log unexpected failures once at a correlation-aware boundary.
+Do not catch `Exception` in every action or expose database/provider messages. Route unexpected failures to the one boundary selected by `tech/code/observability.md` when this task owns observability.
 
 ### Django Async Views
 

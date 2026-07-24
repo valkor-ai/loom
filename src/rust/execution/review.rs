@@ -8,7 +8,7 @@ use std::{
 use contracts::{
     ArchitectureArtifactContract, ManualReviewResolution, ReviewFinding, ReviewNextAction,
     ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup, TaskPlanRun, TaskPlanRunStatus,
-    TaskResult,
+    TaskResult, TaskResultStatus, TaskRunStatus,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -17,7 +17,6 @@ use delivery_core::{
     LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
     TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
-use delivery_core::{task_evidence_applicability_from_value, TaskEvidenceApplicability};
 use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
@@ -35,6 +34,7 @@ use crate::{
     },
     task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
+    task_result::is_generated_output_path,
 };
 
 const REVIEW_ACTIONS: &[&str] = &[
@@ -101,7 +101,7 @@ fn materialize_review_request_inner(
                 "phase {phase_id} does not exist in delivery {delivery_id}"
             ))
         })?;
-    let task_results = load_task_results(root, &locator, &task_plan, &run);
+    let task_results = load_task_results(root, &locator, &task_plan, &run)?;
     if let Some(existing_request_ref) = phase.latest_refs.get("reviewRequestRef").cloned() {
         if state::inspect_request(delivery_core::InspectRequestInput {
             project_root: project_root.to_string(),
@@ -112,6 +112,7 @@ fn materialize_review_request_inner(
             && review_request_matches_current_task_results(
                 project_root,
                 &existing_request_ref,
+                &task_plan,
                 &task_results,
             )
         {
@@ -195,6 +196,7 @@ fn materialize_review_request_inner(
 fn review_request_matches_current_task_results(
     project_root: &str,
     request_ref: &str,
+    task_plan: &TaskPlan,
     task_results: &[TaskResult],
 ) -> bool {
     if task_results.is_empty() {
@@ -207,6 +209,7 @@ fn review_request_matches_current_task_results(
         fields: vec![
             "reviewPacket.taskResultSummaries".to_string(),
             "reviewPacket.taskResultSnapshotFingerprint".to_string(),
+            "reviewPacket.taskPlanProjectionFingerprint".to_string(),
         ],
     });
     let Ok(fields) = fields else {
@@ -222,7 +225,12 @@ fn review_request_matches_current_task_results(
         .get("reviewPacket.taskResultSnapshotFingerprint")
         .and_then(|field| field.value.as_str())
         .is_some_and(|actual| actual == task_result_snapshot_fingerprint(task_results));
-    summaries_match && fingerprint_match
+    let task_plan_match = fields
+        .fields
+        .get("reviewPacket.taskPlanProjectionFingerprint")
+        .and_then(|field| field.value.as_str())
+        .is_some_and(|actual| actual == task_plan_projection_fingerprint(task_plan));
+    summaries_match && fingerprint_match && task_plan_match
 }
 
 fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
@@ -243,6 +251,20 @@ fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
             .cmp(&right.get("taskResultId").and_then(Value::as_str))
     });
     delivery_core::contract_fingerprint(&Value::Array(snapshots))
+}
+
+fn task_plan_projection_fingerprint(task_plan: &TaskPlan) -> String {
+    let projection = json!({
+        "scopeSnapshot": task_plan.scope_snapshot,
+        "groups": task_plan.groups,
+        "tasks": task_plan.tasks,
+        "engineeringQualityRequirements": task_plan.engineering_quality_requirements,
+        "architectureQualityRequirements": task_plan.architecture_quality_requirements,
+        "apiContractRequirements": task_plan.api_contract_requirements,
+        "codeQualityRequirements": task_plan.code_quality_requirements,
+        "browserVerificationProfiles": task_plan.browser_verification_profiles
+    });
+    delivery_core::contract_fingerprint(&projection)
 }
 
 fn build_review_request(
@@ -271,6 +293,8 @@ fn build_review_request(
         .to_string();
     let concept_review_matrix = build_concept_review_matrix(task_plan, task_results);
     let detail_review_matrix = build_detail_review_matrix(task_plan, task_results);
+    let implementation_obligation_review_matrix =
+        build_implementation_obligation_review_matrix(task_plan, task_results);
     let engineering_quality_review_matrix =
         build_engineering_quality_review_matrix(task_plan, task_results);
     let architecture_quality_review_matrix =
@@ -278,10 +302,11 @@ fn build_review_request(
     let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
     let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
-        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract);
+        build_frontend_quality_review_matrix(task_plan, task_results);
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
+        &implementation_obligation_review_matrix,
         &engineering_quality_review_matrix,
         &architecture_quality_review_matrix,
         &api_contract_review_matrix,
@@ -323,6 +348,7 @@ fn build_review_request(
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results),
             "taskResultSnapshotFingerprint": task_result_snapshot_fingerprint(task_results),
+            "taskPlanProjectionFingerprint": task_plan_projection_fingerprint(task_plan),
             "apiContractContext": compact_api_contract_context(
                 task_plan,
                 architecture_contract,
@@ -332,6 +358,7 @@ fn build_review_request(
         "changeContext": change_context,
         "conceptReviewMatrix": concept_review_matrix,
         "detailReviewMatrix": detail_review_matrix,
+        "implementationObligationReviewMatrix": implementation_obligation_review_matrix,
         "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
         "architectureQualityReviewMatrix": architecture_quality_review_matrix,
         "apiContractReviewMatrix": api_contract_review_matrix,
@@ -375,7 +402,7 @@ fn build_review_request(
                 "Do not modify project files during review.",
                 "Use compact browser check status, attempts, command, and observed outcome first. Read a referenced Playwright trace, report, or screenshot only when a failed, blocked, retried, or ambiguous check cannot be judged from the compact evidence.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied implementation obligations, requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "If outputContract.reviewSignals contains architecture_quality with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
@@ -466,6 +493,7 @@ fn build_review_request(
                         "reviewPacket.taskSummaries",
                         "reviewPacket.taskResultSummaries",
                         "reviewPacket.taskResultSnapshotFingerprint",
+                        "reviewPacket.taskPlanProjectionFingerprint",
                         "reviewPacket.apiContractContext"
                     ])
                 },
@@ -483,11 +511,12 @@ fn build_review_request(
                 {
                     "groupId": "review_matrices",
                     "required": true,
-                    "purpose": "Read compact concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
+                    "purpose": "Read compact implementation-obligation, concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
                     "selectors": read_selectors_value_from_paths([
                         "reviewMatrixSummary.concept",
                         "reviewMatrixSummary.detail",
+                        "reviewMatrixSummary.implementationObligations",
                         "reviewMatrixSummary.engineeringQuality",
                         "reviewMatrixSummary.architectureQuality",
                         "reviewMatrixSummary.apiContract",
@@ -1120,6 +1149,20 @@ where
         return Ok(stale);
     }
     let root = Path::new(&input.project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.clone(),
+        phase_id: phase_id.clone(),
+    };
+    let (current_task_plan, current_run) = load_current_plan_and_run(root, &locator)?;
+    let current_task_results = load_task_results(root, &locator, &current_task_plan, &current_run)?;
+    if !review_request_matches_current_task_results(
+        &input.project_root,
+        &input.request_ref,
+        &current_task_plan,
+        &current_task_results,
+    ) {
+        return materialize_review_request_inner(&input.project_root, &delivery_id, &phase_id);
+    }
     let fields = read_review_submit_fields(input)?;
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
     let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id, &fields);
@@ -1152,10 +1195,6 @@ where
     if !issues.is_empty() {
         return review_result_repairable(input, authorized, target.path.clone(), issues);
     }
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.clone(),
-        phase_id: phase_id.clone(),
-    };
     let persisted = review_result_file(root, &locator, &result.review_id);
     state::store::write_json_atomic(&persisted, &result)?;
     state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
@@ -1884,56 +1923,26 @@ fn validate_review_signals(
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
     let signals = array_field(fields, "outputContract.reviewSignals.items");
-    let unsatisfied_detail = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("requirement_detail_evidence")
-            && item.get("detailSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_frontend = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
-            && item.get("closureSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_frontend_quality = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_ui_quality")
-            && item.get("uiQualitySatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let unsatisfied_architecture_quality = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
-            && item
-                .get("architectureQualitySatisfied")
-                .and_then(Value::as_bool)
-                == Some(false)
-    });
-    let unsatisfied_api_contract = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("api_contract")
-            && item.get("apiContractSatisfied").and_then(Value::as_bool) == Some(false)
-    });
-    let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
-        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
-            && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
-            && item.get("recommendedNextAction").and_then(Value::as_str) == Some("taskplan_repair")
-    });
-    let missing_architecture_quality_task_assignment =
-        signals.as_array().into_iter().flatten().any(|item| {
-            item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
-                && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
-                && item.get("recommendedNextAction").and_then(Value::as_str)
-                    == Some("taskplan_repair")
-        });
-    if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
-        && (unsatisfied_detail
-            || unsatisfied_frontend
-            || unsatisfied_frontend_quality
-            || unsatisfied_architecture_quality
-            || unsatisfied_api_contract)
+    let unsatisfied_signal = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(review_signal_requires_follow_up);
+    if matches!(result.decision.as_str(), "approved" | "approved_with_notes") && unsatisfied_signal
     {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
+            "ReviewResult cannot approve while any MCP review signal declares a non-terminal recommendedNextAction.",
         ));
     }
     validate_execution_repair_signal_targets(result, &signals, issues);
-    if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
+    let taskplan_repair_signal = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|signal| signal_recommends_action(signal, "taskplan_repair"));
+    if taskplan_repair_signal {
         let has_higher_priority_blocker = result.findings.iter().any(|finding| {
             is_blocking_finding(finding)
                 && [
@@ -1957,10 +1966,21 @@ fn validate_review_signals(
             issues.push(issue(
                 "REVIEW_RESULT_STATUS_INCONSISTENT",
                 "findings",
-                "Missing workflow closure or architecture quality task assignment requires a blocking taskplan_repair finding.",
+                "A review signal routed to taskplan_repair requires a blocking taskplan_repair finding.",
             ));
         }
     }
+}
+
+fn signal_recommends_action(signal: &Value, action: &str) -> bool {
+    signal.get("recommendedNextAction").and_then(Value::as_str) == Some(action)
+}
+
+fn review_signal_requires_follow_up(signal: &Value) -> bool {
+    signal
+        .get("recommendedNextAction")
+        .and_then(Value::as_str)
+        .is_some_and(|action| action != "none")
 }
 
 fn validate_execution_repair_signal_targets(
@@ -3076,6 +3096,19 @@ fn apply_browser_quality_resolution(
             verification.summary =
                 "Required browser evidence was supplied through the external evidence gate."
                     .to_string();
+            let evidence_refs = verification
+                .browser_checks
+                .iter()
+                .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
+                .flat_map(|check| check.artifact_refs.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            verification.provenance = Some(contracts::VerificationProvenance {
+                evidence_refs: evidence_refs.into_iter().collect(),
+                changed_files: Vec::new(),
+                test_case_refs: Vec::new(),
+                command: Some("external_browser_evidence".to_string()),
+                exit_code: Some(0),
+            });
         }
     }
     let has_non_passed = result
@@ -3427,42 +3460,115 @@ fn load_task_results(
     locator: &DeliveryPhaseLocator,
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
-) -> Vec<TaskResult> {
+) -> Result<Vec<TaskResult>, state::store::StateError> {
     run.task_states
         .iter()
         .filter_map(|state| {
             let task_id = &state.task_id;
-            let result_id = state.result_id.as_ref()?;
-            let task = task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *task_id)?;
+            let Some(result_id) = state.result_id.as_ref() else {
+                if matches!(state.status, TaskRunStatus::Pending | TaskRunStatus::Running) {
+                    return None;
+                }
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskPlanRun {} has terminal task {} with no canonical TaskResult reference",
+                    run.run_id, task_id
+                ))));
+            };
+            let Some(task) = task_plan.tasks.iter().find(|task| task.task_id == *task_id) else {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskPlanRun {} references task {} that is absent from the canonical TaskPlan",
+                    run.run_id, task_id
+                ))));
+            };
             let path = task_result_file(root, locator, &run.run_id, &task.task_id, result_id);
-            state::store::read_json(&path).ok()
+            let result: TaskResult = match state::store::read_json(&path) {
+                Ok(result) => result,
+                Err(error) => return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} for task {} cannot be loaded from {}: {}",
+                    result_id,
+                    task_id,
+                    path.display(),
+                    error
+                )))),
+            };
+            if result.task_result_id != *result_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "TaskResult file {} contains taskResultId {}, but TaskPlanRun points to {}",
+                    path.display(),
+                    result.task_result_id,
+                    result_id
+                ))));
+            }
+            if result.task_id != *task_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} belongs to task {}, but TaskPlanRun expects {}",
+                    result.task_result_id, result.task_id, task_id
+                ))));
+            }
+            if result.task_plan_id != task_plan.task_plan_id {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} belongs to TaskPlan {}, but Review loaded {}",
+                    result.task_result_id, result.task_plan_id, task_plan.task_plan_id
+                ))));
+            }
+            if !task_result_status_matches_run_state(result.status, state.status) {
+                return Some(Err(state::store::StateError::StateCorrupted(format!(
+                    "canonical TaskResult {} status {:?} conflicts with TaskPlanRun task {} status {:?}",
+                    result.task_result_id, result.status, task_id, state.status
+                ))));
+            }
+            Some(Ok(result))
         })
         .collect()
 }
 
+fn task_result_status_matches_run_state(
+    result_status: TaskResultStatus,
+    run_status: TaskRunStatus,
+) -> bool {
+    matches!(
+        (result_status, run_status),
+        (TaskResultStatus::Completed, TaskRunStatus::Completed)
+            | (
+                TaskResultStatus::CompletedWithNotes,
+                TaskRunStatus::CompletedWithNotes
+            )
+            | (TaskResultStatus::Blocked, TaskRunStatus::Blocked)
+            | (TaskResultStatus::Failed, TaskRunStatus::Failed)
+    )
+}
+
 fn build_concept_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Vec<Value> {
-    let evidence_refs = task_results
-        .iter()
-        .flat_map(|result| {
-            result
-                .concept_evidence
-                .iter()
-                .map(|evidence| evidence.concept_ref.clone())
-        })
-        .collect::<BTreeSet<_>>();
     task_plan
         .tasks
         .iter()
         .flat_map(|task| {
             task.concept_refs.iter().map(|concept_ref| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == task.task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .concept_evidence
+                        .iter()
+                        .find(|evidence| evidence.concept_ref == *concept_ref)
+                });
+                let satisfied = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        contracts::TaskResultStatus::Completed
+                            | contracts::TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        !evidence.refs.is_empty() && !evidence.summary.trim().is_empty()
+                    })
+                });
                 json!({
                     "conceptRef": concept_ref,
                     "taskId": task.task_id,
-                    "status": if evidence_refs.contains(concept_ref) { "satisfied" } else { "missing_evidence" },
-                    "recommendedNextAction": if evidence_refs.contains(concept_ref) { "none" } else { "execution_repair" }
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "status": if satisfied { "satisfied" } else { "missing_evidence" },
+                    "evidenceRefCount": evidence.map(|evidence| evidence.refs.len()).unwrap_or(0),
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
                 })
             })
         })
@@ -3489,7 +3595,10 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                         result
                             .verification_results
                             .iter()
-                            .filter(|verification| verification.status == "passed")
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
                             .map(|verification| verification.verification_id.as_str())
                             .collect::<BTreeSet<_>>()
                     })
@@ -3516,6 +3625,25 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                         !result.changed_files.is_empty() || result.no_change_reason.is_some()
                     })
                     .unwrap_or(false);
+                let implementation_supported = result.is_some_and(|result| {
+                    let obligations = task
+                        .implementation_obligations
+                        .iter()
+                        .filter(|obligation| {
+                            obligation
+                                .source_refs
+                                .iter()
+                                .any(|source_ref| source_ref == detail_id)
+                        })
+                        .collect::<Vec<_>>();
+                    obligations.is_empty()
+                        || obligations.iter().all(|obligation| {
+                            result.implementation_obligation_results.iter().any(|item| {
+                                item.obligation_id == obligation.obligation_id
+                                    && item.status == "satisfied"
+                            })
+                        })
+                });
                 let ok = result.is_some_and(|result| {
                     matches!(
                         result.status,
@@ -3527,6 +3655,7 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                             && !evidence.evidence_refs.is_empty()
                             && verification_supported
                             && artifact_supported
+                            && implementation_supported
                     })
                 });
                 json!({
@@ -3537,7 +3666,98 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                     "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "verificationSupported": verification_supported,
                     "artifactSupported": artifact_supported,
+                    "implementationSupported": implementation_supported,
                     "recommendedNextAction": if ok { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
+fn build_implementation_obligation_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .tasks
+        .iter()
+        .flat_map(|task| {
+            let result = task_results
+                .iter()
+                .find(|result| result.task_id == task.task_id);
+            let passed_ids = result
+                .map(|result| {
+                    result
+                        .verification_results
+                        .iter()
+                        .filter(|verification| {
+                            verification.status == "passed"
+                                && verification_is_traceable(verification)
+                        })
+                        .map(|verification| verification.verification_id.as_str())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            task.implementation_obligations.iter().map(move |obligation| {
+                let evidence = result.and_then(|result| {
+                    result
+                        .implementation_obligation_results
+                        .iter()
+                        .find(|item| item.obligation_id == obligation.obligation_id)
+                });
+                let verification_supported = evidence.is_some_and(|evidence| {
+                    !evidence.verification_ids.is_empty()
+                        && evidence.verification_ids.iter().all(|id| {
+                            passed_ids.contains(id.as_str())
+                                && result.is_some_and(|result| {
+                                    result
+                                        .verification_results
+                                        .iter()
+                                        .find(|verification| verification.verification_id == *id)
+                                        .is_some_and(|verification| {
+                                            verification_is_traceable(verification)
+                                                && obligation.acceptable_evidence.contains(
+                                                    &verification.evidence_type.unwrap_or(
+                                                        contracts::VerificationEvidence::AgentReviewExplanation,
+                                                    ),
+                                                )
+                                        })
+                                })
+                        })
+                });
+                let evidence_owned = evidence.is_some_and(|evidence| {
+                    evidence.evidence_refs.iter().any(|reference| {
+                        result.is_some_and(|result| result.changed_files.contains(reference))
+                    }) && evidence
+                        .evidence_refs
+                        .iter()
+                        .all(|reference| !is_generated_output_path(reference))
+                });
+                let satisfied = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        evidence.status == "satisfied"
+                            && !evidence.evidence_refs.is_empty()
+                            && verification_supported
+                            && evidence_owned
+                    })
+                });
+                json!({
+                    "obligationId": obligation.obligation_id,
+                    "kind": obligation.kind,
+                    "taskId": task.task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "required": obligation.required,
+                    "requiredOutcome": obligation.required_outcome,
+                    "sourceRefs": obligation.source_refs,
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "evidenceRefCount": evidence.map(|evidence| evidence.evidence_refs.len()).unwrap_or(0),
+                    "verificationSupported": verification_supported,
+                    "evidenceOwned": evidence_owned,
+                    "satisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
                 })
             })
         })
@@ -3556,25 +3776,44 @@ fn build_engineering_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
+                let task = task_plan.tasks.iter().find(|task| task.task_id == *task_id);
                 let passed_verifications = result
                     .map(passed_verification_summaries)
                     .unwrap_or_default();
-                let satisfied = applicability.engineering_quality_evidence
-                    && result
-                        .map(|result| {
-                            matches!(
-                                result.status,
-                                contracts::TaskResultStatus::Completed
-                                    | contracts::TaskResultStatus::CompletedWithNotes
-                            ) && !passed_verifications.is_empty()
-                        })
-                        .unwrap_or(false);
+                let implementation_support = result
+                    .map(|result| {
+                        result
+                            .implementation_obligation_results
+                            .iter()
+                            .filter(|item| {
+                                item.status == "satisfied"
+                                    && task.is_some_and(|task| {
+                                        task.implementation_obligations.iter().any(|obligation| {
+                                            obligation.obligation_id == item.obligation_id
+                                                && matches!(
+                                                    obligation.kind.as_str(),
+                                                    "persistence_mapping"
+                                                        | "entity_contract"
+                                                        | "entity_lifecycle"
+                                                        | "interface_contract"
+                                                        | "api_binding"
+                                                )
+                                        })
+                                    })
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
+                let satisfied = result
+                    .map(|result| {
+                        matches!(
+                            result.status,
+                            contracts::TaskResultStatus::Completed
+                                | contracts::TaskResultStatus::CompletedWithNotes
+                        ) && !passed_verifications.is_empty()
+                            && implementation_support > 0
+                    })
+                    .unwrap_or(false);
                 json!({
                     "requirementId": requirement.requirement_id,
                     "kind": requirement.kind,
@@ -3585,6 +3824,7 @@ fn build_engineering_quality_review_matrix(
                     "riskFieldKinds": requirement.risk_field_kinds,
                     "verificationObligations": requirement.verification_obligations,
                     "passedVerificationSummaries": passed_verifications,
+                    "implementationSupportCount": implementation_support,
                     "requirementDetailEvidence": result
                         .map(compact_requirement_detail_evidence)
                         .unwrap_or_default(),
@@ -3608,20 +3848,25 @@ fn build_code_quality_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
-                let evidence = result
-                    .filter(|_| applicability.code_quality_evidence)
-                    .and_then(|result| {
+                let evidence = result.and_then(|result| {
+                    result
+                        .code_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
+                let passed_traceable_ids = result
+                    .map(|result| {
                         result
-                            .code_quality_evidence
+                            .verification_results
                             .iter()
-                            .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                    });
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
+                            .map(|verification| verification.verification_id.as_str())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3647,6 +3892,10 @@ fn build_code_quality_review_matrix(
                                     && !evidence.reference_groups_checked.is_empty()
                                     && files_satisfied
                                     && !evidence.verification_ids.is_empty()
+                                    && evidence
+                                        .verification_ids
+                                        .iter()
+                                        .all(|id| passed_traceable_ids.contains(id.as_str()))
                             })
                             .unwrap_or(false)
                     })
@@ -3659,7 +3908,6 @@ fn build_code_quality_review_matrix(
                     "referenceGroups": requirement.reference_groups,
                     "referenceLoadPlan": requirement.reference_load_plan,
                     "focusTags": requirement.focus_tags,
-                    "implementationObligations": requirement.implementation_obligations,
                     "verificationObligations": requirement.verification_obligations,
                     "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "referenceGroupsChecked": evidence
@@ -3750,26 +3998,21 @@ fn build_architecture_quality_review_matrix(
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == *task_id);
-            let applicability = task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *task_id)
-                .map(task_evidence_applicability)
-                .unwrap_or_default();
-            let evidence = result
-                .filter(|_| applicability.architecture_quality_evidence)
-                .and_then(|result| {
-                    result
-                        .architecture_quality_evidence
-                        .iter()
-                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
-                });
+            let evidence = result.and_then(|result| {
+                result
+                    .architecture_quality_evidence
+                    .iter()
+                    .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+            });
             let passed_verification_ids = result
                 .map(|result| {
                     result
                         .verification_results
                         .iter()
-                        .filter(|verification| verification.status == "passed")
+                        .filter(|verification| {
+                            verification.status == "passed"
+                                && verification_is_traceable(verification)
+                        })
                         .map(|verification| verification.verification_id.clone())
                         .collect::<BTreeSet<_>>()
                 })
@@ -3792,7 +4035,6 @@ fn build_architecture_quality_review_matrix(
                 "decisionRefs": requirement.decision_refs,
                 "nfrRefs": requirement.nfr_refs,
                 "riskRefs": requirement.risk_refs,
-                "implementationObligations": requirement.implementation_obligations,
                 "verificationObligations": requirement.verification_obligations,
                 "architectureQualityEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                 "verificationSupported": verification_supported,
@@ -3817,13 +4059,7 @@ fn build_api_contract_review_matrix(
                 let result = task_results
                     .iter()
                     .find(|result| result.task_id == *task_id);
-                let applicability = task_plan
-                    .tasks
-                    .iter()
-                    .find(|task| task.task_id == *task_id)
-                    .map(task_evidence_applicability)
-                    .unwrap_or_default();
-                let evidence = result.filter(|_| applicability.api_contract_evidence).and_then(|result| {
+                let evidence = result.and_then(|result| {
                     result
                         .api_contract_evidence
                         .iter()
@@ -3834,7 +4070,10 @@ fn build_api_contract_review_matrix(
                         result
                             .verification_results
                             .iter()
-                            .filter(|verification| verification.status == "passed")
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
                             .map(|verification| verification.verification_id.clone())
                             .collect::<BTreeSet<_>>()
                     })
@@ -3859,7 +4098,8 @@ fn build_api_contract_review_matrix(
                     "taskId": task_id,
                     "taskResultId": result.map(|result| result.task_result_id.clone()),
                     "interfaceRefs": requirement.interface_refs,
-                    "implementationObligations": requirement.implementation_obligations,
+                    "securityProfileRefs": requirement.security_profile_refs,
+                    "referenceLoadPlan": requirement.reference_load_plan,
                     "verificationObligations": requirement.verification_obligations,
                     "apiContractEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
                     "verificationSupported": verification_supported,
@@ -3903,6 +4143,7 @@ fn compact_api_interface_for_review(interface: &Value) -> Value {
         "path": interface.get("path").cloned().unwrap_or(Value::Null),
         "operationKind": interface.get("operationKind").cloned().unwrap_or(Value::Null),
         "statusCodes": interface.get("statusCodes").cloned().unwrap_or(Value::Null),
+        "authPolicy": interface.get("authPolicy").cloned().unwrap_or(Value::Null),
         "requestFieldCount": interface
             .get("requestSchema")
             .and_then(Value::as_array)
@@ -3920,7 +4161,9 @@ fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
     result
         .verification_results
         .iter()
-        .filter(|verification| verification.status == "passed")
+        .filter(|verification| {
+            verification.status == "passed" && verification_is_traceable(verification)
+        })
         .map(|verification| {
             json!({
                 "verificationId": verification.verification_id,
@@ -3965,19 +4208,13 @@ fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
 fn build_frontend_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
-    architecture_contract: Option<&ArchitectureArtifactContract>,
 ) -> Vec<Value> {
     task_plan
         .tasks
         .iter()
         .filter_map(|task| {
             let requirement = task.frontend_experience_requirement.as_ref()?;
-            let applicability = task_evidence_applicability(task);
-            if !applicability.frontend_quality_self_check {
-                return None;
-            }
-            let surface_contract =
-                task_scoped_surface_contract_for_review(requirement, architecture_contract);
+            let surface_contract = task_scoped_surface_contract_for_review(requirement);
             if !surface_contract.is_object() {
                 return None;
             }
@@ -4044,6 +4281,9 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
+            let evidence_refs = string_array_field(&self_check, "evidenceRefs");
+            let evidence_refs_satisfied = !evidence_refs.is_empty()
+                && evidence_refs.iter().all(|reference| !reference.trim().is_empty());
             let expected_browser_checks = task_plan
                 .browser_verification_profiles
                 .iter()
@@ -4061,7 +4301,12 @@ fn build_frontend_quality_review_matrix(
                 .collect::<BTreeSet<_>>();
             let passed_browser_check_ids = task_results
                 .iter()
-                .flat_map(|result| result.verification_results.iter())
+                .flat_map(|result| {
+                    result
+                        .verification_results
+                        .iter()
+                        .filter(|verification| verification_is_traceable(verification))
+                })
                 .flat_map(|verification| verification.browser_checks.iter())
                 .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
                 .map(|check| check.check_id.clone())
@@ -4095,6 +4340,7 @@ fn build_frontend_quality_review_matrix(
                 && surface_contract_satisfied
                 && token_asset_satisfied
                 && browser_verification_satisfied
+                && evidence_refs_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
@@ -4132,6 +4378,8 @@ fn build_frontend_quality_review_matrix(
                 },
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
+                "evidenceRefCount": evidence_refs.len(),
+                "evidenceRefsSatisfied": evidence_refs_satisfied,
                 "recommendedNextAction": if quality_satisfied {
                     "none"
                 } else if required_browser_environment_blocked {
@@ -4144,85 +4392,12 @@ fn build_frontend_quality_review_matrix(
         .collect()
 }
 
-fn task_scoped_surface_contract_for_review(
-    requirement: &Value,
-    architecture_contract: Option<&ArchitectureArtifactContract>,
-) -> Value {
-    if let Some(contract) = requirement
+fn task_scoped_surface_contract_for_review(requirement: &Value) -> Value {
+    requirement
         .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
         .filter(|value| value.is_object())
-    {
-        return contract.clone();
-    }
-
-    let full_contract = architecture_contract
-        .and_then(|contract| contract.frontend_experience.as_ref())
-        .and_then(|frontend| frontend.get("uiSurfaceDecisionContract"))
         .cloned()
-        .unwrap_or(Value::Null);
-    if !full_contract.is_object() {
-        return Value::Null;
-    }
-
-    let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
-    let region_ids = object_id_array_field(scope, "regionsInScope", "regionId");
-    let action_ids = object_id_array_field(scope, "actionsInContract", "actionId");
-    let state_ids = object_id_array_field(scope, "statesInContract", "state");
-    let quality_rule_ids = object_id_array_field(scope, "qualityRulesInScope", "ruleId");
-    json!({
-        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
-        "selectionMode": "task_scope",
-        "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
-        "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
-        "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
-        "regionsInScope": selected_surface_contract_values(&full_contract, "regionModel", "regionId", &region_ids),
-        "informationModel": full_contract.get("informationModel").cloned().unwrap_or(Value::Null),
-        "actionsInScope": selected_surface_contract_values(&full_contract, "actionModel", "actionId", &action_ids),
-        "statesInScope": selected_surface_contract_values(&full_contract, "stateModel", "state", &state_ids),
-        "compositionConstraints": full_contract.get("compositionConstraints").cloned().unwrap_or(Value::Null),
-        "contentBoundary": full_contract.get("contentBoundary").cloned().unwrap_or(Value::Null),
-        "qualityRulesInScope": selected_surface_contract_values(&full_contract, "qualityRules", "ruleId", &quality_rule_ids),
-        "designTokenAssetPlan": full_contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
-        "referencePlan": full_contract.get("referencePlan").cloned().unwrap_or_else(|| json!([]))
-    })
-}
-
-fn object_id_array_field(value: &Value, key: &str, id_key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get(id_key).and_then(Value::as_str).map(str::to_string))
-        .collect()
-}
-
-fn selected_surface_contract_values(
-    contract: &Value,
-    array_key: &str,
-    id_key: &str,
-    ids: &[String],
-) -> Vec<Value> {
-    let values = contract
-        .get(array_key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
-    values
-        .into_iter()
-        .filter(|value| {
-            value
-                .get(id_key)
-                .and_then(Value::as_str)
-                .is_some_and(|id| selected.contains(id))
-        })
-        .cloned()
-        .collect()
+        .unwrap_or(Value::Null)
 }
 
 fn frontend_surface_contract_review(
@@ -4273,6 +4448,11 @@ fn frontend_surface_contract_review(
         &expected_reference_plan_files,
         &checked_reference_plan_files,
     );
+    let evidence_refs = string_array_field(self_check, "evidenceRefs");
+    let evidence_refs_satisfied = !evidence_refs.is_empty()
+        && evidence_refs
+            .iter()
+            .all(|reference| !reference.trim().is_empty());
     let content_checked = self_check
         .pointer("/contentBoundaryEvidence/checked")
         .and_then(Value::as_bool)
@@ -4295,6 +4475,7 @@ fn frontend_surface_contract_review(
         && review_satisfied(&state_review)
         && review_satisfied(&quality_rule_review)
         && missing_reference_plan_files.is_empty()
+        && evidence_refs_satisfied
         && content_boundary_satisfied;
 
     json!({
@@ -4309,6 +4490,8 @@ fn frontend_surface_contract_review(
         "referencePlanFileCount": expected_reference_plan_files.len(),
         "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
         "missingReferencePlanFiles": missing_reference_plan_files,
+        "evidenceRefCount": evidence_refs.len(),
+        "evidenceRefsSatisfied": evidence_refs_satisfied,
         "contentBoundary": {
             "checked": content_checked,
             "evidencePresent": content_evidence_present,
@@ -4394,6 +4577,7 @@ fn review_satisfied(review: &Value) -> bool {
 fn compact_review_matrix_summary(
     concept_matrix: &[Value],
     detail_matrix: &[Value],
+    implementation_obligation_matrix: &[Value],
     engineering_quality_matrix: &[Value],
     architecture_quality_matrix: &[Value],
     api_contract_matrix: &[Value],
@@ -4417,6 +4601,14 @@ fn compact_review_matrix_summary(
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
+        "implementationObligations": implementation_obligation_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "obligationId": item.get("obligationId").cloned().unwrap_or(Value::Null),
+                "satisfied": item.get("satisfied").cloned().unwrap_or(Value::Bool(false)),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
         "engineeringQuality": engineering_quality_matrix.iter().map(|item| {
             json!({
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
@@ -4427,6 +4619,10 @@ fn compact_review_matrix_summary(
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
+                "implementationSupportCount": item
+                    .get("implementationSupportCount")
+                    .cloned()
+                    .unwrap_or_else(|| json!(0)),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -4523,6 +4719,40 @@ fn build_review_signals(
         "failedTasks": run.summary.failed,
         "blockedTasks": run.summary.blocked
     })];
+    for obligation in build_implementation_obligation_review_matrix(task_plan, task_results) {
+        let task_id = obligation
+            .get("taskId")
+            .and_then(Value::as_str)
+            .unwrap_or("task");
+        let obligation_id = obligation
+            .get("obligationId")
+            .and_then(Value::as_str)
+            .unwrap_or("obligation");
+        let satisfied = obligation
+            .get("satisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-implementation-obligation-{}-{}",
+                safe_signal_id(task_id),
+                safe_signal_id(obligation_id)
+            ),
+            "kind": "implementation_obligation",
+            "taskRefs": [task_id],
+            "obligationId": obligation_id,
+            "obligationKind": obligation.get("kind").cloned().unwrap_or(Value::Null),
+            "implementationSatisfied": satisfied,
+            "evidenceRefCount": obligation.get("evidenceRefCount").cloned().unwrap_or(Value::from(0)),
+            "verificationSupported": obligation.get("verificationSupported").cloned().unwrap_or(Value::Bool(false)),
+            "recommendedNextAction": if satisfied { "none" } else { "execution_repair" },
+            "reason": if satisfied {
+                "The task implementation obligation has persisted evidence and supported verification."
+            } else {
+                "The task implementation obligation is incomplete or its evidence cannot prove the declared outcome."
+            }
+        }));
+    }
     for detail in build_detail_review_matrix(task_plan, task_results) {
         let detail_id = detail
             .get("detailId")
@@ -4547,9 +4777,7 @@ fn build_review_signals(
             }
         }));
     }
-    for quality in
-        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract)
-    {
+    for quality in build_frontend_quality_review_matrix(task_plan, task_results) {
         let task_id = quality
             .get("taskId")
             .and_then(Value::as_str)
@@ -4627,6 +4855,10 @@ fn build_review_signals(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0),
+            "implementationSupportCount": item
+                .get("implementationSupportCount")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
             "reason": if quality_satisfied {
                 "TaskResult contains passed verification evidence for the referenced engineering quality requirement."
@@ -4815,28 +5047,21 @@ fn build_review_signals(
                 .iter()
                 .find(|result| result.task_id == task.task_id);
             let check = result.and_then(|result| result.frontend_experience_self_check.as_ref());
-            let data_binding = check
-                .and_then(|check| check.get("dataBinding"))
-                .unwrap_or(&Value::Null);
+            let data_binding = check.map(|check| &check.data_binding);
             let known_gap_count = data_binding
-                .get("knownGaps")
-                .and_then(Value::as_array)
-                .map(|items| items.len())
+                .map(|binding| binding.known_gaps.len())
                 .unwrap_or(0);
             let covered_closures = check
-                .and_then(|check| check.get("closureRequirementIds"))
-                .and_then(Value::as_array)
+                .map(|check| check.closure_requirement_ids.iter().cloned())
                 .into_iter()
                 .flatten()
-                .filter_map(|item| item.as_str().map(str::to_string))
                 .collect::<BTreeSet<_>>();
-            let closure_satisfied = check
-                .and_then(|check| check.get("status"))
-                .and_then(Value::as_str)
-                == Some("satisfied")
-                && data_binding.get("mode").and_then(Value::as_str) == Some("wired")
+            let closure_satisfied = check.is_some_and(|check| check.status == "satisfied")
+                && data_binding.is_some_and(|binding| binding.mode == "wired")
                 && known_gap_count == 0
+                && check.is_some_and(|check| !check.evidence_refs.is_empty())
                 && covered_closures.contains(&closure_id);
+            let evidence_ref_count = check.map(|check| check.evidence_refs.len()).unwrap_or(0);
             signals.push(json!({
                 "signalId": format!("sig-workflow-closure-{}-{}", safe_signal_id(&closure_id), safe_signal_id(&task.task_id)),
                 "kind": "frontend_workflow_closure",
@@ -4844,9 +5069,10 @@ fn build_review_signals(
                 "taskRefs": [task.task_id.clone()],
                 "taskResultId": result.map(|result| result.task_result_id.clone()),
                 "closureSatisfied": closure_satisfied,
-                "actualFrontendSelfCheckStatus": check.and_then(|check| check.get("status")).and_then(Value::as_str),
-                "actualDataBindingMode": data_binding.get("mode").and_then(Value::as_str),
+                "actualFrontendSelfCheckStatus": check.map(|check| check.status.as_str()),
+                "actualDataBindingMode": data_binding.map(|binding| binding.mode.as_str()),
                 "knownGapCount": known_gap_count,
+                "evidenceRefCount": evidence_ref_count,
                 "requiredDataBindingMode": "wired",
                 "recommendedNextAction": if closure_satisfied { "none" } else { "execution_repair" },
                 "reason": if closure_satisfied {
@@ -4858,49 +5084,72 @@ fn build_review_signals(
         }
     }
     for result in task_results {
-        let applicability = task_plan
-            .tasks
-            .iter()
-            .find(|task| task.task_id == result.task_id)
-            .map(task_evidence_applicability)
-            .unwrap_or_default();
-        if applicability.runtime_delivery_evidence && result.runtime_delivery_evidence.is_some() {
+        if result.runtime_delivery_evidence.is_some() {
+            let runtime_evidence = compact_runtime_delivery_evidence(result);
             signals.push(json!({
                 "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "runtime_delivery"
+                "evidenceType": "runtime_delivery",
+                "runtimeEvidence": runtime_evidence
             }));
         }
-        if applicability.frontend_self_check && result.frontend_experience_self_check.is_some() {
+        if result.frontend_experience_self_check.is_some() {
+            let frontend_evidence = result
+                .frontend_experience_self_check
+                .as_ref()
+                .map(|check| check.evidence_refs.len())
+                .unwrap_or(0);
             signals.push(json!({
                 "signalId": format!("sig-frontend-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "frontend_experience"
+                "evidenceType": "frontend_experience",
+                "evidenceRefCount": frontend_evidence
             }));
         }
-        if applicability.frontend_quality_self_check && result.frontend_quality_self_check.is_some()
-        {
+        if result.frontend_quality_self_check.is_some() {
+            let frontend_quality_evidence = compact_frontend_quality_self_check(result);
             signals.push(json!({
                 "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
                 "kind": "task_result_evidence_presence",
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
-                "evidenceType": "frontend_quality"
+                "evidenceType": "frontend_quality",
+                "evidenceRefCount": frontend_quality_evidence
+                    .get("evidenceRefCount")
+                    .cloned()
+                    .unwrap_or(Value::from(0)),
+                "evidenceRefsSatisfied": frontend_quality_evidence
+                    .get("evidenceRefsSatisfied")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false))
             }));
         }
     }
     Value::Array(signals)
 }
 
-fn task_evidence_applicability(task: &TaskDefinition) -> TaskEvidenceApplicability {
-    serde_json::to_value(task)
-        .ok()
-        .map(|value| task_evidence_applicability_from_value(&value))
-        .unwrap_or_default()
+fn compact_runtime_delivery_evidence(result: &TaskResult) -> Value {
+    let Some(evidence) = result.runtime_delivery_evidence.as_ref() else {
+        return json!({ "present": false });
+    };
+    let command_count = evidence.commands_run.len();
+    let unverified_item_count = evidence.unverified_items.len();
+    let check_statuses = evidence
+        .code_level_checks
+        .iter()
+        .map(|check| check.status.clone())
+        .collect::<Vec<_>>();
+    json!({
+        "present": true,
+        "commandCount": command_count,
+        "unverifiedItemCount": unverified_item_count,
+        "codeLevelCheckStatuses": check_statuses,
+        "runtimeProbeCleanup": evidence.runtime_probe_cleanup.as_deref().map(compact_summary)
+    })
 }
 
 fn value_string_array(value: &Value, key: &str) -> Vec<String> {
@@ -5187,6 +5436,22 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
     json!({
         "present": true,
         "status": self_check.get("status").and_then(Value::as_str),
+        "evidenceRefCount": self_check
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "evidenceRefsSatisfied": self_check
+            .get("evidenceRefs")
+            .and_then(Value::as_array)
+            .is_some_and(|refs| {
+                !refs.is_empty()
+                    && refs.iter().all(|reference| {
+                        reference
+                            .as_str()
+                            .is_some_and(|value| !value.trim().is_empty())
+                    })
+            }),
         "surfaceDecisionContractRef": self_check
             .get("surfaceDecisionContractRef")
             .and_then(Value::as_str),
@@ -5769,6 +6034,7 @@ mod tests {
         json!({
             "status": "satisfied",
             "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "evidenceRefs": ["web/src/App.tsx"],
             "surfaceRegionEvidence": [{
                 "id": "region-main",
                 "status": "satisfied",

@@ -679,16 +679,32 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
 }
 
 fn service_has_healthcheck_for_id(spec: &DeploymentSpec, service_id: &str) -> bool {
-    spec.source_model
+    if spec
+        .source_model
         .services
         .iter()
         .find(|service| service.service_id == service_id)
         .map(service_has_healthcheck)
         .unwrap_or(false)
+    {
+        return true;
+    }
+    spec.source_model
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.service_name == service_id)
+        .map(|dependency| {
+            dependency.startup_requirement == "required" && dependency_has_healthcheck(dependency)
+        })
+        .unwrap_or(false)
 }
 
 fn service_has_healthcheck(service: &DeploymentSourceService) -> bool {
     service.healthcheck_path.is_some() && service.role != SourceServiceRole::Frontend
+}
+
+fn dependency_has_healthcheck(service: &DependencyService) -> bool {
+    matches!(service.kind, contracts::DependencyServiceKind::Redis)
 }
 
 fn healthcheck_test(service: &DeploymentSourceService) -> String {
@@ -732,6 +748,17 @@ fn generate_dependency_service(service: &DependencyService) -> Vec<String> {
     lines.extend(yaml_environment(&service.env, 4));
     lines.push("    expose:".to_string());
     lines.push(format!("      - \"{}\"", service.port));
+    if dependency_has_healthcheck(service) {
+        lines.push("    healthcheck:".to_string());
+        lines.push("      test: [\"CMD\", \"redis-cli\", \"ping\"]".to_string());
+        lines.push("      interval: 10s".to_string());
+        lines.push("      timeout: 3s".to_string());
+        lines.push("      retries: 6".to_string());
+        lines.push("      start_period: 5s".to_string());
+    }
+    if service.kind == contracts::DependencyServiceKind::Redis && service.volume_name.is_some() {
+        lines.push("    command: [\"redis-server\", \"--appendonly\", \"yes\"]".to_string());
+    }
     if let Some(volume) = &service.volume_name {
         lines.push("    volumes:".to_string());
         lines.push(format!(
@@ -740,6 +767,7 @@ fn generate_dependency_service(service: &DependencyService) -> Vec<String> {
             service.volume_target.as_deref().unwrap_or("/data")
         ));
     }
+    lines.push("    restart: unless-stopped".to_string());
     lines.push(String::new());
     lines
 }

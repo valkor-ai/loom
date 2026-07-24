@@ -2,6 +2,8 @@
 
 Implement the authentication and authorization policy already owned by the current interfaces and architecture. Do not introduce JWT, OAuth2, sessions, roles, refresh tokens, or account management when protected operations are not part of the task.
 
+The accepted JWT algorithm, issuer, audience, token type, and key-source contract lives in `tech/api/jwt.md` when a bearer JWT profile is active. This file owns Spring Security wiring and framework-specific verification only. A `server_session` profile is a separate cookie-backed session path and must not be implemented as JWT.
+
 ## Security Mechanism Boundary
 
 Choose the mechanism from the accepted baseline and existing repository:
@@ -37,11 +39,13 @@ Keep matcher order from specific to general. Avoid broad `permitAll`, accidental
 
 Do not disable CSRF by habit. Stateless bearer-token APIs that do not authenticate with cookies can disable it deliberately. Browser sessions and cookie-based authentication require CSRF protection. Document the actual client mechanism in configuration or tests.
 
+For a `server_session` profile, load the authenticated principal from the server-side session store, map its stable user id and roles to Spring authorities, and protect unsafe browser requests with CSRF validation. Do not create an OAuth2 resource-server filter, bearer token parser, issuer/audience configuration, or JWT algorithm configuration for this profile. Redis is the session store when the accepted runtime dependency declares the `session` capability; session lifecycle and cookie settings remain framework/configuration concerns owned by the backend task.
+
 ## Authentication Material
 
 - Store passwords with the repository's selected adaptive encoder; never plaintext or reversible encryption.
 - Externalize issuer, audience, JWK location, client credentials, signing material, token lifetime, and allowed clock skew.
-- Validate issuer, audience, expiry, signature, and token type required by the contract.
+- Map the selected `tech/api/jwt.md` contract into Spring's resource-server validation; do not widen algorithms or claims in framework configuration.
 - Never log bearer tokens, refresh tokens, passwords, authorization headers, or decoded sensitive claims.
 - Keep production credentials out of default application configuration; placeholders and environment bindings are allowed.
 

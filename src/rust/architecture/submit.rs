@@ -32,6 +32,7 @@ use crate::{
         architecture_quality_template_from_candidate_plan, architecture_read_groups,
         build_architecture_quality_seed, required_content_keys, section_enum_refs,
         section_generation_rules, section_order, section_result_template, section_schema_shape,
+        validate_section_content_shape,
     },
 };
 
@@ -193,7 +194,6 @@ where
     let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let mut raw = state::store::read_json_value(&candidate_file)?;
-    normalize_architecture_candidate_null_arrays(&mut raw);
     normalize_architecture_candidate_envelope(
         &mut raw,
         &authorized.request_id,
@@ -284,12 +284,23 @@ where
     if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
         candidate_normalized = true;
     }
-    if normalize_foundation_interaction_machine_fields(&mut candidate.content) {
-        candidate_normalized = true;
-    }
-
     let mut issues = Vec::new();
     issues.extend(validate_section_content(&candidate));
+    if let Some(schema_shape) = request_root.pointer("/currentSectionContract/schemaShape") {
+        issues.extend(
+            validate_section_content_shape(&candidate.content, schema_shape)
+                .into_iter()
+                .map(|(field_path, message)| {
+                    issue("ARCHITECTURE_SECTION_FIELD_INVALID", &field_path, &message)
+                }),
+        );
+    } else {
+        issues.push(issue(
+            "ARCHITECTURE_SECTION_SCHEMA_MISSING",
+            "currentSectionContract.schemaShape",
+            "The current Architecture section contract is missing its canonical content shape.",
+        ));
+    }
     issues.extend(validate_architecture_section_semantics(&candidate));
     issues.extend(validate_structured_communication_boundaries(&candidate));
     issues.extend(validate_http_interfaces(&candidate, &request_root));
@@ -317,6 +328,19 @@ where
             issues,
             mode,
         ));
+    }
+
+    if matches!(candidate.section, ArchitectureSectionGroup::Foundation) {
+        if let Some(content) = candidate.content.as_object_mut() {
+            content.insert(
+                "source".to_string(),
+                json!({
+                    "planningGenerationContractId": request_root.pointer("/contextProjection/planningContractId").cloned().unwrap_or(Value::Null),
+                    "technicalBaselineId": request_root.pointer("/contextProjection/technicalBaseline/technicalBaselineId").cloned().unwrap_or(Value::Null)
+                }),
+            );
+            candidate_normalized = true;
+        }
     }
 
     let locator = DeliveryPhaseLocator {
@@ -363,6 +387,7 @@ where
             let api_quality_seed = build_api_quality_seed_from_foundation(
                 &candidate.content,
                 existing_api_contract.as_ref(),
+                request_root.get("securityProfileSeed"),
             );
             apply_api_quality_seed(&mut request_root, &api_quality_seed);
             rebuild_domain_contract_output(
@@ -575,17 +600,6 @@ fn normalize_architecture_candidate_envelope(
     object.insert("phaseId".to_string(), json!(phase_id));
     object.insert("section".to_string(), json!(current_section));
     object.insert("createdAt".to_string(), json!(state::store::now_string()));
-    if matches!(current_section, ArchitectureSectionGroup::Foundation) {
-        if let Some(content) = object.get_mut("content").and_then(Value::as_object_mut) {
-            content.insert(
-                "source".to_string(),
-                json!({
-                    "planningGenerationContractId": request_root.pointer("/contextProjection/planningContractId").cloned().unwrap_or(Value::Null),
-                    "technicalBaselineId": request_root.pointer("/contextProjection/technicalBaseline/technicalBaselineId").cloned().unwrap_or(Value::Null)
-                }),
-            );
-        }
-    }
     if matches!(current_section, ArchitectureSectionGroup::Coverage) {
         normalize_architecture_quality_candidate_fields(
             object.get_mut("content"),
@@ -593,256 +607,54 @@ fn normalize_architecture_candidate_envelope(
         );
     }
     if matches!(current_section, ArchitectureSectionGroup::RuntimeDelivery) {
-        normalize_runtime_dependency_field_names(object.get_mut("content"));
+        normalize_runtime_dependencies_from_seed(
+            object.get_mut("content"),
+            request_root.pointer("/runtimeDependencySeed/candidates"),
+        );
     }
 }
 
-fn normalize_architecture_candidate_null_arrays(raw: &mut Value) {
-    const ARRAY_FIELDS: &[&str] = &[
-        "acceptanceRefs",
-        "actions",
-        "applicationInteractions",
-        "composedOf",
-        "constraints",
-        "consumerApplicationRefs",
-        "dataRefs",
-        "decisionDrivers",
-        "derivedData",
-        "enforcementPoints",
-        "entities",
-        "failurePaths",
-        "fields",
-        "happyPath",
-        "invariants",
-        "interfaceRefs",
-        "lifecyclePolicies",
-        "migrationImpacts",
-        "modules",
-        "operationRefs",
-        "ownership",
-        "readModels",
-        "relationships",
-        "scopeRefs",
-        "sourceDataRefs",
-        "stateEffects",
-        "stateMachineRefs",
-        "stateMachines",
-        "structuralRules",
-        "transitions",
-        "userFlows",
-    ];
-    normalize_named_null_arrays(raw, ARRAY_FIELDS);
-}
-
-fn normalize_named_null_arrays(value: &mut Value, array_fields: &[&str]) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                normalize_named_null_arrays(item, array_fields);
-            }
-        }
-        Value::Object(object) => {
-            for (key, value) in object.iter_mut() {
-                if value.is_null() && array_fields.contains(&key.as_str()) {
-                    *value = Value::Array(vec![]);
-                } else {
-                    normalize_named_null_arrays(value, array_fields);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn normalize_foundation_interaction_machine_fields(content: &mut Value) -> bool {
-    let Some(object) = content.as_object_mut() else {
+fn normalize_runtime_dependencies_from_seed(
+    content: Option<&mut Value>,
+    candidates: Option<&Value>,
+) -> bool {
+    let Some(content) = content else {
         return false;
     };
-    let Some(boundary) = object
-        .get_mut("engineeringBoundary")
+    let Some(runtime_delivery) = content
+        .as_object_mut()
+        .and_then(|object| object.get_mut("runtimeDelivery"))
         .and_then(Value::as_object_mut)
     else {
         return false;
     };
-    let applications = boundary
-        .get("applications")
+    runtime_delivery.remove("runtimeDependencies");
+    let projection = candidates
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let modules = boundary
-        .get("modules")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let provider_applications = applications
-        .iter()
-        .filter(|application| {
-            application
-                .get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        "backend_service" | "api_service" | "server" | "service" | "worker"
-                    )
-                })
-        })
-        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    let consumer_applications = applications
-        .iter()
-        .filter(|application| {
-            application
-                .get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        "web_client" | "mobile_client" | "native_client" | "desktop_client"
-                    )
-                })
-        })
-        .filter_map(|application| application.get("applicationId").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    let module_id = (modules.len() == 1)
-        .then(|| modules[0].get("moduleId").and_then(Value::as_str))
-        .flatten();
-    let Some(interactions) = boundary
-        .get_mut("applicationInteractions")
-        .and_then(Value::as_array_mut)
-    else {
-        return false;
-    };
-    let mut changed = false;
-    for interaction in interactions {
-        let Some(interaction) = interaction.as_object_mut() else {
-            continue;
-        };
-        let interaction_type = interaction
-            .get("interactionType")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if interaction
-            .get("providerApplicationRef")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-            && provider_applications.len() == 1
-        {
-            interaction.insert(
-                "providerApplicationRef".to_string(),
-                json!(provider_applications[0]),
-            );
-            changed = true;
-        }
-        if interaction
-            .get("consumerApplicationRefs")
-            .and_then(Value::as_array)
-            .is_none_or(Vec::is_empty)
-            && consumer_applications.len() == 1
-        {
-            interaction.insert(
-                "consumerApplicationRefs".to_string(),
-                json!([consumer_applications[0]]),
-            );
-            changed = true;
-        }
-        if interaction
-            .get("providerModuleRef")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-            && module_id.is_some()
-        {
-            interaction.insert("providerModuleRef".to_string(), json!(module_id));
-            changed = true;
-        }
-        if interaction_type == "http_api" {
-            let Some(policies) = interaction
-                .get_mut("qualityTraits")
-                .and_then(Value::as_object_mut)
-                .and_then(|traits| traits.get_mut("operationalPolicies"))
-                .and_then(Value::as_array_mut)
-            else {
-                continue;
-            };
-            let normalized = policies
+        .map(|items| {
+            items
                 .iter()
-                .map(|policy| {
-                    policy
-                        .as_str()
-                        .and_then(normalize_operational_policy_alias)
-                        .map(|value| Value::String(value.to_string()))
-                        .unwrap_or_else(|| policy.clone())
+                .filter_map(|item| {
+                    let object = item.as_object()?;
+                    let mut dependency = serde_json::Map::new();
+                    for field in [
+                        "dependencyId",
+                        "kind",
+                        "provider",
+                        "startupRequirement",
+                        "capabilities",
+                    ] {
+                        if let Some(value) = object.get(field) {
+                            dependency.insert(field.to_string(), value.clone());
+                        }
+                    }
+                    Some(Value::Object(dependency))
                 })
-                .collect::<Vec<_>>();
-            if normalized != *policies {
-                *policies = normalized;
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
-fn normalize_operational_policy_alias(value: &str) -> Option<&'static str> {
-    match value
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_")
-        .as_str()
-    {
-        "idempotent" | "deduplication" | "duplicate_prevention" => Some("idempotency"),
-        "caching" | "cache_control" => Some("cache"),
-        "retries" | "retry_policy" => Some("retry"),
-        "rate_limiting" | "rate_limit_policy" => Some("rate_limit"),
-        "correlation_id" | "trace_id" | "request_correlation" => Some("request_id"),
-        "idempotency" => Some("idempotency"),
-        "cache" => Some("cache"),
-        "retry" => Some("retry"),
-        "rate_limit" => Some("rate_limit"),
-        "request_id" => Some("request_id"),
-        _ => None,
-    }
-}
-
-fn normalize_runtime_dependency_field_names(content: Option<&mut Value>) {
-    let Some(dependencies) = content
-        .and_then(|value| value.pointer_mut("/runtimeDelivery/runtimeDependencies"))
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-    for dependency in dependencies {
-        let Some(object) = dependency.as_object_mut() else {
-            continue;
-        };
-        if !object.contains_key("requiredFor") {
-            if let Some(value) = object.remove("affectedCapability") {
-                object.insert(
-                    "requiredFor".to_string(),
-                    match value {
-                        Value::Array(_) => value,
-                        value => Value::Array(vec![value]),
-                    },
-                );
-            }
-        } else {
-            object.remove("affectedCapability");
-        }
-        if !object.contains_key("observability") {
-            if let Some(value) = object.remove("observableSignal") {
-                object.insert(
-                    "observability".to_string(),
-                    match value {
-                        Value::Array(_) => value,
-                        value => Value::Array(vec![value]),
-                    },
-                );
-            }
-        } else {
-            object.remove("observableSignal");
-        }
-    }
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    runtime_delivery.insert("runtimeDependencies".to_string(), Value::Array(projection));
+    true
 }
 
 fn normalize_architecture_quality_candidate_fields(
@@ -1055,6 +867,85 @@ fn validate_structured_communication_boundaries(
         "cli_command",
     ]);
     let mut issues = Vec::new();
+    let applications = candidate
+        .content
+        .pointer("/engineeringBoundary/applications")
+        .and_then(Value::as_array);
+    let mut application_ids = BTreeSet::new();
+    if let Some(applications) = applications {
+        for (index, application) in applications.iter().enumerate() {
+            let path = format!("content.engineeringBoundary.applications[{index}]");
+            let Some(application) = application.as_object() else {
+                issues.push(issue(
+                    "APPLICATION_OBJECT_REQUIRED",
+                    &path,
+                    "Each application must be a structured object from the current write contract.",
+                ));
+                continue;
+            };
+            for field in ["applicationId", "name", "kind", "rootPath"] {
+                if application
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    issues.push(issue(
+                        "APPLICATION_FIELD_REQUIRED",
+                        &format!("{path}.{field}"),
+                        "Applications must provide applicationId, name, kind, and rootPath.",
+                    ));
+                }
+            }
+            if let Some(application_id) = application.get("applicationId").and_then(Value::as_str) {
+                if !application_id.trim().is_empty() && !application_ids.insert(application_id) {
+                    issues.push(issue(
+                        "APPLICATION_ID_DUPLICATE",
+                        &format!("{path}.applicationId"),
+                        "Application ids must be unique within the current Foundation.",
+                    ));
+                }
+            }
+            if application
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    !matches!(
+                        kind,
+                        "web_application"
+                            | "web_client"
+                            | "mobile_client"
+                            | "native_client"
+                            | "desktop_client"
+                            | "backend_service"
+                            | "api_service"
+                            | "worker"
+                            | "external_system"
+                    )
+                })
+            {
+                issues.push(issue(
+                    "APPLICATION_KIND_INVALID",
+                    &format!("{path}.kind"),
+                    "Application kind must use the enum declared by the current Foundation contract.",
+                ));
+            }
+        }
+    } else if !interactions.is_empty() {
+        issues.push(issue(
+            "APPLICATIONS_REQUIRED",
+            "content.engineeringBoundary.applications",
+            "Foundation interactions require a declared application registry.",
+        ));
+    }
+    let module_ids = candidate
+        .content
+        .get("modules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|module| module.get("moduleId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut interaction_ids = BTreeSet::new();
     for (index, interaction) in interactions.iter().enumerate() {
         let path = format!("content.engineeringBoundary.applicationInteractions[{index}]");
         let Some(object) = interaction.as_object() else {
@@ -1080,6 +971,7 @@ fn validate_structured_communication_boundaries(
             "interactionId",
             "providerApplicationRef",
             "providerModuleRef",
+            "protocol",
         ] {
             if object
                 .get(key)
@@ -1091,6 +983,80 @@ fn validate_structured_communication_boundaries(
                     &format!("{path}.{key}"),
                     "Structured application interactions must identify their owner and stable id.",
                 ));
+            }
+        }
+        if let Some(interaction_id) = object.get("interactionId").and_then(Value::as_str) {
+            if !interaction_id.trim().is_empty() && !interaction_ids.insert(interaction_id) {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_ID_DUPLICATE",
+                    &format!("{path}.interactionId"),
+                    "Application interaction ids must be unique within the current Foundation.",
+                ));
+            }
+        }
+        let Some(consumers) = object
+            .get("consumerApplicationRefs")
+            .and_then(Value::as_array)
+        else {
+            issues.push(issue(
+                "APPLICATION_INTERACTION_CONSUMERS_REQUIRED",
+                &format!("{path}.consumerApplicationRefs"),
+                "Every structured interaction must declare consumerApplicationRefs, including an empty array when there is no consumer.",
+            ));
+            continue;
+        };
+        for (consumer_index, consumer) in consumers.iter().enumerate() {
+            let Some(consumer) = consumer.as_str() else {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_REFERENCE_INVALID",
+                    &format!("{path}.consumerApplicationRefs[{consumer_index}]"),
+                    "Application references must be strings.",
+                ));
+                continue;
+            };
+            if !application_ids.is_empty() && !application_ids.contains(consumer) {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_REFERENCE_UNKNOWN",
+                    &format!("{path}.consumerApplicationRefs[{consumer_index}]"),
+                    "consumerApplicationRefs must reference an application in the declared registry.",
+                ));
+            }
+        }
+        if let Some(provider) = object.get("providerApplicationRef").and_then(Value::as_str) {
+            if !application_ids.is_empty() && !application_ids.contains(provider) {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_REFERENCE_UNKNOWN",
+                    &format!("{path}.providerApplicationRef"),
+                    "providerApplicationRef must reference an application in the declared registry.",
+                ));
+            }
+        }
+        if let Some(provider_module) = object.get("providerModuleRef").and_then(Value::as_str) {
+            if !module_ids.is_empty() && !module_ids.contains(provider_module) {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_MODULE_UNKNOWN",
+                    &format!("{path}.providerModuleRef"),
+                    "providerModuleRef must reference a declared Foundation module.",
+                ));
+            }
+        }
+        for field in ["interfaceRefs", "scopeRefs", "acceptanceRefs"] {
+            let Some(values) = object.get(field).and_then(Value::as_array) else {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_ARRAY_REQUIRED",
+                    &format!("{path}.{field}"),
+                    "Interaction ownership fields must be arrays, including an empty array when not applicable.",
+                ));
+                continue;
+            };
+            for (value_index, value) in values.iter().enumerate() {
+                if !value.is_string() {
+                    issues.push(issue(
+                        "APPLICATION_INTERACTION_REFERENCE_INVALID",
+                        &format!("{path}.{field}[{value_index}]"),
+                        "Interaction ownership references must be strings.",
+                    ));
+                }
             }
         }
         if interaction_type == "http_api" {
@@ -1222,13 +1188,11 @@ fn validate_foundation_modules(content: &Value) -> Vec<delivery_core::RepairIssu
                 ));
             }
         }
-        let has_responsibility = ["responsibility", "summary"].iter().any(|field| {
-            module
-                .get(*field)
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.trim().is_empty())
-        });
-        if !has_responsibility {
+        if module
+            .get("responsibility")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
             issues.push(issue(
                 "ARCHITECTURE_MODULE_FIELD_REQUIRED",
                 &format!("{path}.responsibility"),
@@ -1742,6 +1706,13 @@ fn validate_http_interfaces(
         "cli_command",
     ]);
     let mut issues = Vec::new();
+    let security_profile_ids = request_root
+        .pointer("/securityProfileSeed/profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|profile| profile.get("profileId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
     for (index, interface) in interfaces.iter().enumerate() {
         let path = format!("content.interfaces[{index}]");
         let Some(object) = interface.as_object() else {
@@ -1784,9 +1755,69 @@ fn validate_http_interfaces(
                     ));
                 }
             }
+            validate_interface_auth_policy(object, &path, &security_profile_ids, &mut issues);
         }
     }
     issues
+}
+
+fn validate_interface_auth_policy(
+    interface: &serde_json::Map<String, Value>,
+    path: &str,
+    security_profile_ids: &BTreeSet<&str>,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(policy) = interface.get("authPolicy").and_then(Value::as_object) else {
+        issues.push(issue(
+            "HTTP_INTERFACE_AUTH_POLICY_REQUIRED",
+            &format!("{path}.authPolicy"),
+            "Every HTTP interface must declare one canonical authPolicy object, including not_applicable for intentionally public operations.",
+        ));
+        return;
+    };
+    let required = policy
+        .get("required")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        required,
+        "not_applicable" | "required" | "optional" | "deferred_with_risk"
+    ) {
+        issues.push(issue(
+            "HTTP_INTERFACE_AUTH_POLICY_INVALID",
+            &format!("{path}.authPolicy.required"),
+            "authPolicy.required must be not_applicable, required, optional, or deferred_with_risk; booleans and free-form strings are not accepted.",
+        ));
+    }
+    for key in ["actorRefs", "permissionRefs"] {
+        if !policy.get(key).is_some_and(Value::is_array) {
+            issues.push(issue(
+                "HTTP_INTERFACE_AUTH_POLICY_REFS_REQUIRED",
+                &format!("{path}.authPolicy.{key}"),
+                "Canonical authPolicy must include actorRefs and permissionRefs arrays, using empty arrays when the policy has no entries.",
+            ));
+        }
+    }
+    let profile_ref = policy
+        .get("securityProfileRef")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let profile_required = matches!(required, "required" | "optional");
+    if profile_required {
+        if profile_ref.trim().is_empty() || !security_profile_ids.contains(profile_ref) {
+            issues.push(issue(
+                "HTTP_INTERFACE_SECURITY_PROFILE_REF_INVALID",
+                &format!("{path}.authPolicy.securityProfileRef"),
+                "An authPolicy with required or optional authentication must reference a selected securityProfileSeed.profiles[].profileId.",
+            ));
+        }
+    } else if !profile_ref.trim().is_empty() {
+        issues.push(issue(
+            "HTTP_INTERFACE_SECURITY_PROFILE_REF_UNEXPECTED",
+            &format!("{path}.authPolicy.securityProfileRef"),
+            "An unauthenticated or deferred interface must not reference an active security profile.",
+        ));
+    }
 }
 
 fn validate_allowed_refs(content: &Value, allowed_refs: &Value) -> Vec<delivery_core::RepairIssue> {
@@ -2123,11 +2154,8 @@ fn validate_runtime_rules(
                             "dependencyId"
                                 | "kind"
                                 | "provider"
-                                | "requiredFor"
                                 | "startupRequirement"
-                                | "failureBehavior"
-                                | "recoveryStrategy"
-                                | "observability"
+                                | "capabilities"
                         ) {
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_FIELD_UNKNOWN",
@@ -2136,13 +2164,7 @@ fn validate_runtime_rules(
                             ));
                         }
                     }
-                    for field in [
-                        "dependencyId",
-                        "kind",
-                        "startupRequirement",
-                        "failureBehavior",
-                        "recoveryStrategy",
-                    ] {
+                    for field in ["dependencyId", "kind", "startupRequirement"] {
                         if dependency
                             .get(field)
                             .and_then(Value::as_str)
@@ -2151,33 +2173,11 @@ fn validate_runtime_rules(
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_FIELD_REQUIRED",
                                 &format!("{path}.{field}"),
-                                "Runtime dependencies must declare ownership, startup, failure, and recovery semantics.",
+                                "Runtime dependencies are MCP-owned projections and must declare identity, kind, and startup requirement.",
                             ));
                         }
                     }
-                    for field in ["requiredFor", "observability"] {
-                        let Some(values) = dependency.get(field).and_then(Value::as_array) else {
-                            issues.push(issue(
-                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                                &format!("{path}.{field}"),
-                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
-                            ));
-                            continue;
-                        };
-                        if values.is_empty() {
-                            issues.push(issue(
-                                "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                                &format!("{path}.{field}"),
-                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
-                            ));
-                        }
-                        validate_array_entries_are_strings(
-                            values,
-                            &format!("{path}.{field}"),
-                            "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
-                            &mut issues,
-                        );
-                    }
+                    validate_runtime_dependency_capabilities(dependency, &path, &mut issues);
                     if dependency
                         .get("kind")
                         .and_then(Value::as_str)
@@ -2282,6 +2282,92 @@ fn validate_runtime_rules(
     issues
 }
 
+fn validate_runtime_dependency_capabilities(
+    dependency: &serde_json::Map<String, Value>,
+    path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(capabilities) = dependency.get("capabilities") else {
+        return;
+    };
+    let Some(capabilities) = capabilities.as_array() else {
+        issues.push(issue(
+            "RUNTIME_DEPENDENCY_CAPABILITIES_INVALID",
+            &format!("{path}.capabilities"),
+            "MCP-owned runtime dependency capabilities must be an array of structured objects.",
+        ));
+        return;
+    };
+    for (index, capability) in capabilities.iter().enumerate() {
+        let capability_path = format!("{path}.capabilities[{index}]");
+        let Some(capability) = capability.as_object() else {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_CAPABILITY_INVALID",
+                &capability_path,
+                "Each runtime dependency capability must be a structured object.",
+            ));
+            continue;
+        };
+        for field in capability.keys() {
+            if !matches!(
+                field.as_str(),
+                "purpose" | "durability" | "startupRequirement"
+            ) {
+                issues.push(issue(
+                    "RUNTIME_DEPENDENCY_CAPABILITY_FIELD_UNKNOWN",
+                    &format!("{capability_path}.{field}"),
+                    "Runtime dependency capability fields are MCP-owned; remove invented fields.",
+                ));
+            }
+        }
+        for field in ["purpose", "durability", "startupRequirement"] {
+            if capability
+                .get(field)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "RUNTIME_DEPENDENCY_CAPABILITY_FIELD_REQUIRED",
+                    &format!("{capability_path}.{field}"),
+                    "Each runtime dependency capability must declare its MCP-derived identity and deployment semantics.",
+                ));
+            }
+        }
+        if capability
+            .get("durability")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !matches!(value, "ephemeral" | "persistent"))
+        {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_DURABILITY_INVALID",
+                &format!("{capability_path}.durability"),
+                "Runtime dependency durability must be ephemeral or persistent.",
+            ));
+        }
+        if capability
+            .get("purpose")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                !matches!(
+                    value,
+                    "primary_storage"
+                        | "cache"
+                        | "session"
+                        | "queue"
+                        | "stream"
+                        | "lock_rate_limit"
+                )
+            })
+        {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_PURPOSE_INVALID",
+                &format!("{capability_path}.purpose"),
+                "Runtime dependency purpose must use a confirmed capability role.",
+            ));
+        }
+    }
+}
+
 fn validate_runtime_dependency_seed(
     runtime: &Value,
     request_root: &Value,
@@ -2293,14 +2379,21 @@ fn validate_runtime_dependency_seed(
     else {
         return;
     };
-    if candidates.is_empty() {
-        return;
-    }
     let dependencies = runtime
         .get("runtimeDependencies")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if candidates.is_empty() {
+        if !dependencies.is_empty() {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_SEED_UNEXPECTED",
+                "content.runtimeDelivery.runtimeDependencies",
+                "The accepted TechnicalBaseline has no runtime dependency candidates; MCP must persist an empty runtime dependency projection.",
+            ));
+        }
+        return;
+    }
     for (index, candidate) in candidates.iter().enumerate() {
         let Some(candidate_id) = candidate.get("dependencyId").and_then(Value::as_str) else {
             continue;
@@ -2312,6 +2405,7 @@ fn validate_runtime_dependency_seed(
                 && candidate
                     .get("provider")
                     .is_none_or(|provider| dependency.get("provider") == Some(provider))
+                && dependency.get("capabilities") == candidate.get("capabilities")
         });
         if !matched {
             issues.push(issue(
@@ -3720,6 +3814,10 @@ fn update_request_for_next_section(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let api_quality_seed = root.get("apiQualitySeed").cloned().unwrap_or(Value::Null);
+    let security_profile_seed = root
+        .get("securityProfileSeed")
+        .cloned()
+        .unwrap_or(Value::Null);
     root["requestReadPlan"]["groups"] = architecture_read_groups(
         next_section,
         include_repair_context,
@@ -3727,6 +3825,7 @@ fn update_request_for_next_section(
         source_refs,
         &frontend_experience_source,
         &api_quality_seed,
+        &security_profile_seed,
     );
     Ok(root)
 }
@@ -4413,8 +4512,19 @@ mod tests {
             status: ArchitectureSectionStatus::Ready,
             content: json!({
                 "engineeringBoundary": {
+                    "applications": [
+                        {"applicationId": "app-web", "name": "Web", "kind": "web_application", "rootPath": "."},
+                        {"applicationId": "app-api", "name": "API", "kind": "backend_service", "rootPath": "."}
+                    ],
                     "applicationInteractions": [interaction]
-                }
+                },
+                "modules": [{
+                    "moduleId": "module-orders",
+                    "name": "Orders",
+                    "responsibility": "Own orders.",
+                    "scopeRefs": ["scope-orders"],
+                    "acceptanceRefs": []
+                }]
             }),
             blocked_reasons: vec![],
             created_at: String::new(),
@@ -4428,6 +4538,10 @@ mod tests {
             "consumerApplicationRefs": ["app-web"],
             "providerModuleRef": "module-orders",
             "interactionType": "http_api",
+            "protocol": "http",
+            "interfaceRefs": ["interface-orders"],
+            "scopeRefs": ["scope-orders"],
+            "acceptanceRefs": ["acceptance-orders"],
             "qualityTraits": quality_traits
         })
     }
@@ -4506,47 +4620,41 @@ mod tests {
     }
 
     #[test]
-    fn foundation_normalization_fills_unambiguous_owners_and_policy_aliases() {
-        let mut content = json!({
+    fn foundation_missing_machine_fields_are_rejected_without_mutation() {
+        let content = json!({
             "engineeringBoundary": {
                 "applications": [
-                    {"applicationId": "app-web", "kind": "web_client"},
-                    {"applicationId": "app-api", "kind": "backend_service"}
+                    {"applicationId": "app-web", "name": "Web", "kind": "web_application", "rootPath": "."},
+                    {"applicationId": "app-api", "name": "API", "kind": "backend_service", "rootPath": "."}
                 ],
-                "modules": [{"moduleId": "module-api"}],
                 "applicationInteractions": [{
                     "interactionId": "interaction-api",
-                    "interactionType": "http_api",
-                    "qualityTraits": {
-                        "operationalPolicies": ["retry_policy", "correlation-id"]
-                    }
+                    "interactionType": "http_api"
                 }]
-            }
+            },
+            "modules": [{
+                "moduleId": "module-api",
+                "name": "API",
+                "responsibility": "Own API operations.",
+                "scopeRefs": ["scope-api"],
+                "acceptanceRefs": []
+            }]
         });
 
-        assert!(normalize_foundation_interaction_machine_fields(
-            &mut content
-        ));
-        let interaction = &content["engineeringBoundary"]["applicationInteractions"][0];
-        assert_eq!(interaction["providerApplicationRef"], "app-api");
-        assert_eq!(interaction["consumerApplicationRefs"], json!(["app-web"]));
-        assert_eq!(interaction["providerModuleRef"], "module-api");
-        assert_eq!(
-            interaction["qualityTraits"]["operationalPolicies"],
-            json!(["retry", "request_id"])
+        let original = content.clone();
+        let candidate = foundation_candidate(
+            content["engineeringBoundary"]["applicationInteractions"][0].clone(),
         );
-        assert!(
-            validate_structured_communication_boundaries(&foundation_candidate(
-                interaction.clone()
-            ))
-            .iter()
-            .all(|issue| !issue.code.contains("OPERATIONAL_POLICY"))
+        assert!(!validate_structured_communication_boundaries(&candidate).is_empty());
+        assert_eq!(
+            content, original,
+            "validation must not mutate Agent content"
         );
     }
 
     #[test]
-    fn architecture_candidate_null_collections_become_empty_arrays_before_schema_validation() {
-        let mut candidate = json!({
+    fn architecture_shape_rejects_null_collections_instead_of_rewriting_them() {
+        let candidate = json!({
             "content": {
                 "engineeringBoundary": {
                     "applicationInteractions": null,
@@ -4561,18 +4669,12 @@ mod tests {
                 }
             }
         });
-
-        normalize_architecture_candidate_null_arrays(&mut candidate);
-
-        assert_eq!(
-            candidate["content"]["engineeringBoundary"]["applicationInteractions"],
-            json!([])
-        );
-        assert_eq!(candidate["content"]["modules"], json!([]));
-        assert_eq!(
-            candidate["content"]["dataModel"]["entities"][0]["fields"],
-            json!([])
-        );
+        let shape = section_schema_shape(ArchitectureSectionGroup::Foundation, false, &Value::Null);
+        let issues = validate_section_content_shape(&candidate["content"], &shape);
+        assert!(issues
+            .iter()
+            .any(|(path, _)| path == "content.engineeringBoundary.applicationInteractions"));
+        assert!(issues.iter().any(|(path, _)| path == "content.modules"));
     }
 
     #[test]
@@ -4772,6 +4874,41 @@ mod tests {
             &mut issues,
         );
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn runtime_dependencies_are_rebuilt_from_seed_without_agent_semantic_fields() {
+        let mut content = json!({
+            "runtimeDelivery": {
+                "runtimeDependencies": [{
+                    "dependencyId": "invented",
+                    "provider": "redis",
+                    "requiredFor": ["free_form_text"],
+                    "failureBehavior": "free_form_text"
+                }]
+            }
+        });
+        let candidates = json!([{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "required",
+            "capabilities": [{
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
+        }]);
+        assert!(normalize_runtime_dependencies_from_seed(
+            Some(&mut content),
+            Some(&candidates)
+        ));
+        assert_eq!(
+            content.pointer("/runtimeDelivery/runtimeDependencies"),
+            Some(&candidates)
+        );
+        assert!(content.to_string().contains("\"purpose\":\"session\""));
+        assert!(!content.to_string().contains("free_form_text"));
     }
 
     #[test]

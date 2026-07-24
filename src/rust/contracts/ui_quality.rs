@@ -575,7 +575,10 @@ fn ui_surface_layout_model_shape() -> Value {
         "desktop": {
             "layoutIntent": "string",
             "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")],
-            "forbiddenPresentations": [UI_PRESENTATION_KINDS.join(" | composition constraint")]
+            "forbiddenPresentations": [format!(
+                "{} | composition constraint",
+                UI_PRESENTATION_KINDS.join(" | ")
+            )]
         },
         "tablet": {
             "layoutIntent": "string",
@@ -636,7 +639,10 @@ fn ui_surface_action_model_shape() -> Value {
 
 fn ui_surface_state_model_shape() -> Value {
     json!([{
-        "state": UI_REQUIRED_STATES.join(" | validation | disabled | stale"),
+        "state": format!(
+            "{} | validation | disabled | stale",
+            UI_REQUIRED_STATES.join(" | ")
+        ),
         "placementRegionId": "region id",
         "placementRule": "string",
         "recoveryPath": "string",
@@ -647,8 +653,14 @@ fn ui_surface_state_model_shape() -> Value {
 fn ui_surface_composition_constraints_shape() -> Value {
     json!({
         "requiredComposition": ["string"],
-        "forbiddenComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | custom composition constraint")],
-        "antiDemoRules": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | custom anti-demo rule")],
+        "forbiddenComposition": [format!(
+            "{} | custom composition constraint",
+            UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")
+        )],
+        "antiDemoRules": [format!(
+            "{} | custom anti-demo rule",
+            UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")
+        )],
         "customRules": ["required when known constraints do not cover the product surface"]
     })
 }
@@ -664,7 +676,10 @@ fn ui_surface_content_boundary_shape() -> Value {
             "business_feedback",
             "help_entry"
         ],
-        "forbiddenUserVisibleContent": [UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | feature_explanation | custom forbidden copy class")],
+        "forbiddenUserVisibleContent": [format!(
+            "{} | feature_explanation | custom forbidden copy class",
+            UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | ")
+        )],
         "customForbiddenContent": ["required when product-specific content must be blocked"],
         "copyRule": "Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."
     })
@@ -2674,6 +2689,29 @@ mod tests {
                 "decision contract shape must include {pointer}"
             );
         }
+
+        for (pointer, expected) in [
+            ("/actionModel/0/kind", "read_only"),
+            ("/stateModel/0/state", "loading"),
+            ("/layoutModel/desktop/forbiddenPresentations/0", "table"),
+            (
+                "/compositionConstraints/forbiddenComposition/0",
+                "no_marketing_hero",
+            ),
+            (
+                "/contentBoundary/forbiddenUserVisibleContent/0",
+                "runtime_commands",
+            ),
+        ] {
+            let value = candidate
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .expect("enum shape description");
+            assert!(
+                value.split(" | ").any(|item| item == expected),
+                "{pointer} must expose {expected} as a separate enum value: {value}"
+            );
+        }
     }
 
     #[test]
@@ -3587,6 +3625,7 @@ mod tests {
             project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack,
+            security_profiles: vec![],
             constraints: vec![],
             evidence: vec![],
             approval: TechnicalBaselineApproval {
@@ -3595,7 +3634,6 @@ mod tests {
                 reason: Some("test".to_string()),
             },
             confidence: ConfidenceLevel::High,
-            requires_user_confirmation: Some(false),
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-02T00:00:00Z".to_string(),

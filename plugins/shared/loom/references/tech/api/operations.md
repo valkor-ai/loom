@@ -95,4 +95,6 @@ For APIs with background work, external dependencies, or important business side
 }
 ```
 
+An accepted `request_id` operational policy is a structured ownership signal for the application observability reference. It does not require logging every endpoint, and it does not move request tracing or log retention into Deploy.
+
 Implementation evidence should cite tests, runtime probes, logs, or source files proving the selected operational policy. Do not claim operational semantics only in prose.

@@ -2,6 +2,8 @@
 
 Implement only the accepted identity and access policy. FastAPI dependencies are transport/application guards; they do not justify adding JWT, password login, roles, refresh tokens, or account storage to an unauthenticated phase.
 
+The accepted JWT profile and API behavior live in `tech/api/jwt.md`. This file owns FastAPI dependency, middleware, and configuration wiring.
+
 ## When To Use
 
 Use this reference when a task owns authentication extraction, token/session validation, current-actor dependencies, permissions, resource ownership, password handling, security middleware, or protected route behavior.
@@ -21,9 +23,9 @@ Preserve the repository and accepted trust model:
 
 `OAuth2PasswordBearer` extracts a bearer token and documents the scheme; it does not validate signatures, claims, users, or permissions. Prefer a maintained issuer/JWK validation path over handwritten JWT parsing when an identity provider owns tokens.
 
-### Token Validation
+### Token Validation Wiring
 
-For JWT access tokens, validate the accepted algorithm set, signature, issuer, audience, expiry/not-before, subject, and token type. Do not accept an algorithm from the token itself. Keep keys, JWK URLs, allowed clock skew, and lifetimes in validated configuration.
+Implement the claims, algorithm, issuer, audience, expiry, not-before, subject, token type, key source, and clock-skew requirements from `tech/api/jwt.md`. The FastAPI layer must pass those settings to a maintained verifier and must not add a second token contract.
 
 ```python
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
@@ -76,7 +78,7 @@ Use explicit CORS origins, methods, and headers. Wildcard origins cannot be comb
 
 ### Sensitive Data And Errors
 
-Never log authorization headers, bearer/refresh tokens, passwords, signing keys, raw credential payloads, or sensitive claims. Public errors remain stable while detailed diagnostics stay in protected correlation-aware logs.
+Never log authorization headers, bearer/refresh tokens, passwords, signing keys, raw credential payloads, or sensitive claims. Public errors remain stable; the selected application observability reference owns protected correlation-aware diagnostics.
 
 ## Verification Focus
 

@@ -14,6 +14,45 @@ pub struct UserFacingLanguageConstraint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityRequirementApplicability {
+    NotApplicable,
+    Required,
+    Optional,
+    DeferredWithRisk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientTrustModel {
+    SameOriginBrowser,
+    ExternalApi,
+    ServiceToService,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityRequirement {
+    pub applies: SecurityRequirementApplicability,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_trust_models: Vec<ClientTrustModel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
+    pub rationale: String,
+}
+
+impl Default for SecurityRequirement {
+    fn default() -> Self {
+        Self {
+            applies: SecurityRequirementApplicability::NotApplicable,
+            client_trust_models: Vec::new(),
+            source_refs: Vec::new(),
+            rationale: "Security applicability was not selected for this delivery.".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum UserFacingLocale {
     ZhCn,
@@ -674,12 +713,14 @@ pub struct UserConfirmation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrainstormCandidateAgentWritable {
     pub request_summary: RequestSummary,
     pub scope: BrainstormScope,
     pub roadmap: Roadmap,
     pub phase_plan: PhasePlan,
+    #[serde(default)]
+    pub security_requirement: SecurityRequirement,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance: Vec<AcceptanceCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -776,6 +817,8 @@ pub struct BrainstormContract {
     pub delivery_context: DeliveryContext,
     pub roadmap: Roadmap,
     pub phase_plan: PhasePlan,
+    #[serde(default)]
+    pub security_requirement: SecurityRequirement,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concept_grounding: Option<ConceptGrounding>,
     #[serde(skip_serializing_if = "Option::is_none")]

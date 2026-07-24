@@ -96,7 +96,7 @@ pub enum VerificationEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskArtifactRefs {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<String>,
@@ -138,7 +138,7 @@ impl TaskArtifactRefs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VerificationIntent {
     pub verification_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -153,14 +153,14 @@ pub struct VerificationIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConceptResponsibility {
     pub concept_ref: String,
     pub responsibility: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConceptVerificationIntent {
     pub concept_ref: String,
     pub evidence_type: String,
@@ -168,15 +168,35 @@ pub struct ConceptVerificationIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskWriteBoundary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub forbidden_paths: Vec<String>,
     pub artifact_refs: TaskArtifactRefs,
 }
 
+/// MCP-owned implementation closure for one task. TaskPlan acceptance derives
+/// this from accepted architecture facts and normalized task ownership; agents
+/// only report evidence against these stable ids.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskImplementationObligation {
+    pub obligation_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
+    pub artifact_refs: TaskArtifactRefs,
+    pub required_outcome: String,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptable_evidence: Vec<VerificationEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    pub defer_policy: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeCodeLevelCheck {
     #[schemars(skip)]
     #[serde(default)]
@@ -190,7 +210,7 @@ pub struct RuntimeCodeLevelCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRuntimeDeliveryRequirement {
     pub applies_to_this_task: bool,
     pub reason: String,
@@ -212,7 +232,7 @@ pub struct TaskRuntimeDeliveryRequirement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EngineeringQualityRequirement {
     pub requirement_id: String,
     pub kind: String,
@@ -229,7 +249,7 @@ pub struct EngineeringQualityRequirement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArchitectureQualityRequirement {
     pub requirement_id: String,
     pub kind: String,
@@ -242,13 +262,11 @@ pub struct ArchitectureQualityRequirement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risk_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApiContractRequirement {
     pub requirement_id: String,
     pub kind: String,
@@ -257,13 +275,15 @@ pub struct ApiContractRequirement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interface_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
+    pub security_profile_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReferenceLoadPlanItem {
     pub ref_id: String,
     pub path: String,
@@ -271,7 +291,7 @@ pub struct ReferenceLoadPlanItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeQualityRequirement {
     pub requirement_id: String,
     pub kind: String,
@@ -288,13 +308,11 @@ pub struct CodeQualityRequirement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub focus_tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_obligations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodePackageNamingPolicy {
     pub applies_to: Vec<String>,
     pub priority_order: Vec<String>,
@@ -305,7 +323,7 @@ pub struct CodePackageNamingPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskDefinition {
     pub task_id: String,
     pub group_id: String,
@@ -313,6 +331,12 @@ pub struct TaskDefinition {
     pub task_kind: TaskKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementation_actions: Vec<ImplementationAction>,
+    /// Materialized by Loom during TaskPlan acceptance. This field is omitted
+    /// from the agent-writable TaskPlan schema and is authoritative in the
+    /// persisted TaskPlan and TaskExecute request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub implementation_obligations: Vec<TaskImplementationObligation>,
     pub objective: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
@@ -350,7 +374,7 @@ pub struct TaskDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanGroup {
     pub group_id: String,
     pub title: String,
@@ -366,7 +390,7 @@ pub struct TaskPlanGroup {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanBlockedReason {
     pub code: String,
     pub message: String,
@@ -374,7 +398,31 @@ pub struct TaskPlanBlockedReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskPlanGroupProposalAgentWritable {
+    pub group_id: String,
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDefinitionProposalAgentWritable {
+    pub proposal_id: String,
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_kind_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanOutlineCandidateAgentWritable {
     #[serde(default)]
     #[schemars(skip)]
@@ -393,7 +441,7 @@ pub struct TaskPlanOutlineCandidateAgentWritable {
     #[schemars(skip)]
     pub task_plan_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub groups: Vec<TaskPlanGroup>,
+    pub groups: Vec<TaskPlanGroupProposalAgentWritable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
     #[serde(default)]
@@ -402,7 +450,7 @@ pub struct TaskPlanOutlineCandidateAgentWritable {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanGroupCandidateAgentWritable {
     #[serde(default)]
     #[schemars(skip)]
@@ -417,9 +465,9 @@ pub struct TaskPlanGroupCandidateAgentWritable {
     #[schemars(skip)]
     pub phase_id: String,
     pub status: String,
-    pub group: TaskPlanGroup,
+    pub group: TaskPlanGroupProposalAgentWritable,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<TaskDefinition>,
+    pub tasks: Vec<TaskDefinitionProposalAgentWritable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
     #[serde(default)]
@@ -618,14 +666,14 @@ pub struct TaskPlanRun {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskResultNoChangeReason {
     pub code: String,
     pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VerificationResult {
     pub verification_id: String,
     pub status: String,
@@ -653,8 +701,20 @@ pub struct VerificationProvenance {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskImplementationObligationResult {
+    pub obligation_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelfRepairSummary {
     pub attempted: bool,
     pub attempt_count: u32,
@@ -663,14 +723,14 @@ pub struct SelfRepairSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskFailure {
     pub code: String,
     pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecutionContinuity {
     pub task_result_submitted_after_verification: bool,
     pub agent_owned_long_running_work: String,
@@ -679,7 +739,7 @@ pub struct ExecutionContinuity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementDetailEvidence {
     pub detail_id: String,
     pub status: String,
@@ -691,7 +751,7 @@ pub struct RequirementDetailEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConceptEvidence {
     pub concept_ref: String,
     pub evidence_type: String,
@@ -701,19 +761,17 @@ pub struct ConceptEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArchitectureQualityEvidence {
     pub requirement_id: String,
     pub status: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub changed_files: Vec<String>,
     pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApiContractEvidence {
     pub requirement_id: String,
     pub status: String,
@@ -722,22 +780,12 @@ pub struct ApiContractEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub changed_files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub success_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub error_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pagination_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub contract_file_refs: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_gaps: Vec<String>,
     pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeQualityEvidence {
     pub requirement_id: String,
     pub status: String,
@@ -748,68 +796,22 @@ pub struct CodeQualityEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub changed_files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands_run: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_gaps: Vec<String>,
     pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendQualityStateCoverage {
-    pub state: String,
-    pub status: String,
-    pub evidence: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendQualityBusinessRuleCheck {
-    pub rule_id: String,
-    pub status: String,
-    pub evidence: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendQualityForbiddenContentCheck {
-    pub checked: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub violations: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendQualitySurfaceEvidence {
-    pub surface_id: String,
-    pub surface_role: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub business_actions: Vec<String>,
-    pub evidence: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendSurfaceContractEvidence {
     pub id: String,
     pub status: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<String>,
     pub evidence: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendContentBoundaryEvidence {
     pub checked: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -820,7 +822,7 @@ pub struct FrontendContentBoundaryEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendDesignTokenEvidence {
     pub strategy_used: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -836,10 +838,59 @@ pub struct FrontendDesignTokenEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendExperienceDataBinding {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_gaps: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendExperienceSelfCheck {
+    pub status: String,
+    pub data_binding: FrontendExperienceDataBinding,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closure_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeCodeLevelCheckEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_field: Option<String>,
+    pub status: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDeliveryEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requirement_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checked_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_level_checks: Vec<RuntimeCodeLevelCheckEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands_run: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_items: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_probe_cleanup: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_decision_contract_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surface_region_evidence: Vec<FrontendSurfaceContractEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -856,11 +907,10 @@ pub struct FrontendQualitySelfCheck {
     pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_gaps: Vec<String>,
-    pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BlockedReason {
     pub code: String,
     pub next_node: String,
@@ -879,7 +929,7 @@ pub enum TaskResultStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskResult {
     pub schema_version: String,
     pub task_result_id: String,
@@ -892,6 +942,8 @@ pub struct TaskResult {
     pub no_change_reason: Option<TaskResultNoChangeReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_results: Vec<VerificationResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_obligation_results: Vec<TaskImplementationObligationResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_repair_summary: Option<SelfRepairSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -900,11 +952,11 @@ pub struct TaskResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub frontend_experience_self_check: Option<Value>,
+    pub frontend_experience_self_check: Option<FrontendExperienceSelfCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_quality_self_check: Option<FrontendQualitySelfCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_delivery_evidence: Option<Value>,
+    pub runtime_delivery_evidence: Option<RuntimeDeliveryEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirement_detail_evidence: Vec<RequirementDetailEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

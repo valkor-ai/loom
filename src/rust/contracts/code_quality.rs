@@ -47,6 +47,7 @@ pub struct CodeReferenceTaskContext {
     pub integration: bool,
     pub resilience: bool,
     pub observability: bool,
+    pub request_tracing: bool,
 }
 
 pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
@@ -69,13 +70,15 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
 pub fn code_quality_enum_refs() -> Value {
     json!({
         "knownReferenceGroups": {
-            "code": {
+                "code": {
+                    "common": ["observability"],
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
-                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability"],
-                "django": ["models", "serializers", "views", "security", "testing"],
-                "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
-                "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
-                "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration"],
+                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability", "logging"],
+                "mybatisplus": ["configuration", "mapping", "crud", "wrappers", "plugins", "security", "extensions"],
+                "django": ["models", "serializers", "views", "security", "testing", "logging"],
+                "fastapi": ["schemas", "data", "routing", "security", "testing", "migration", "logging"],
+                "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime", "logging"],
+                "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration", "logging"],
                 "react": ["core", "hooks", "state", "performance", "testing", "server-components", "react19", "migration"],
                 "nextjs": ["core", "app-router", "data", "actions", "server-components", "runtime", "testing"],
                 "vue": ["core", "components", "state", "typescript", "nuxt", "build", "mobile", "testing"],
@@ -98,7 +101,8 @@ pub fn code_quality_enum_refs() -> Value {
                     "postgresql.schema", "postgresql.queries", "postgresql.transactions",
                     "sqlserver.schema", "sqlserver.queries", "sqlserver.transactions",
                     "oracle.schema", "oracle.queries", "oracle.transactions"
-                ]
+                ],
+                "redis": ["core", "cache", "atomicity", "messaging"]
             }
         },
         "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "resilience", "observability", "cloud", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
@@ -123,7 +127,15 @@ pub fn code_reference_selection_for_task_with_context(
     context: &CodeReferenceTaskContext,
 ) -> Option<CodeReferenceSelection> {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
-    if signals.is_empty() {
+    let redis_items = redis_reference_items_for_task(baseline, task);
+    let observability = task_has_action(task, ImplementationAction::ImplementObservability)
+        || context.observability
+        || context.request_tracing
+        || context.async_processing
+        || context.integration
+        || context.resilience
+        || context.security;
+    if signals.is_empty() && redis_items.is_empty() && !observability {
         return None;
     }
     let stack_frameworks = signals
@@ -132,6 +144,9 @@ pub fn code_reference_selection_for_task_with_context(
         .collect::<BTreeSet<_>>();
     let mut focus_tags = task_focus_tags(task);
     extend_focus_tags_from_context(&mut focus_tags, context);
+    if observability {
+        push_unique(&mut focus_tags, "observability");
+    }
     let mut selected_signals = Vec::new();
     let mut reference_groups = BTreeMap::<String, BTreeSet<String>>::new();
     let mut unmapped_signals = Vec::new();
@@ -170,6 +185,19 @@ pub fn code_reference_selection_for_task_with_context(
         }
     }
 
+    for item in redis_items {
+        reference_groups
+            .entry("redis".to_string())
+            .or_default()
+            .insert(item);
+    }
+    if observability {
+        reference_groups
+            .entry("common".to_string())
+            .or_default()
+            .insert("observability".to_string());
+    }
+
     if reference_groups.is_empty() && unmapped_signals.is_empty() {
         return None;
     }
@@ -182,6 +210,67 @@ pub fn code_reference_selection_for_task_with_context(
         focus_tags,
         unmapped_signals,
     })
+}
+
+fn redis_reference_items_for_task(
+    baseline: &TechnicalBaselineContract,
+    task: &TaskDefinition,
+) -> BTreeSet<String> {
+    let capabilities = baseline
+        .stack
+        .pointer("/tracks/externalServices/providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|provider| {
+            provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("redis"))
+        })
+        .flat_map(|provider| {
+            provider
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|capability| capability.get("purpose").and_then(Value::as_str))
+        })
+        .collect::<BTreeSet<_>>();
+    if capabilities.is_empty() {
+        return BTreeSet::new();
+    }
+
+    let cache = task_has_action(task, ImplementationAction::ImplementCachePolicy);
+    let messaging = task_has_action(task, ImplementationAction::ImplementAsyncProcessing);
+    let atomicity = task_has_action(task, ImplementationAction::ImplementResiliencePolicy);
+    let session = task_has_action(
+        task,
+        ImplementationAction::ImplementAuthenticationOrAuthorization,
+    );
+
+    let mut items = BTreeSet::new();
+    if (capabilities.contains("cache") && cache)
+        || (capabilities.contains("session") && session)
+        || (capabilities.contains("queue") && messaging)
+        || (capabilities.contains("stream") && messaging)
+        || (capabilities.contains("lock_rate_limit") && atomicity)
+    {
+        items.insert("core".to_string());
+    }
+    if capabilities.contains("cache") && cache {
+        items.insert("cache".to_string());
+    }
+    if capabilities.contains("session") && session {
+        items.insert("session".to_string());
+    }
+    if capabilities.contains("lock_rate_limit") && atomicity {
+        items.insert("atomicity".to_string());
+    }
+    if (capabilities.contains("queue") || capabilities.contains("stream")) && messaging {
+        items.insert("messaging".to_string());
+    }
+    items
 }
 
 pub fn code_reference_load_plan(
@@ -320,9 +409,21 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         ) {
             push_unique(&mut roles, "backend");
         }
-    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"])
-        && !contains_any(&haystack, &["kotlin", "ktor", "android", "kmp"])
-    {
+    } else if contains_any(
+        &haystack,
+        &[
+            "java",
+            "spring",
+            "jpa",
+            "hibernate",
+            "mybatis plus",
+            "mybatisplus",
+            "com.baomidou.mybatisplus",
+        ],
+    ) && !contains_any(
+        &haystack,
+        &["kotlin", "ktor", "android", "kmp", "mybatis flex"],
+    ) {
         language = Some("java".to_string());
         push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
         push_backend_unless_persistence_track(&mut roles);
@@ -1151,6 +1252,7 @@ fn extend_focus_tags_from_context(tags: &mut Vec<String>, context: &CodeReferenc
         (context.integration, "integration"),
         (context.resilience, "resilience"),
         (context.observability, "observability"),
+        (context.request_tracing, "observability"),
     ] {
         if selected {
             push_unique(tags, tag);
@@ -1596,6 +1698,16 @@ fn backend_reference_items_for_signal(
             groups.insert("springboot".to_string(), items);
         }
     }
+    if stack_frameworks.contains("mybatis_plus")
+        && (signal.language.as_deref() == Some("java")
+            || signal.frameworks.iter().any(|item| item == "mybatis_plus"))
+    {
+        let mut items = BTreeSet::new();
+        extend_mybatis_plus_task_references(&mut items, task);
+        if !items.is_empty() {
+            groups.insert("mybatisplus".to_string(), items);
+        }
+    }
     if signal.frameworks.iter().any(|item| item == "django") {
         let mut items = BTreeSet::new();
         if task_owns_test_implementation(task) {
@@ -1615,6 +1727,9 @@ fn backend_reference_items_for_signal(
             )
         {
             items.insert("security".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("django".to_string(), items);
@@ -1642,6 +1757,9 @@ fn backend_reference_items_for_signal(
         }
         if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("fastapi".to_string(), items);
@@ -1687,8 +1805,12 @@ fn backend_reference_items_for_signal(
             || context.integration
             || context.resilience
             || context.observability
+            || context.request_tracing
         {
             items.insert("runtime".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("aspnetcore".to_string(), items);
@@ -1717,6 +1839,9 @@ fn backend_reference_items_for_signal(
         }
         if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if task_owns_logging_infrastructure(task, context) {
+            items.insert("logging".to_string());
         }
         if !items.is_empty() {
             groups.insert("nestjs".to_string(), items);
@@ -1781,10 +1906,71 @@ fn extend_spring_boot_task_references(
     {
         items.insert("cloud".to_string());
     }
-    if context.observability || task_has_action(task, ImplementationAction::ImplementObservability)
-    {
+    if task_owns_logging_infrastructure(task, context) {
         items.insert("observability".to_string());
+        items.insert("logging".to_string());
     }
+}
+
+fn extend_mybatis_plus_task_references(items: &mut BTreeSet<String>, task: &TaskDefinition) {
+    let owns_persistence = task_owns_persistence(task);
+    let owns_query = task_owns_sql_query(task);
+    let owns_transaction = task_owns_sql_transaction(task);
+
+    if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || (owns_persistence && task_has_action(task, ImplementationAction::AddOrUpdateConfig))
+    {
+        items.insert("configuration".to_string());
+        items.insert("plugins".to_string());
+    }
+    if owns_persistence
+        && task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::ImplementEntityLifecycle
+            )
+        })
+    {
+        items.insert("mapping".to_string());
+    }
+    if task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityRepository | ImplementationAction::CreateEntityCrud
+        )
+    }) {
+        items.insert("crud".to_string());
+    }
+    if owns_query
+        || owns_transaction
+        || task_has_action(task, ImplementationAction::CreateEntityCrud)
+    {
+        items.insert("wrappers".to_string());
+    }
+    if owns_query || owns_transaction {
+        items.insert("security".to_string());
+    }
+    if task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityMigration
+                | ImplementationAction::MigrateFrameworkImplementation
+        )
+    }) {
+        items.insert("extensions".to_string());
+    }
+}
+
+pub fn task_owns_logging_infrastructure(
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) -> bool {
+    task_has_action(task, ImplementationAction::ImplementObservability)
+        || context.observability
+        || context.request_tracing
 }
 
 fn task_has_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
@@ -2039,6 +2225,26 @@ fn frontend_reference_items_for_signal(
 }
 
 fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanItem {
+    if group_key == "mybatisplus"
+        && matches!(
+            group,
+            "configuration"
+                | "mapping"
+                | "crud"
+                | "wrappers"
+                | "plugins"
+                | "security"
+                | "extensions"
+        )
+    {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("bk.spring.mybatisplus.{group}"),
+            path: format!("tech/backend/springboot/mybatis-plus/{group}.md"),
+            reason: format!(
+                "Selected MyBatis-Plus {group} reference for this task-owned persistence capability."
+            ),
+        };
+    }
     if let Some((ref_prefix, path_group, label)) = match group_key {
         "springboot" => Some(("bk.spring", "springboot", "Spring Boot")),
         "django" => Some(("bk.django", "django", "Django")),
@@ -2090,6 +2296,26 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
                 };
             }
         }
+    }
+    if group_key == "redis"
+        && matches!(
+            group,
+            "core" | "cache" | "session" | "atomicity" | "messaging"
+        )
+    {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("tech.code.redis.{group}"),
+            path: format!("tech/code/redis/{group}.md"),
+            reason: format!("Selected Redis {group} reference for this task-owned capability."),
+        };
+    }
+    if group_key == "common" && group == "observability" {
+        return ReferenceLoadPlanItem {
+            ref_id: "tech.code.observability".to_string(),
+            path: "tech/code/observability.md".to_string(),
+            reason: "Selected the task-owned cross-stack observability implementation reference."
+                .to_string(),
+        };
     }
     ReferenceLoadPlanItem {
         ref_id: format!("tech.code.{group_key}.{group}"),
@@ -2569,6 +2795,17 @@ fn push_spring_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<Str
     push_if_contains(
         haystack,
         frameworks,
+        "mybatis_plus",
+        &[
+            "mybatis plus",
+            "mybatis-plus",
+            "mybatisplus",
+            "com.baomidou.mybatisplus",
+        ],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
         "jpa_orm",
         &["jpa", "hibernate", "eclipselink"],
     );
@@ -2673,6 +2910,7 @@ mod tests {
             project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack,
+            security_profiles: vec![],
             constraints: vec![],
             evidence: vec![],
             approval: TechnicalBaselineApproval {
@@ -2681,7 +2919,6 @@ mod tests {
                 reason: Some("confirmed".to_string()),
             },
             confidence: ConfidenceLevel::High,
-            requires_user_confirmation: None,
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-06T00:00:00Z".to_string(),
@@ -2716,6 +2953,7 @@ mod tests {
             concept_refs: vec![],
             concept_responsibilities: vec![],
             concept_verification_intents: vec![],
+            implementation_obligations: vec![],
             frontend_experience_requirement: None,
             runtime_delivery_requirement: None,
             engineering_quality_requirement_refs: vec![],
@@ -4213,6 +4451,82 @@ mod tests {
     }
 
     #[test]
+    fn redis_references_follow_structured_capability_and_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "externalServices": {
+                    "status": "selected",
+                    "selection": "Redis",
+                    "providers": [{
+                        "provider": "redis",
+                        "capabilities": [
+                            {"purpose": "cache", "durability": "ephemeral", "startupRequirement": "optional"},
+                            {"purpose": "session", "durability": "persistent", "startupRequirement": "required"},
+                            {"purpose": "queue", "durability": "persistent", "startupRequirement": "required"}
+                        ]
+                    }]
+                }
+            }
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let api_selection = code_reference_selection_for_task(&baseline, &api_task).unwrap();
+        assert!(!api_selection.reference_groups.contains_key("redis"));
+
+        let integration_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementExternalServiceIntegration],
+        );
+        let integration_selection =
+            code_reference_selection_for_task(&baseline, &integration_task).unwrap();
+        assert!(
+            !integration_selection.reference_groups.contains_key("redis"),
+            "generic external integration must not claim Redis capability references"
+        );
+
+        let cache_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::ImplementCachePolicy],
+        );
+        let cache_selection = code_reference_selection_for_task(&baseline, &cache_task).unwrap();
+        assert_eq!(
+            cache_selection.reference_groups.get("redis"),
+            Some(&vec!["cache".to_string(), "core".to_string()])
+        );
+
+        let session_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let session_selection =
+            code_reference_selection_for_task(&baseline, &session_task).unwrap();
+        assert_eq!(
+            session_selection.reference_groups.get("redis"),
+            Some(&vec!["core".to_string(), "session".to_string()])
+        );
+
+        let queue_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let queue_selection = code_reference_selection_for_task(&baseline, &queue_task).unwrap();
+        assert_eq!(
+            queue_selection.reference_groups.get("redis"),
+            Some(&vec!["core".to_string(), "messaging".to_string()])
+        );
+        let load_plan = code_reference_load_plan(&queue_selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/redis/messaging.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/redis/testing.md"));
+    }
+
+    #[test]
     fn structured_task_context_selects_owned_spring_capabilities() {
         let baseline = baseline(json!({
             "tracks": {
@@ -4230,6 +4544,7 @@ mod tests {
             integration: true,
             resilience: true,
             observability: true,
+            request_tracing: false,
         };
 
         let selection =
@@ -4242,9 +4557,11 @@ mod tests {
             "integration",
             "resilience",
             "observability",
+            "logging",
         ] {
             assert!(spring.contains(&expected.to_string()));
         }
+        assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
         assert!(!spring.contains(&"cloud".to_string()));
     }
 
@@ -4357,6 +4674,88 @@ mod tests {
             .reference_groups
             .get("springboot")
             .is_some_and(|items| items.contains(&"data".to_string())));
+    }
+
+    #[test]
+    fn mybatis_plus_routes_persistence_references_without_jpa_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "MyBatis Plus"},
+                "persistence": {"selection": "PostgreSQL"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityRepository,
+            ],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let mybatis = selection
+            .reference_groups
+            .get("mybatisplus")
+            .expect("MyBatis-Plus references");
+
+        assert!(mybatis.contains(&"mapping".to_string()));
+        assert!(mybatis.contains(&"crud".to_string()));
+        assert!(mybatis.contains(&"wrappers".to_string()));
+        assert!(mybatis.contains(&"security".to_string()));
+        assert!(!selection
+            .reference_groups
+            .get("java")
+            .is_some_and(|items| items.contains(&"persistence".to_string())));
+        assert!(!selection
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| { item.path == "tech/backend/springboot/mybatis-plus/mapping.md" }));
+        assert!(load_plan
+            .iter()
+            .any(|item| { item.path == "tech/backend/springboot/mybatis-plus/crud.md" }));
+    }
+
+    #[test]
+    fn mybatis_plus_route_is_not_selected_for_plain_mybatis_or_mybatis_flex() {
+        for data_access in ["MyBatis", "MyBatis-Flex"] {
+            let baseline = baseline(json!({
+                "tracks": {
+                    "backend": {"selection": "Java + Spring Boot"},
+                    "dataAccess": {"selection": data_access},
+                    "persistence": {"selection": "PostgreSQL"}
+                }
+            }));
+            let task = task(
+                TaskKind::DataModelIncrement,
+                vec![ImplementationAction::CreateEntityRepository],
+            );
+
+            let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+            assert!(!selection.reference_groups.contains_key("mybatisplus"));
+        }
+    }
+
+    #[test]
+    fn mybatis_plus_references_are_not_loaded_for_api_only_tasks() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "MyBatis Plus"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(!selection.reference_groups.contains_key("mybatisplus"));
     }
 
     #[test]
@@ -4963,18 +5362,160 @@ mod tests {
             TaskKind::ConfigurationSupport,
             vec![ImplementationAction::ImplementObservability],
         );
-        let ordinary_config_task = task(
+        let mut ordinary_config_task = task(
             TaskKind::ConfigurationSupport,
             vec![ImplementationAction::AddOrUpdateConfig],
         );
+        ordinary_config_task.objective =
+            "Configure application logging and monitoring defaults.".to_string();
 
         let observability =
             code_reference_selection_for_task(&baseline, &observability_task).unwrap();
         let ordinary = code_reference_selection_for_task(&baseline, &ordinary_config_task).unwrap();
 
         assert!(observability.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(observability.reference_groups["springboot"].contains(&"logging".to_string()));
+        assert!(observability.reference_groups["common"].contains(&"observability".to_string()));
+        assert!(observability
+            .focus_tags
+            .contains(&"observability".to_string()));
         assert!(!ordinary.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(!ordinary.reference_groups["springboot"].contains(&"logging".to_string()));
+        assert!(!ordinary.reference_groups.contains_key("common"));
+        assert!(!ordinary.focus_tags.contains(&"observability".to_string()));
         assert!(ordinary.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&observability.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.observability" && item.path == "tech/code/observability.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.logging" && item.path == "tech/backend/springboot/logging.md"
+        }));
+    }
+
+    #[test]
+    fn framework_logging_references_require_logging_infrastructure_ownership() {
+        let frameworks = [
+            ("Java + Spring Boot", "springboot", "bk.spring.logging"),
+            (".NET 8 + ASP.NET Core", "aspnetcore", "bk.aspnet.logging"),
+            ("Python + FastAPI", "fastapi", "bk.fastapi.logging"),
+            ("Python + Django", "django", "bk.django.logging"),
+            ("TypeScript + NestJS", "nestjs", "bk.nest.logging"),
+        ];
+
+        for (stack, framework, ref_id) in frameworks {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let infrastructure_task = task(
+                TaskKind::ConfigurationSupport,
+                vec![ImplementationAction::ImplementObservability],
+            );
+            let ordinary_task = task(
+                TaskKind::ConfigurationSupport,
+                vec![ImplementationAction::AddOrUpdateConfig],
+            );
+            let infrastructure =
+                code_reference_selection_for_task(&baseline, &infrastructure_task).unwrap();
+            let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+
+            assert!(infrastructure.reference_groups[framework].contains(&"logging".to_string()));
+            assert!(!ordinary
+                .reference_groups
+                .get(framework)
+                .is_some_and(|groups| groups.contains(&"logging".to_string())));
+            assert!(code_reference_load_plan(&infrastructure.reference_groups)
+                .iter()
+                .any(|item| item.ref_id == ref_id
+                    && item.path == format!("tech/backend/{framework}/logging.md")));
+        }
+    }
+
+    #[test]
+    fn boundary_observability_does_not_install_framework_logging() {
+        let frameworks = [
+            ("Java + Spring Boot", "springboot"),
+            (".NET 8 + ASP.NET Core", "aspnetcore"),
+            ("Python + FastAPI", "fastapi"),
+            ("Python + Django", "django"),
+            ("TypeScript + NestJS", "nestjs"),
+        ];
+        let context = CodeReferenceTaskContext {
+            security: true,
+            async_processing: true,
+            integration: true,
+            resilience: true,
+            ..CodeReferenceTaskContext::default()
+        };
+
+        for (stack, framework) in frameworks {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let task = task(
+                TaskKind::RefactorSupport,
+                vec![ImplementationAction::RefactorSupportingCode],
+            );
+            let selection =
+                code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+
+            assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
+            assert!(!task_owns_logging_infrastructure(&task, &context));
+            assert!(!selection
+                .reference_groups
+                .get(framework)
+                .is_some_and(|groups| groups.contains(&"logging".to_string())));
+        }
+    }
+
+    #[test]
+    fn request_tracing_owns_framework_logging_infrastructure() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Python + FastAPI"}}
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let context = CodeReferenceTaskContext {
+            request_tracing: true,
+            ..CodeReferenceTaskContext::default()
+        };
+
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+
+        assert!(task_owns_logging_infrastructure(&task, &context));
+        assert!(selection.reference_groups["fastapi"].contains(&"logging".to_string()));
+        assert!(selection.reference_groups["common"].contains(&"observability".to_string()));
+    }
+
+    #[test]
+    fn framework_logging_references_define_provider_and_verification_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("workspace root");
+        for framework in ["springboot", "aspnetcore", "fastapi", "django", "nestjs"] {
+            let path = root.join(format!(
+                "plugins/shared/loom/references/tech/backend/{framework}/logging.md"
+            ));
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            for section in [
+                "## Provider Decision",
+                "## Correlation And Boundaries",
+                "## Async And File Output",
+                "## Verification Focus",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
@@ -5996,6 +6537,48 @@ mod tests {
                 assert!(
                     content.contains(section),
                     "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn redis_references_are_complete_and_non_operational() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let files = [
+            "plugins/shared/loom/references/tech/code/redis/core.md",
+            "plugins/shared/loom/references/tech/code/redis/cache.md",
+            "plugins/shared/loom/references/tech/code/redis/session.md",
+            "plugins/shared/loom/references/tech/code/redis/atomicity.md",
+            "plugins/shared/loom/references/tech/code/redis/messaging.md",
+        ];
+        for relative in files {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 45,
+                "{} is too thin",
+                path.display()
+            );
+            for section in [
+                "## When To Use",
+                "## Implementation Focus",
+                "## Verification Focus",
+                "## Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+            let lower = content.to_ascii_lowercase();
+            for term in ["sentinel", "cluster", "replication", "backup", "monitoring"] {
+                assert!(
+                    !lower.contains(term),
+                    "{} contains excluded Redis operation {term}",
                     path.display()
                 );
             }

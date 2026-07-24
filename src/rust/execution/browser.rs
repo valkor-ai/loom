@@ -1270,6 +1270,7 @@ importers:
             project_kind: contracts::ProjectKind::ExistingProject,
             scope: TechnicalBaselineScope::Project,
             stack,
+            security_profiles: vec![],
             constraints: vec![],
             evidence: vec![],
             approval: TechnicalBaselineApproval {
@@ -1278,7 +1279,6 @@ importers:
                 reason: None,
             },
             confidence: contracts::ConfidenceLevel::High,
-            requires_user_confirmation: None,
             reasoning_summary: vec![],
             alternatives: vec![],
             created_at: "2026-07-13T00:00:00Z".to_string(),
@@ -1296,6 +1296,7 @@ importers:
                 ImplementationAction::CreateOrUpdateUiFlow,
                 ImplementationAction::WireReferenceInApiOrUi,
             ],
+            implementation_obligations: vec![],
             objective: "Create the accepted workflow".to_string(),
             depends_on: vec![],
             scope_refs: vec![],

@@ -837,6 +837,130 @@ fn source_model_matrix_handles_root_frontend_with_backend_stack_roots() {
 }
 
 #[test]
+fn deploy_prepare_projects_redis_capabilities_into_health_and_storage_assets() {
+    let fixture = Fixture::new("deploy-redis-capabilities");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "python",
+        "commands": {
+            "development": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } },
+            "verification": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } },
+            "deployment": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } }
+        },
+        "runtimeSurfaces": [{"surfaceId": "api", "kind": "api", "urlPath": "/"}],
+        "httpProbes": { "previewPath": "/", "expectedStatus": "2xx_or_3xx" },
+        "environment": { "required": [], "optional": [] },
+        "runtimeDependencies": [{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "required",
+            "capabilities": [{
+                "purpose": "session",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
+        }]
+    }));
+    fixture.write_text("requirements.txt", "fastapi\nuvicorn\n");
+    fixture.write_text("main.py", "from fastapi import FastAPI\napp = FastAPI()\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    let redis = spec
+        .source_model
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.kind == contracts::DependencyServiceKind::Redis)
+        .expect("Redis dependency");
+    assert_eq!(redis.service_name, "redis");
+    assert_eq!(redis.volume_name.as_deref(), Some("loom_redis_data"));
+    assert_reference_load_plan_contains(
+        &value["details"]["deployReferenceProfile"],
+        "deploy.dependencies.redis",
+    );
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("test: [\"CMD\", \"redis-cli\", \"ping\"]"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("command: [\"redis-server\", \"--appendonly\", \"yes\"]"),
+        "{compose}"
+    );
+    assert!(compose.contains("loom_redis_data:/data"), "{compose}");
+    assert!(compose.contains("condition: service_healthy"), "{compose}");
+    assert!(!compose.contains("- \"6379:6379\""), "{compose}");
+}
+
+#[test]
+fn deploy_prepare_does_not_gate_startup_on_optional_redis() {
+    let fixture = Fixture::new("deploy-optional-redis");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "python",
+        "commands": {
+            "development": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } },
+            "verification": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } },
+            "deployment": { "build": { "command": "pip install -r requirements.txt" }, "start": { "command": "uvicorn main:app --host 0.0.0.0 --port 8000", "port": 8000 } }
+        },
+        "runtimeSurfaces": [{"surfaceId": "api", "kind": "api", "urlPath": "/"}],
+        "httpProbes": { "previewPath": "/", "expectedStatus": "2xx_or_3xx" },
+        "environment": { "required": [], "optional": [] },
+        "runtimeDependencies": [{
+            "dependencyId": "runtime_redis",
+            "kind": "external_runtime",
+            "provider": "redis",
+            "startupRequirement": "optional",
+            "capabilities": [{
+                "purpose": "cache",
+                "durability": "ephemeral",
+                "startupRequirement": "optional"
+            }]
+        }]
+    }));
+    fixture.write_text("requirements.txt", "fastapi\nuvicorn\n");
+    fixture.write_text("main.py", "from fastapi import FastAPI\napp = FastAPI()\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("test: [\"CMD\", \"redis-cli\", \"ping\"]"),
+        "{compose}"
+    );
+    assert!(compose.contains("      - redis\n"), "{compose}");
+    assert!(!compose.contains("condition: service_healthy"), "{compose}");
+    assert!(!compose.contains("loom_redis_data:/data"), "{compose}");
+}
+
+#[test]
 fn deploy_prepare_applies_healthcheck_input_to_single_service_spec_and_compose() {
     let fixture = Fixture::new("deploy-healthcheck-input-single");
     fixture.write_runtime_delivery(json!({
@@ -4375,6 +4499,7 @@ fn expected_deploy_reference_path(ref_id: &str) -> &'static str {
         "deploy.stacks.php" => "php.md",
         "deploy.stacks.ruby" => "ruby.md",
         "deploy.stacks.static" => "static.md",
+        "deploy.dependencies.redis" => "redis.md",
         other => panic!("no expected deploy reference path for {other}"),
     }
 }

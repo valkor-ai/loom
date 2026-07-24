@@ -332,6 +332,7 @@ fn confirm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    read_required_request_groups(fixture, request_ref);
     if block != "final_summary" {
         run_knowledge_context(server, fixture, request_ref, block);
     }
@@ -349,6 +350,26 @@ fn confirm_block(
             )
             .expect("confirm brainstorm block"),
     )
+}
+
+fn read_required_request_groups(fixture: &Fixture, request_ref: &str) {
+    let request = state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect brainstorm request");
+    for group in request
+        .read_groups
+        .iter()
+        .filter(|group| group.required && group.group_id != "knowledge_context_plan")
+    {
+        state::read_field_group(delivery_core::ReadFieldGroupInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: request_ref.to_string(),
+            group_id: group.group_id.clone(),
+        })
+        .unwrap_or_else(|error| panic!("read required group {}: {error}", group.group_id));
+    }
 }
 
 fn run_knowledge_context(

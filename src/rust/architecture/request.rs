@@ -4,8 +4,8 @@ use contracts::{
     api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
     ui_quality_enum_refs, ui_surface_decision_candidate_shape,
     ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
-    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
-    COVERAGE_ARTIFACT_TYPES,
+    ArchitectureSectionGroup, PlanningGenerationContract, SecurityMechanism,
+    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
@@ -230,6 +230,10 @@ fn build_request_root(
     );
     let architecture_quality_seed = build_architecture_quality_seed(current_output.section, None);
     let runtime_dependency_seed = runtime_dependency_seed(technical_baseline);
+    let security_profile_seed = security_profile_seed(
+        &planning_contract.technical_baseline.security_requirement,
+        technical_baseline,
+    );
     let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -243,6 +247,7 @@ fn build_request_root(
         "uiQualitySeed": ui_quality_seed,
         "architectureQualitySeed": architecture_quality_seed,
         "runtimeDependencySeed": runtime_dependency_seed,
+        "securityProfileSeed": security_profile_seed.clone(),
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -308,7 +313,8 @@ fn build_request_root(
                 false,
                 &source_refs,
                 frontend_experience_source,
-                api_quality_seed
+                api_quality_seed,
+                &security_profile_seed
             )
         }
     });
@@ -326,6 +332,7 @@ pub(crate) fn architecture_read_groups(
     source_refs: &Value,
     frontend_experience_source: &Value,
     api_quality_seed: &Value,
+    security_profile_seed: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -407,6 +414,18 @@ pub(crate) fn architecture_read_groups(
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
         ]);
+    }
+    if matches!(section, ArchitectureSectionGroup::DomainContract) {
+        core_fields.extend([
+            "securityProfileSeed.securityRequirement",
+            "securityProfileSeed.profiles",
+        ]);
+        if security_profile_seed.pointer("/algorithmPolicy").is_some() {
+            core_fields.push("securityProfileSeed.algorithmPolicy");
+        }
+        if security_profile_seed.pointer("/sessionPolicy").is_some() {
+            core_fields.push("securityProfileSeed.sessionPolicy");
+        }
     }
     let mut contract_fields = vec![
         "sectionState.currentSection",
@@ -556,13 +575,11 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
             "track": "persistence",
             "kind": "storage",
             "startupRequirement": "required",
-            "requiredFor": ["current_phase_persistent_capabilities"],
-            "failureBehavior": "Storage failure must prevent false success and preserve write consistency.",
-            "recoveryStrategy": "Restore the configured storage boundary, then restart or retry the affected runtime operation.",
-            "observability": [
-                "Startup exposes storage readiness or failure.",
-                "Affected runtime operations expose an actionable failure signal."
-            ]
+            "capabilities": [{
+                "purpose": "primary_storage",
+                "durability": "persistent",
+                "startupRequirement": "required"
+            }]
         });
         if let Some(provider) = structured_provider_from_track(tracks.get("persistence")) {
             candidate["provider"] = json!(provider);
@@ -570,29 +587,77 @@ fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
         candidates.push(candidate);
     }
     if track_is_selected(tracks.get("externalServices")) {
-        let mut candidate = json!({
-            "dependencyId": "runtime_external_services",
-            "track": "externalServices",
-            "kind": "external_runtime",
-            "startupRequirement": "required",
-            "requiredFor": ["current_phase_external_capabilities"],
-            "failureBehavior": "An unavailable external runtime must produce an explicit failure and must not be reported as a successful operation.",
-            "recoveryStrategy": "Restore the configured external runtime or use the declared fallback before retrying.",
-            "observability": [
-                "Dependency readiness or connection failure is observable.",
-                "Affected runtime operations expose an actionable failure signal."
-            ]
-        });
-        if let Some(provider) = structured_provider_from_track(tracks.get("externalServices")) {
-            candidate["provider"] = json!(provider);
+        for provider in structured_external_service_providers(tracks.get("externalServices")) {
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("external")
+                .to_string();
+            let provider_name = normalize_provider(&provider_name);
+            let capabilities = canonical_external_capabilities(&provider);
+            let startup_requirement = aggregate_startup_requirement(&capabilities);
+            candidates.push(json!({
+                "dependencyId": format!("runtime_{provider_name}"),
+                "track": "externalServices",
+                "kind": "external_runtime",
+                "provider": provider_name,
+                "startupRequirement": startup_requirement,
+                "capabilities": capabilities
+            }));
         }
-        candidates.push(candidate);
     }
     json!({
         "authority": "technical_baseline.stack.tracks",
         "candidates": candidates,
         "emptyPolicy": "runtimeDependencies may be empty only when candidates is empty"
     })
+}
+
+fn canonical_external_capabilities(provider: &Value) -> Value {
+    let Some(capabilities) = provider.get("capabilities").and_then(Value::as_array) else {
+        return json!([]);
+    };
+    Value::Array(
+        capabilities
+            .iter()
+            .filter_map(|capability| {
+                let purpose = capability.get("purpose")?.as_str()?.trim();
+                let durability = capability.get("durability")?.as_str()?.trim();
+                let startup_requirement = capability.get("startupRequirement")?.as_str()?.trim();
+                Some(json!({
+                    "purpose": purpose,
+                    "durability": durability,
+                    "startupRequirement": startup_requirement
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn structured_external_service_providers(track: Option<&Value>) -> Vec<Value> {
+    track
+        .and_then(Value::as_object)
+        .and_then(|track| track.get("providers"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn aggregate_startup_requirement(capabilities: &Value) -> &'static str {
+    let values = capabilities
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|capability| capability.get("startupRequirement"))
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if values.contains(&"required") {
+        "required"
+    } else if values.contains(&"optional") {
+        "optional"
+    } else {
+        "not_applicable"
+    }
 }
 
 fn structured_provider_from_track(track: Option<&Value>) -> Option<String> {
@@ -693,6 +758,41 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
     value
 }
 
+fn security_profile_seed(
+    requirement: &contracts::SecurityRequirement,
+    baseline: &TechnicalBaselineContract,
+) -> Value {
+    let mut seed = json!({
+        "securityRequirement": requirement,
+        "profiles": baseline.security_profiles.clone(),
+    });
+    if baseline
+        .security_profiles
+        .iter()
+        .any(|profile| matches!(profile.mechanism, SecurityMechanism::BearerJwt))
+    {
+        seed["algorithmPolicy"] = json!([
+            "Use only the algorithm selected by the explicitly accepted bearer JWT profile.",
+            "Do not accept an algorithm from an incoming token header.",
+            "Do not add a second JWT profile or a second algorithm in Architecture.",
+            "Reference the selected profile by securityProfileRef from each protected interface."
+        ]);
+    }
+    if baseline
+        .security_profiles
+        .iter()
+        .any(|profile| matches!(profile.mechanism, SecurityMechanism::ServerSession))
+    {
+        seed["sessionPolicy"] = json!([
+            "Use same-origin cookie-backed server sessions for the accepted browser trust model.",
+            "Resolve the authenticated user and roles from the accepted server-side session dependency before applying actorRefs and permissionRefs.",
+            "Do not add bearer headers, JWT claims, issuer, audience, or token algorithm configuration for this profile.",
+            "Keep CSRF protection and secure HttpOnly cookie settings aligned with the selected browser session framework."
+        ]);
+    }
+    seed
+}
+
 pub(crate) fn build_architecture_quality_seed(
     section: ArchitectureSectionGroup,
     candidate_plan: Option<&Value>,
@@ -782,10 +882,10 @@ fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
                 .get("currentFrontendExperienceRef")
                 .and_then(Value::as_str)
         })
-        .unwrap_or_default();
-    json!({
-        "brainstormFrontendExperienceRef": authority_ref
-    })
+        .filter(|reference| !reference.trim().is_empty());
+    authority_ref
+        .map(|reference| json!({"brainstormFrontendExperienceRef": reference}))
+        .unwrap_or_else(|| json!({}))
 }
 
 fn build_allowed_refs(planning_contract: &PlanningGenerationContract) -> Value {
@@ -1029,6 +1129,115 @@ pub fn section_schema_shape(
     })
 }
 
+/// Validate the concrete section content against the same shape that is sent
+/// to the Agent. This is intentionally structural only; cross-artifact
+/// ownership and reference checks remain domain validation below it.
+pub(crate) fn validate_section_content_shape(
+    content: &Value,
+    schema_shape: &Value,
+) -> Vec<(String, String)> {
+    let Some(expected) = schema_shape.get("content") else {
+        return vec![(
+            "content".to_string(),
+            "The current Architecture write contract is missing content shape.".to_string(),
+        )];
+    };
+    let mut violations = Vec::new();
+    validate_shape_node(content, expected, "content", &mut violations);
+    violations
+}
+
+fn validate_shape_node(
+    value: &Value,
+    expected: &Value,
+    path: &str,
+    violations: &mut Vec<(String, String)>,
+) {
+    match expected {
+        Value::Object(shape) => {
+            let Some(object) = value.as_object() else {
+                violations.push((
+                    path.to_string(),
+                    "The value must be a structured object declared by the current contract."
+                        .to_string(),
+                ));
+                return;
+            };
+            for (field, field_shape) in shape {
+                if let Some(actual) = object.get(field) {
+                    validate_shape_node(
+                        actual,
+                        field_shape,
+                        &format!("{path}.{field}"),
+                        violations,
+                    );
+                }
+            }
+        }
+        Value::Array(shape) => {
+            let Some(items) = value.as_array() else {
+                violations.push((
+                    path.to_string(),
+                    "The value must be an array declared by the current contract.".to_string(),
+                ));
+                return;
+            };
+            if let Some(item_shape) = shape.first() {
+                for (index, item) in items.iter().enumerate() {
+                    validate_shape_node(item, item_shape, &format!("{path}[{index}]"), violations);
+                }
+            }
+        }
+        Value::String(description) => {
+            let description = description.trim();
+            if description == "object" {
+                if !value.is_object() {
+                    violations.push((path.to_string(), "The value must be an object.".to_string()));
+                }
+            } else if description == "array" {
+                if !value.is_array() {
+                    violations.push((path.to_string(), "The value must be an array.".to_string()));
+                }
+            } else if description == "boolean" {
+                if !value.is_boolean() {
+                    violations.push((path.to_string(), "The value must be a boolean.".to_string()));
+                }
+            } else if description == "number" {
+                if !value.is_number() {
+                    violations.push((path.to_string(), "The value must be a number.".to_string()));
+                }
+            } else if description == "string" || description.contains(" | ") {
+                let Some(actual) = value.as_str() else {
+                    violations.push((
+                        path.to_string(),
+                        "The value must be a string declared by the current contract.".to_string(),
+                    ));
+                    return;
+                };
+                if description.contains(" | ")
+                    && !description.split(" | ").any(|item| item.trim() == actual)
+                {
+                    violations.push((
+                        path.to_string(),
+                        format!("The value must be one of: {description}."),
+                    ));
+                }
+            }
+        }
+        Value::Bool(_) => {
+            if !value.is_boolean() {
+                violations.push((path.to_string(), "The value must be a boolean.".to_string()));
+            }
+        }
+        Value::Number(_) => {
+            if !value.is_number() {
+                violations.push((path.to_string(), "The value must be a number.".to_string()));
+            }
+        }
+        Value::Null => {}
+    }
+}
+
 fn section_content_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
@@ -1050,7 +1259,7 @@ fn section_content_shape(
                 "applications": [{
                     "applicationId": "stable application id",
                     "name": "string",
-                    "kind": "web_client | mobile_client | native_client | desktop_client | backend_service | api_service | worker | external_system",
+                    "kind": "web_application | web_client | mobile_client | native_client | desktop_client | backend_service | api_service | worker | external_system",
                     "rootPath": "repository-relative root"
                 }],
                 "applicationInteractions": [{
@@ -1422,16 +1631,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
                 }
             },
             "runtimeSurfaces": ["object"],
-            "runtimeDependencies": [{
-                "dependencyId": "string",
-                "kind": "service | storage | queue | filesystem | external_runtime",
-                "provider": "optional canonical provider id from runtimeDependencySeed",
-                "requiredFor": ["string"],
-                "startupRequirement": "required | optional | not_applicable",
-                "failureBehavior": "string",
-                "recoveryStrategy": "string",
-                "observability": ["string"]
-            }],
             "httpProbes": {
                 "previewPath": "string",
                 "healthPath": "optional string; only when the repository exposes this probe",
@@ -1485,8 +1684,12 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
         },
         "errorSchema": ["object"],
         "paginationPolicy": "optional object for unbounded collection endpoints",
-        "authPolicy": "optional object for protected operations",
-        "contractFileRefs": ["string"],
+        "authPolicy": {
+            "required": "not_applicable | required | optional | deferred_with_risk",
+            "securityProfileRef": "required for required or optional authPolicy when selected; omit for not_applicable or deferred_with_risk; must reference securityProfileSeed.profiles[].profileId",
+            "actorRefs": ["actor id"],
+            "permissionRefs": ["permission or capability id"]
+        },
         "idempotencyPolicy": "optional object for retry-sensitive or duplicate-sensitive operations",
         "cachePolicy": "optional object for cacheable reads",
         "conditionalRequestPolicy": "optional object for optimistic concurrency or cache validators",
@@ -2045,7 +2248,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
                 "urlPath": "",
                 "purpose": ""
             }],
-            "runtimeDependencies": [],
             "httpProbes": {
                 "previewPath": "/",
                 "healthPath": "",
@@ -2160,7 +2362,6 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
             "actorRefs": [],
             "permissionRefs": []
         },
-        "contractFileRefs": [],
         "idempotencyPolicy": {
             "required": false,
             "keyHeader": "",
@@ -2299,6 +2500,7 @@ pub fn section_generation_rules(
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
+                    "Use securityProfileSeed as the authority for interface authPolicy. Write one canonical authPolicy object per HTTP interface with required, actorRefs, and permissionRefs. For required or optional auth, reference an explicitly selected security profile; for deferred_with_risk, omit securityProfileRef and record the deferred risk. Never use boolean, string, or inferred JWT policy shapes.".to_string(),
                     "Write content.apiContract.publicExposure and content.apiContract.browserBinding once for the current API surface. publicExposure.basePath is the externally served prefix, preservePath must describe proxy behavior, and browserBinding.pathOwnership must remain interface_path. Do not repeat these fields inside every interface.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
@@ -2344,8 +2546,8 @@ pub fn section_generation_rules(
                 .to_string(),
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
-            "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state requiredFor capabilities, startup requirement, failure behavior, recovery strategy, and observability signals. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
-            "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, startupRequirement, and provider when present; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
+            "Do not write runtimeDependencies. MCP rebuilds the canonical runtime dependency projection from runtimeDependencySeed before validating and persisting this section. Put dependency failure, recovery, and observability decisions in architectureQuality with sourceRefs and verificationHints when they affect the current phase.".to_string(),
+            "Use runtimeDependencySeed to understand which confirmed dependencies and capability roles are in scope. Do not add providers, capability roles, persistence modes, startup requirements, or legacy runtime dependency fields from Agent prose.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -2403,13 +2605,22 @@ mod tests {
         let seed = runtime_dependency_seed_from_stack(&json!({
             "tracks": {
                 "persistence": {"status": "selected", "selection": "PostgreSQL"},
-                "externalServices": {"status": "not_needed", "selection": "None"}
+                "externalServices": {"status": "selected", "selection": "Redis", "providers": [{
+                    "provider": "redis",
+                    "capabilities": [{
+                        "purpose": "cache",
+                        "durability": "ephemeral",
+                        "startupRequirement": "optional"
+                    }]
+                }]}
             }
         }));
         assert_eq!(seed["authority"], "technical_baseline.stack.tracks");
-        assert_eq!(seed["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(seed["candidates"].as_array().unwrap().len(), 2);
         assert_eq!(seed["candidates"][0]["kind"], "storage");
         assert_eq!(seed["candidates"][0]["startupRequirement"], "required");
+        assert_eq!(seed["candidates"][1]["provider"], "redis");
+        assert_eq!(seed["candidates"][1]["capabilities"][0]["purpose"], "cache");
         assert_eq!(
             seed["emptyPolicy"],
             "runtimeDependencies may be empty only when candidates is empty"
@@ -2498,6 +2709,7 @@ mod tests {
             &json!({}),
             &json!({}),
             &seed,
+            &json!({}),
         );
         let group = groups
             .as_array()
@@ -2512,6 +2724,29 @@ mod tests {
             group["selectors"].to_string().contains("apiQualitySeed"),
             "the dedicated group must expose the seed fields to MCP repair logic"
         );
+    }
+
+    #[test]
+    fn dormant_security_seed_does_not_request_jwt_algorithm_guidance() {
+        let groups = architecture_read_groups(
+            ArchitectureSectionGroup::DomainContract,
+            false,
+            false,
+            &json!({}),
+            &json!({}),
+            &json!({}),
+            &json!({"securityRequirement": {"applies": "required"}, "profiles": []}),
+        );
+        let core = groups
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("groupId").and_then(Value::as_str) == Some("architecture_core_context")
+                })
+            })
+            .expect("architecture core read group");
+
+        assert!(!core["selectors"].to_string().contains("algorithmPolicy"));
     }
 
     #[test]
@@ -2614,8 +2849,8 @@ mod tests {
             .is_some());
         assert!(behavior.pointer("/userFlows/0/failurePaths").is_some());
         assert!(runtime
-            .pointer("/runtimeDelivery/runtimeDependencies/0/failureBehavior")
-            .is_some());
+            .pointer("/runtimeDelivery/runtimeDependencies")
+            .is_none());
     }
 
     #[test]

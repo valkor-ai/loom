@@ -1,6 +1,6 @@
 # Spring Boot Observability
 
-Observability must answer whether the accepted runtime surfaces and important business operations are healthy, failing, or degraded without exposing secrets or creating unbounded telemetry cost.
+This reference owns Spring Boot health, metrics, and tracing mechanics. Cross-stack event behavior lives in `tech/code/observability.md`; SLF4J provider wiring, logging configuration, async appenders, and rolling files live in `tech/backend/springboot/logging.md` when that reference is selected.
 
 ## Actuator Exposure
 
@@ -20,18 +20,6 @@ Do not put slow external business calls in every health probe. A dependency heal
 
 Do not mark liveness down for a recoverable downstream outage; restart loops can amplify the outage.
 
-## Logs And Correlation
-
-Use structured fields or the repository's established pattern for request id, trace id, operation, stable error code, and owned business identity when safe.
-
-- log unexpected failures once with stack context
-- keep validation/business rejection at an appropriate level
-- redact credentials, tokens, secrets, personal data, and large payloads
-- do not rely on translated user messages as log categories
-- propagate correlation identifiers through supported servlet/reactive/async mechanisms
-
-Avoid duplicate logs at client, service, controller advice, and global handler for the same exception.
-
 ## Metrics
 
 Metrics need stable names, units, and bounded tags. Good tags include outcome class, operation, dependency, or stable error category. Never tag with user id, order id, URL containing identifiers, exception message, raw query, or arbitrary tenant unless cardinality is explicitly bounded.
@@ -48,6 +36,12 @@ Sampling probability is an environment decision, not a hardcoded `1.0` productio
 
 Emit a stable observable signal for critical state transitions and terminal failures when the architecture NFR/risk requires it. Telemetry is not the source of truth; business audit records belong in durable domain storage when required.
 
+## Ownership And Failure Policy
+
+The task must identify whether it owns endpoint exposure, probe behavior, metrics, tracing, or only evidence collection. Optional telemetry exporter failure must not fail business requests; required readiness dependencies must follow the accepted startup and recovery policy.
+
+Keep Actuator configuration environment-specific and review management exposure separately from the public API surface.
+
 ## Verification Focus
 
 Useful observability evidence includes:
@@ -55,8 +49,7 @@ Useful observability evidence includes:
 - exact Actuator endpoints and access policy
 - liveness/readiness behavior for required and optional dependency outages
 - safe health detail exposure
-- request/trace correlation across the changed boundary
-- log redaction and stable error codes
+- Spring request/trace context propagation across the changed boundary
 - bounded metric tags and expected increments/timing
 - trace propagation across async/reactive/client calls when owned
 - startup without a collector when telemetry export is optional

@@ -222,18 +222,20 @@ where
         }
     };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
-    let issues = validate_result(
+    let mut issues = validate_non_applicable_evidence_fields(&raw_result, &task);
+    issues.extend(validate_result(
         root,
         &normalized_result,
         &result,
         &task,
         browser_profile.as_ref(),
+        &current_task_plan.engineering_quality_requirements,
         &code_quality_requirements,
         &required_top_level_fields,
         &blocked_output,
         &result_file,
         &target.path,
-    );
+    ));
     if !issues.is_empty() {
         return repair_task_result_or_error(
             input,
@@ -430,6 +432,7 @@ fn validate_result(
     result: &TaskResult,
     task: &TaskDefinition,
     browser_profile: Option<&BrowserVerificationProfile>,
+    engineering_quality_requirements: &[contracts::EngineeringQualityRequirement],
     code_quality_requirements: &[CodeQualityRequirement],
     required_top_level_fields: &[String],
     blocked_output: &Value,
@@ -492,7 +495,15 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
-    validate_verification_provenance(result, &mut issues);
+    validate_verification_provenance(project_root, result, &mut issues);
+    validate_implementation_obligation_results(project_root, result, task, &mut issues);
+    validate_stack_conformance(
+        project_root,
+        result,
+        task,
+        engineering_quality_requirements,
+        &mut issues,
+    );
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -648,7 +659,6 @@ fn task_result_required_field_applies_to_status(field: &str, status: &TaskResult
             | "architectureQualityEvidence"
             | "apiContractEvidence"
             | "codeQualityEvidence"
-            | "requirementDetailEvidence"
     )
 }
 
@@ -679,6 +689,7 @@ fn normalize_task_result_machine_fields(
     {
         object.insert("changedFiles".to_string(), json!([]));
     }
+    normalize_string_array_field(object, "changedFiles");
     if !object.contains_key("noChangeReason")
         || !object
             .get("noChangeReason")
@@ -708,6 +719,7 @@ fn normalize_task_result_machine_fields(
     if !object.get("notes").and_then(Value::as_array).is_some() {
         object.insert("notes".to_string(), json!([]));
     }
+    normalize_string_array_field(object, "notes");
     if object
         .get("status")
         .and_then(Value::as_str)
@@ -726,6 +738,7 @@ fn normalize_task_result_machine_fields(
     object.insert("updatedAt".to_string(), json!(now));
 
     normalize_verification_result_machine_fields(object, task, browser_profile);
+    normalize_implementation_obligation_results(object, task);
     normalize_browser_environment_blocked_result(object, browser_profile);
 
     let detail_ids = required_requirement_detail_ids(task);
@@ -752,8 +765,182 @@ fn normalize_task_result_machine_fields(
         object,
         task.frontend_experience_requirement.as_ref(),
     );
+    if let Some(continuity) = object
+        .get_mut("executionContinuity")
+        .and_then(Value::as_object_mut)
+    {
+        normalize_string_array_field(continuity, "notes");
+    }
+    project_task_result_to_canonical_fields(object);
 
     raw_result
+}
+
+fn normalize_implementation_obligation_results(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    let existing = object
+        .get("implementationObligationResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut unkeyed = Vec::new();
+    let mut by_id = BTreeMap::new();
+    for value in existing {
+        let Some(item) = value.as_object() else {
+            unkeyed.push(serde_json::Map::new());
+            continue;
+        };
+        let Some(id) = item.get("obligationId").and_then(Value::as_str) else {
+            unkeyed.push(item.clone());
+            continue;
+        };
+        if by_id.insert(id.to_string(), item.clone()).is_some() {
+            unkeyed.push(item.clone());
+        }
+    }
+    let normalized = task
+        .implementation_obligations
+        .iter()
+        .map(|obligation| {
+            let mut item = by_id
+                .remove(&obligation.obligation_id)
+                .or_else(|| {
+                    if unkeyed.is_empty() {
+                        None
+                    } else {
+                        Some(unkeyed.remove(0))
+                    }
+                })
+                .unwrap_or_default();
+            item.insert("obligationId".to_string(), json!(obligation.obligation_id));
+            item.insert(
+                "verificationIds".to_string(),
+                json!(obligation.verification_ids),
+            );
+            if !matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("satisfied" | "partial" | "blocked" | "not_verified")
+            ) {
+                item.insert("status".to_string(), json!("not_verified"));
+            }
+            normalize_string_array_field(&mut item, "verificationIds");
+            normalize_string_array_field(&mut item, "evidenceRefs");
+            if let Some(evidence_refs) = item.get_mut("evidenceRefs").and_then(Value::as_array_mut)
+            {
+                evidence_refs.retain(|reference| {
+                    reference
+                        .as_str()
+                        .is_some_and(|reference| !is_generated_output_path(reference))
+                });
+            }
+            if !item.get("summary").is_some_and(Value::is_string) {
+                item.insert("summary".to_string(), json!(""));
+            }
+            retain_object_fields(
+                &mut item,
+                &[
+                    "obligationId",
+                    "status",
+                    "verificationIds",
+                    "evidenceRefs",
+                    "summary",
+                ],
+            );
+            Value::Object(item)
+        })
+        .collect::<Vec<_>>();
+    object.insert(
+        "implementationObligationResults".to_string(),
+        Value::Array(normalized),
+    );
+}
+
+fn project_task_result_to_canonical_fields(object: &mut serde_json::Map<String, Value>) {
+    retain_object_fields(
+        object,
+        &[
+            "schemaVersion",
+            "taskResultId",
+            "taskId",
+            "taskPlanId",
+            "status",
+            "changedFiles",
+            "noChangeReason",
+            "verificationResults",
+            "implementationObligationResults",
+            "selfRepairSummary",
+            "failure",
+            "executionContinuity",
+            "notes",
+            "frontendExperienceSelfCheck",
+            "frontendQualitySelfCheck",
+            "runtimeDeliveryEvidence",
+            "requirementDetailEvidence",
+            "conceptEvidence",
+            "architectureQualityEvidence",
+            "apiContractEvidence",
+            "codeQualityEvidence",
+            "blockedReasons",
+            "createdAt",
+            "updatedAt",
+        ],
+    );
+    project_object_fields(object, "noChangeReason", &["code", "summary"]);
+    project_object_fields(
+        object,
+        "selfRepairSummary",
+        &[
+            "attempted",
+            "attemptCount",
+            "stopReason",
+            "progressObserved",
+        ],
+    );
+    project_object_fields(object, "failure", &["code", "summary"]);
+    project_object_fields(
+        object,
+        "executionContinuity",
+        &[
+            "taskResultSubmittedAfterVerification",
+            "agentOwnedLongRunningWork",
+            "notes",
+        ],
+    );
+    project_object_array_fields(
+        object,
+        "blockedReasons",
+        &["code", "nextNode", "message", "details"],
+    );
+}
+
+fn retain_object_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]) {
+    object.retain(|key, _| fields.iter().any(|allowed| *allowed == key));
+}
+
+fn project_object_fields(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    allowed_fields: &[&str],
+) {
+    if let Some(value) = object.get_mut(field).and_then(Value::as_object_mut) {
+        retain_object_fields(value, allowed_fields);
+    }
+}
+
+fn project_object_array_fields(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    allowed_fields: &[&str],
+) {
+    if let Some(items) = object.get_mut(field).and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(item) = item.as_object_mut() {
+                retain_object_fields(item, allowed_fields);
+            }
+        }
+    }
 }
 
 fn canonical_task_result_value(
@@ -853,6 +1040,19 @@ fn normalize_verification_provenance(object: &mut serde_json::Map<String, Value>
         provenance
             .entry("exitCode".to_string())
             .or_insert(Value::Null);
+        normalize_string_array_field(&mut provenance, "evidenceRefs");
+        normalize_string_array_field(&mut provenance, "changedFiles");
+        normalize_string_array_field(&mut provenance, "testCaseRefs");
+        retain_object_fields(
+            &mut provenance,
+            &[
+                "evidenceRefs",
+                "changedFiles",
+                "testCaseRefs",
+                "command",
+                "exitCode",
+            ],
+        );
         item.insert("provenance".to_string(), Value::Object(provenance));
     }
 }
@@ -960,27 +1160,90 @@ fn remove_non_applicable_evidence_fields(
     object: &mut serde_json::Map<String, Value>,
     task: &TaskDefinition,
 ) {
-    if !frontend_self_check_applies(task) {
+    if !frontend_self_check_applies(task)
+        && object
+            .get("frontendExperienceSelfCheck")
+            .is_some_and(Value::is_null)
+    {
         object.remove("frontendExperienceSelfCheck");
     }
-    if !frontend_quality_self_check_applies(task) {
+    if !frontend_quality_self_check_applies(task)
+        && object
+            .get("frontendQualitySelfCheck")
+            .is_some_and(Value::is_null)
+    {
         object.remove("frontendQualitySelfCheck");
     }
-    if !runtime_delivery_evidence_applies(task) {
+    if !runtime_delivery_evidence_applies(task)
+        && object
+            .get("runtimeDeliveryEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("runtimeDeliveryEvidence");
     }
-    if task.concept_refs.is_empty() {
+    if task.concept_refs.is_empty() && object.get("conceptEvidence").is_some_and(Value::is_null) {
         object.remove("conceptEvidence");
     }
-    if !architecture_quality_evidence_applies(task) {
+    if !architecture_quality_evidence_applies(task)
+        && object
+            .get("architectureQualityEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("architectureQualityEvidence");
     }
-    if !api_contract_evidence_applies(task) {
+    if !api_contract_evidence_applies(task)
+        && object
+            .get("apiContractEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("apiContractEvidence");
     }
-    if !code_quality_evidence_applies(task) {
+    if !code_quality_evidence_applies(task)
+        && object
+            .get("codeQualityEvidence")
+            .is_some_and(Value::is_null)
+    {
         object.remove("codeQualityEvidence");
     }
+}
+
+fn validate_non_applicable_evidence_fields(
+    raw_result: &Value,
+    task: &TaskDefinition,
+) -> Vec<delivery_core::RepairIssue> {
+    let Some(object) = raw_result.as_object() else {
+        return Vec::new();
+    };
+    let fields = [
+        (
+            frontend_self_check_applies(task),
+            "frontendExperienceSelfCheck",
+        ),
+        (
+            frontend_quality_self_check_applies(task),
+            "frontendQualitySelfCheck",
+        ),
+        (
+            runtime_delivery_evidence_applies(task),
+            "runtimeDeliveryEvidence",
+        ),
+        (!task.concept_refs.is_empty(), "conceptEvidence"),
+        (
+            architecture_quality_evidence_applies(task),
+            "architectureQualityEvidence",
+        ),
+        (api_contract_evidence_applies(task), "apiContractEvidence"),
+        (code_quality_evidence_applies(task), "codeQualityEvidence"),
+    ];
+    fields
+        .into_iter()
+        .filter(|(applies, field)| !applies && object.get(*field).is_some_and(|value| !value.is_null()))
+        .map(|(_, field)| issue(
+            "TASK_RESULT_EVIDENCE_NOT_APPLICABLE",
+            field,
+            "TaskResult must not include evidence fields when the canonical task contract does not assign that evidence type; remove the field instead of submitting an unconsumed value.",
+        ))
+        .collect()
 }
 
 fn normalize_applicable_evidence_array_fields(
@@ -1058,6 +1321,7 @@ fn normalize_frontend_quality_self_check_shape(
         self_check.remove("surfaceDecisionContractRef");
     }
     normalize_string_array_field(self_check, "referencePlanFilesChecked");
+    normalize_string_array_field(self_check, "evidenceRefs");
     normalize_string_array_field(self_check, "knownGaps");
     if !self_check
         .get("contentBoundaryEvidence")
@@ -1088,6 +1352,49 @@ fn normalize_frontend_quality_self_check_shape(
     {
         self_check.remove("designTokenEvidence");
     }
+    project_frontend_quality_self_check(self_check);
+}
+
+fn project_frontend_quality_self_check(self_check: &mut serde_json::Map<String, Value>) {
+    retain_object_fields(
+        self_check,
+        &[
+            "status",
+            "surfaceDecisionContractRef",
+            "evidenceRefs",
+            "surfaceRegionEvidence",
+            "surfaceActionEvidence",
+            "surfaceStateEvidence",
+            "surfaceQualityRuleEvidence",
+            "contentBoundaryEvidence",
+            "referencePlanFilesChecked",
+            "designTokenEvidence",
+            "knownGaps",
+        ],
+    );
+    project_object_fields(
+        self_check,
+        "contentBoundaryEvidence",
+        &[
+            "checked",
+            "allowedContentExamples",
+            "forbiddenContentViolations",
+            "evidence",
+        ],
+    );
+    project_object_fields(
+        self_check,
+        "designTokenEvidence",
+        &[
+            "strategyUsed",
+            "templateIdUsed",
+            "tokenAssetFiles",
+            "tokenConsumerFiles",
+            "existingTokenSystemReused",
+            "parallelTokenSystemCreated",
+            "mergeSummary",
+        ],
+    );
 }
 
 fn normalize_concept_evidence_machine_fields(
@@ -1121,15 +1428,34 @@ fn normalize_concept_evidence_machine_fields(
                 &mut used,
                 false,
             );
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("conceptRef");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("conceptRef".to_string(), json!(concept_ref));
-            if !item.get("evidenceType").is_some_and(Value::is_string) {
-                item.insert("evidenceType".to_string(), json!("code"));
-            }
-            if !item.get("summary").is_some_and(Value::is_string) {
-                item.insert("summary".to_string(), json!(""));
-            }
+            item.insert(
+                "evidenceType".to_string(),
+                raw_object
+                    .and_then(|value| value.get("evidenceType"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("code")),
+            );
+            item.insert(
+                "refs".to_string(),
+                raw_object
+                    .and_then(|value| value.get("refs"))
+                    .filter(|value| value.is_array())
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+            normalize_string_array_field(&mut item, "refs");
+            item.insert(
+                "summary".to_string(),
+                raw_object
+                    .and_then(|value| value.get("summary"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1216,21 +1542,60 @@ fn normalize_quality_evidence_array(
                 &mut used,
                 false,
             );
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("requirementId");
-            item.remove("verificationIds");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("requirementId".to_string(), json!(requirement_id));
             item.insert("verificationIds".to_string(), json!(verification_ids));
-            if !item.get("status").and_then(Value::as_str).is_some() {
-                item.insert("status".to_string(), json!("not_verified"));
-            }
-            if !item.get("summary").is_some_and(Value::is_string) {
-                item.insert("summary".to_string(), json!(""));
-            }
+            item.insert(
+                "status".to_string(),
+                raw_object
+                    .and_then(|value| value.get("status"))
+                    .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                    .cloned()
+                    .unwrap_or_else(|| json!("not_verified")),
+            );
             if field == "apiContractEvidence" {
-                item.remove("interfaceRefs");
                 item.insert("interfaceRefs".to_string(), json!(interface_refs));
             }
+            if field == "codeQualityEvidence" {
+                item.insert(
+                    "referenceGroupsChecked".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("referenceGroupsChecked"))
+                        .filter(|value| value.is_object())
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
+                );
+                item.insert(
+                    "referenceFilesChecked".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("referenceFilesChecked"))
+                        .filter(|value| value.is_array())
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                );
+                normalize_string_array_field(&mut item, "referenceFilesChecked");
+                normalize_string_array_map_field(&mut item, "referenceGroupsChecked");
+            }
+            if matches!(field, "apiContractEvidence" | "codeQualityEvidence") {
+                item.insert(
+                    "knownGaps".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("knownGaps"))
+                        .filter(|value| value.is_array())
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                );
+                normalize_string_array_field(&mut item, "knownGaps");
+            }
+            item.insert(
+                "summary".to_string(),
+                raw_object
+                    .and_then(|value| value.get("summary"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1263,15 +1628,34 @@ fn normalize_frontend_surface_evidence_array(
         .enumerate()
         .map(|(index, expected_id)| {
             let raw = ordered_machine_item(&raw_items, index, "id", expected_id, &mut used, false);
-            let mut item = raw.as_object().cloned().unwrap_or_default();
-            item.remove("id");
+            let raw_object = raw.as_object();
+            let mut item = serde_json::Map::new();
             item.insert("id".to_string(), json!(expected_id));
-            if !item.get("status").and_then(Value::as_str).is_some() {
-                item.insert("status".to_string(), json!("missing"));
-            }
-            if !item.get("evidence").is_some_and(Value::is_string) {
-                item.insert("evidence".to_string(), json!(""));
-            }
+            item.insert(
+                "status".to_string(),
+                raw_object
+                    .and_then(|value| value.get("status"))
+                    .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                    .cloned()
+                    .unwrap_or_else(|| json!("missing")),
+            );
+            item.insert(
+                "files".to_string(),
+                raw_object
+                    .and_then(|value| value.get("files"))
+                    .filter(|value| value.is_array())
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+            normalize_string_array_field(&mut item, "files");
+            item.insert(
+                "evidence".to_string(),
+                raw_object
+                    .and_then(|value| value.get("evidence"))
+                    .filter(|value| value.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("")),
+            );
             Value::Object(item)
         })
         .collect::<Vec<_>>();
@@ -1287,6 +1671,27 @@ fn normalize_string_array_field(object: &mut serde_json::Map<String, Value>, fie
         field.to_string(),
         Value::Array(items.into_iter().filter(Value::is_string).collect()),
     );
+}
+
+fn normalize_string_array_map_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(values) = object.get(field).and_then(Value::as_object) else {
+        object.insert(field.to_string(), json!({}));
+        return;
+    };
+    let normalized = values
+        .iter()
+        .map(|(key, value)| {
+            let items = value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (key.clone(), json!(items))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    object.insert(field.to_string(), Value::Object(normalized));
 }
 
 fn ordered_machine_item(
@@ -1344,24 +1749,25 @@ fn normalize_verification_result_machine_fields(
             &mut used,
             false,
         );
-        let mut item = raw.as_object().cloned().unwrap_or_default();
-        item.remove("verificationId");
+        let raw_object = raw.as_object();
+        let mut item = serde_json::Map::new();
         item.insert(
             "verificationId".to_string(),
             json!(intent.verification_id.clone()),
         );
-        if !item
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            item.insert("status".to_string(), json!("not_run"));
-        }
-        let evidence_type = item
-            .get("evidenceType")
+        item.insert(
+            "status".to_string(),
+            raw_object
+                .and_then(|value| value.get("status"))
+                .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| json!("not_run")),
+        );
+        let submitted_evidence_type = raw_object
+            .and_then(|value| value.get("evidenceType"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let evidence_allowed = evidence_type.as_ref().is_some_and(|candidate| {
+        let evidence_allowed = submitted_evidence_type.as_ref().is_some_and(|candidate| {
             intent
                 .acceptable_evidence
                 .iter()
@@ -1376,18 +1782,34 @@ fn normalize_verification_result_machine_fields(
             } else {
                 item.remove("evidenceType");
             }
+        } else if let Some(evidence_type) = submitted_evidence_type {
+            item.insert("evidenceType".to_string(), json!(evidence_type));
         }
-        if !item
-            .get("summary")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
+        if let Some(browser_checks) = raw_object
+            .and_then(|value| value.get("browserChecks"))
+            .filter(|value| value.is_array())
+            .cloned()
         {
-            item.insert(
-                "summary".to_string(),
-                json!("Verification result was not reported before TaskResult submission."),
-            );
+            item.insert("browserChecks".to_string(), browser_checks);
         }
         normalize_browser_check_machine_fields(&mut item, &intent.verification_id, browser_profile);
+        item.insert(
+            "summary".to_string(),
+            raw_object
+                .and_then(|value| value.get("summary"))
+                .filter(|value| value.as_str().is_some_and(|summary| !summary.is_empty()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    json!("Verification result was not reported before TaskResult submission.")
+                }),
+        );
+        if let Some(provenance) = raw_object
+            .and_then(|value| value.get("provenance"))
+            .filter(|value| value.is_object())
+            .cloned()
+        {
+            item.insert("provenance".to_string(), provenance);
+        }
         normalized.push(Value::Object(item));
     }
     object.insert("verificationResults".to_string(), Value::Array(normalized));
@@ -1457,6 +1879,18 @@ fn normalize_browser_check_machine_fields(
         {
             item.insert("blockedReason".to_string(), Value::Null);
         }
+        retain_object_fields(
+            &mut item,
+            &[
+                "checkId",
+                "status",
+                "command",
+                "attempts",
+                "artifactRefs",
+                "observedOutcome",
+                "blockedReason",
+            ],
+        );
         normalized.push(Value::Object(item));
     }
     verification.insert("browserChecks".to_string(), Value::Array(normalized));
@@ -1467,54 +1901,82 @@ fn normalize_requirement_detail_evidence_machine_fields(
     task: &TaskDefinition,
     detail_ids: &[String],
 ) {
-    let raw_items = object
-        .get("requirementDetailEvidence")
+    let verification_values = object
+        .get("verificationResults")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut used = BTreeSet::new();
-    let mut normalized = Vec::new();
-    for (index, detail_id) in detail_ids.iter().enumerate() {
-        let raw = ordered_machine_item(&raw_items, index, "detailId", detail_id, &mut used, false);
-        let mut item = raw.as_object().cloned().unwrap_or_default();
-        item.remove("detailId");
-        item.remove("verificationIds");
-        item.insert("detailId".to_string(), json!(detail_id));
-        if !item
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            item.insert("status".to_string(), json!("not_verified"));
-        }
-        let detail_verification_ids = verification_ids_for_detail_with_fallback(task, detail_id);
-        if !detail_verification_ids.is_empty() {
-            item.insert(
-                "verificationIds".to_string(),
-                json!(detail_verification_ids),
-            );
-        } else if !item
-            .get("verificationIds")
-            .and_then(Value::as_array)
-            .is_some()
-        {
-            item.insert("verificationIds".to_string(), json!([]));
-        }
-        if !item.get("evidenceRefs").and_then(Value::as_array).is_some() {
-            item.insert("evidenceRefs".to_string(), json!([]));
-        }
-        if !item
-            .get("summary")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            item.insert(
-                "summary".to_string(),
-                json!("Requirement detail evidence was not reported before TaskResult submission."),
-            );
-        }
-        normalized.push(Value::Object(item));
-    }
+    let normalized = detail_ids
+        .iter()
+        .map(|detail_id| {
+            let verification_ids = task
+                .verification_intents
+                .iter()
+                .filter(|intent| {
+                    intent
+                        .requirement_detail_refs
+                        .iter()
+                        .any(|id| id == detail_id)
+                })
+                .map(|intent| intent.verification_id.clone())
+                .collect::<Vec<_>>();
+            let evidence = verification_values
+                .iter()
+                .filter(|verification| {
+                    verification
+                        .get("verificationId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| verification_ids.iter().any(|expected| expected == id))
+                })
+                .collect::<Vec<_>>();
+            let status = if !evidence.is_empty()
+                && evidence.iter().all(|verification| {
+                    verification.get("status").and_then(Value::as_str) == Some("passed")
+                }) {
+                "satisfied"
+            } else if evidence.iter().any(|verification| {
+                matches!(
+                    verification.get("status").and_then(Value::as_str),
+                    Some("failed" | "blocked" | "inconclusive")
+                )
+            }) {
+                "partial"
+            } else {
+                "not_verified"
+            };
+            let evidence_refs = evidence
+                .iter()
+                .flat_map(|verification| {
+                    verification
+                        .pointer("/provenance/evidenceRefs")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .chain(
+                            verification
+                                .pointer("/provenance/changedFiles")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten(),
+                        )
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<BTreeSet<_>>();
+            let summary = evidence
+                .iter()
+                .filter_map(|verification| verification.get("summary").and_then(Value::as_str))
+                .find(|summary| !summary.trim().is_empty())
+                .unwrap_or("Evidence is derived from the task-scoped verification results.");
+            json!({
+                "detailId": detail_id,
+                "status": status,
+                "verificationIds": verification_ids,
+                "evidenceRefs": evidence_refs.into_iter().collect::<Vec<_>>(),
+                "summary": summary
+            })
+        })
+        .collect::<Vec<_>>();
     object.insert(
         "requirementDetailEvidence".to_string(),
         Value::Array(normalized),
@@ -1540,6 +2002,21 @@ fn normalize_runtime_delivery_evidence(
             json!(requirement.affected_contract_fields),
         );
     }
+    normalize_string_array_field(evidence, "checkedFields");
+    normalize_string_array_field(evidence, "commandsRun");
+    normalize_string_array_field(evidence, "unverifiedItems");
+    if evidence
+        .get("requirementRef")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        evidence.remove("requirementRef");
+    }
+    if evidence
+        .get("runtimeProbeCleanup")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        evidence.remove("runtimeProbeCleanup");
+    }
     let raw_checks = evidence
         .get("codeLevelChecks")
         .and_then(Value::as_array)
@@ -1547,40 +2024,60 @@ fn normalize_runtime_delivery_evidence(
         .unwrap_or_default();
     if raw_checks.is_empty() {
         evidence.insert("codeLevelChecks".to_string(), json!([]));
-        return;
+    } else {
+        let mut used = BTreeSet::new();
+        let checks = requirement
+            .required_code_level_checks
+            .iter()
+            .enumerate()
+            .take(raw_checks.len())
+            .map(|(index, required)| {
+                let raw = ordered_machine_item(
+                    &raw_checks,
+                    index,
+                    "checkId",
+                    &required.check_id,
+                    &mut used,
+                    false,
+                );
+                let raw_object = raw.as_object();
+                let mut check = serde_json::Map::new();
+                check.insert("checkId".to_string(), json!(required.check_id));
+                if let Some(contract_field) = &required.contract_field {
+                    check.insert("contractField".to_string(), json!(contract_field));
+                }
+                check.insert(
+                    "status".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("status"))
+                        .filter(|value| value.is_string())
+                        .cloned()
+                        .unwrap_or_else(|| json!("not_applicable")),
+                );
+                check.insert(
+                    "evidence".to_string(),
+                    raw_object
+                        .and_then(|value| value.get("evidence"))
+                        .filter(|value| value.is_string())
+                        .cloned()
+                        .unwrap_or_else(|| json!("")),
+                );
+                Value::Object(check)
+            })
+            .collect::<Vec<_>>();
+        evidence.insert("codeLevelChecks".to_string(), Value::Array(checks));
     }
-    let mut used = BTreeSet::new();
-    let checks = requirement
-        .required_code_level_checks
-        .iter()
-        .enumerate()
-        .take(raw_checks.len())
-        .map(|(index, required)| {
-            let raw = ordered_machine_item(
-                &raw_checks,
-                index,
-                "checkId",
-                &required.check_id,
-                &mut used,
-                false,
-            );
-            let mut check = raw.as_object().cloned().unwrap_or_default();
-            check.remove("checkId");
-            check.remove("contractField");
-            check.insert("checkId".to_string(), json!(required.check_id));
-            if let Some(contract_field) = &required.contract_field {
-                check.insert("contractField".to_string(), json!(contract_field));
-            }
-            if !check.get("status").and_then(Value::as_str).is_some() {
-                check.insert("status".to_string(), json!("not_applicable"));
-            }
-            if !check.get("evidence").is_some_and(Value::is_string) {
-                check.insert("evidence".to_string(), json!(""));
-            }
-            Value::Object(check)
-        })
-        .collect::<Vec<_>>();
-    evidence.insert("codeLevelChecks".to_string(), Value::Array(checks));
+    retain_object_fields(
+        evidence,
+        &[
+            "requirementRef",
+            "checkedFields",
+            "codeLevelChecks",
+            "commandsRun",
+            "unverifiedItems",
+            "runtimeProbeCleanup",
+        ],
+    );
 }
 
 fn normalize_frontend_experience_self_check(
@@ -1594,10 +2091,26 @@ fn normalize_frontend_experience_self_check(
         return;
     };
     let closure_ids = workflow_closure_requirement_ids(requirement);
-    if closure_ids.is_empty() {
-        return;
+    if !closure_ids.is_empty() {
+        self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
     }
-    self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
+    normalize_string_array_field(self_check, "evidenceRefs");
+    retain_object_fields(
+        self_check,
+        &[
+            "status",
+            "dataBinding",
+            "evidenceRefs",
+            "closureRequirementIds",
+        ],
+    );
+    if let Some(data_binding) = self_check
+        .get_mut("dataBinding")
+        .and_then(Value::as_object_mut)
+    {
+        retain_object_fields(data_binding, &["mode", "knownGaps"]);
+        normalize_string_array_field(data_binding, "knownGaps");
+    }
 }
 
 fn validate_self_repair(result: &TaskResult, issues: &mut Vec<delivery_core::RepairIssue>) {
@@ -1719,6 +2232,7 @@ fn validate_verification_results(
 }
 
 fn validate_verification_provenance(
+    project_root: &Path,
     result: &TaskResult,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
@@ -1745,6 +2259,35 @@ fn validate_verification_provenance(
                 "verificationResults[].provenance",
                 "Passed verification must cite a concrete evidence ref, test case, browser artifact, or command with exit code.",
             ));
+        }
+        if verification.evidence_type == Some(VerificationEvidence::AutomatedTest)
+            && verification
+                .provenance
+                .as_ref()
+                .is_none_or(|provenance| provenance.test_case_refs.is_empty())
+        {
+            issues.push(issue(
+                "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                "verificationResults[].provenance.testCaseRefs",
+                "Automated test evidence must identify the test file, test case, or check id that produced the result; a build command alone is not test evidence.",
+            ));
+        }
+        if let Some(provenance) = verification.provenance.as_ref() {
+            for reference in &provenance.test_case_refs {
+                if reference.contains('/') || reference.contains('\\') {
+                    if !is_safe_project_relative_path(reference)
+                        || !from_project_relative(project_root, reference)
+                            .ok()
+                            .is_some_and(|path| path.exists())
+                    {
+                        issues.push(issue(
+                            "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
+                            "verificationResults[].provenance.testCaseRefs",
+                            "Test case file references must point to existing project files.",
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -1914,6 +2457,353 @@ fn validate_browser_verification_results(
     }
 }
 
+fn validate_implementation_obligation_results(
+    project_root: &Path,
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if task.implementation_obligations.is_empty() {
+        if !result.implementation_obligation_results.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults",
+                "This task has no implementation obligations in its canonical TaskPlan.",
+            ));
+        }
+        return;
+    }
+
+    let intent_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let passed_by_id = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| (verification.verification_id.as_str(), verification))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    for obligation in &task.implementation_obligations {
+        let Some(evidence) = result
+            .implementation_obligation_results
+            .iter()
+            .find(|item| item.obligation_id == obligation.obligation_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults",
+                &format!(
+                    "Missing implementation result for required obligation {}.",
+                    obligation.obligation_id
+                ),
+            ));
+            continue;
+        };
+        if !seen.insert(evidence.obligation_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].obligationId",
+                "Each implementation obligation must have exactly one result.",
+            ));
+        }
+        if !matches!(
+            evidence.status.as_str(),
+            "satisfied" | "partial" | "blocked" | "not_verified"
+        ) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].status",
+                "Implementation obligation status must be satisfied, partial, blocked, or not_verified.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !intent_ids.contains(verification_id.as_str())
+                || (!obligation.verification_ids.is_empty()
+                    && !obligation
+                        .verification_ids
+                        .iter()
+                        .any(|expected| expected == verification_id))
+            {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].verificationIds",
+                    "Implementation evidence must reference verification ids assigned to the same obligation.",
+                ));
+            }
+        }
+        if evidence.status == "satisfied" {
+            if evidence.evidence_refs.is_empty() {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].evidenceRefs",
+                    "Satisfied implementation obligations must cite concrete evidence references.",
+                ));
+            }
+            let requires_behavioral_proof = matches!(
+                obligation.kind.as_str(),
+                "persistence_mapping"
+                    | "persistence_implementation"
+                    | "data_access_framework"
+                    | "interface_contract"
+                    | "api_binding"
+                    | "state_transition"
+                    | "state_machine"
+                    | "business_rule"
+                    | "authentication_authorization"
+                    | "async_processing"
+                    | "cache_policy"
+                    | "external_integration"
+                    | "resilience_policy"
+                    | "entity_lifecycle"
+            );
+            if requires_behavioral_proof
+                && !evidence.verification_ids.iter().any(|verification_id| {
+                    passed_by_id
+                        .get(verification_id.as_str())
+                        .and_then(|verification| verification.evidence_type)
+                        .is_some_and(|evidence_type| {
+                            matches!(
+                                evidence_type,
+                                VerificationEvidence::AutomatedTest
+                                    | VerificationEvidence::RuntimeApiCheck
+                                    | VerificationEvidence::BrowserAutomation
+                            )
+                        })
+                })
+            {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].verificationIds",
+                    "This obligation requires passed behavioral evidence; a build or reference-read result cannot satisfy it.",
+                ));
+            }
+            validate_obligation_evidence_refs(project_root, result, evidence, issues);
+            if evidence.summary.trim().is_empty() {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                    "implementationObligationResults[].summary",
+                    "Satisfied implementation obligations must explain the concrete implementation evidence; a status without a summary is not a completion claim.",
+                ));
+            }
+        }
+    }
+
+    for evidence in &result.implementation_obligation_results {
+        if !task
+            .implementation_obligations
+            .iter()
+            .any(|obligation| obligation.obligation_id == evidence.obligation_id)
+        {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].obligationId",
+                "TaskResult must not invent implementation obligation ids.",
+            ));
+        }
+    }
+
+    if matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        for obligation in task
+            .implementation_obligations
+            .iter()
+            .filter(|item| item.required)
+        {
+            let satisfied = result
+                .implementation_obligation_results
+                .iter()
+                .find(|item| item.obligation_id == obligation.obligation_id)
+                .is_some_and(|item| item.status == "satisfied");
+            if !satisfied {
+                issues.push(issue(
+                    "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INCOMPLETE",
+                    "status",
+                    &format!(
+                        "Task cannot be completed while required obligation {} is not satisfied.",
+                        obligation.obligation_id
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_obligation_evidence_refs(
+    project_root: &Path,
+    result: &TaskResult,
+    evidence: &contracts::TaskImplementationObligationResult,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let changed_files = result.changed_files.iter().collect::<BTreeSet<_>>();
+    let mut has_changed_source = false;
+    for reference in &evidence.evidence_refs {
+        if !is_safe_project_relative_path(reference) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence references must be safe project-relative paths.",
+            ));
+            continue;
+        }
+        if is_generated_output_path(reference) {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence must cite source or test files, not build output, caches, reports, or dependency directories.",
+            ));
+        }
+        if changed_files.contains(reference) {
+            has_changed_source = true;
+        } else if !from_project_relative(project_root, reference)
+            .ok()
+            .is_some_and(|path| path.is_file())
+        {
+            issues.push(issue(
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+                "implementationObligationResults[].evidenceRefs",
+                "Implementation evidence references must point to existing project files or the task's changedFiles.",
+            ));
+        }
+    }
+    if !has_changed_source {
+        issues.push(issue(
+            "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID",
+            "implementationObligationResults[].evidenceRefs",
+            "Satisfied implementation obligations must cite at least one file changed by this task; inherited files alone cannot prove ownership or completion.",
+        ));
+    }
+}
+
+fn validate_stack_conformance(
+    project_root: &Path,
+    result: &TaskResult,
+    task: &TaskDefinition,
+    engineering_quality_requirements: &[contracts::EngineeringQualityRequirement],
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(requirement) = engineering_quality_requirements.iter().find(|requirement| {
+        requirement
+            .applies_to_task_ids
+            .iter()
+            .any(|id| id == &task.task_id)
+    }) else {
+        return;
+    };
+    let Some(persistence_obligation) = task
+        .implementation_obligations
+        .iter()
+        .find(|obligation| obligation.kind == "persistence_mapping")
+    else {
+        return;
+    };
+    let files = result
+        .changed_files
+        .iter()
+        .filter_map(|file| from_project_relative(project_root, file).ok())
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<Vec<_>>();
+    let content = files.join("\n").to_ascii_lowercase();
+    if content.contains("inmemory")
+        || content.contains("in_memory")
+        || content.contains("hashmap<")
+        || content.contains("hashmap::")
+    {
+        issues.push(issue(
+            "TASK_RESULT_STACK_CONFORMANCE_INVALID",
+            "changedFiles",
+            "A task with an accepted durable persistence contract must not complete with an in-memory HashMap repository or equivalent transient store.",
+        ));
+    }
+
+    let required_signals = requirement
+        .stack_signals
+        .iter()
+        .filter(|(key, _)| matches!(key.as_str(), "persistence" | "dataAccess"))
+        .map(|(key, value)| (key.clone(), value.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    let missing_signals = required_signals
+        .iter()
+        .filter_map(|(key, value)| {
+            let markers = if key == "dataAccess" {
+                if value.contains("mybatis") {
+                    vec!["mybatis", "basemapper", "@tableid"]
+                } else if value.contains("jpa") || value.contains("hibernate") {
+                    vec![
+                        "jakarta.persistence",
+                        "javax.persistence",
+                        "@entity",
+                        "jparepository",
+                    ]
+                } else if value.contains("prisma") {
+                    vec!["prisma"]
+                } else if value.contains("sqlalchemy") || value.contains("sqlmodel") {
+                    vec!["sqlalchemy", "sqlmodel"]
+                } else if value.contains("entity framework") || value.contains("ef core") {
+                    vec!["entityframework", "dbcontext"]
+                } else if value.contains("gorm") {
+                    vec!["gorm"]
+                } else {
+                    vec!["repository", "query", "sql"]
+                }
+            } else if value.contains("sqlite") {
+                vec!["sqlite", "jdbc:sqlite"]
+            } else if value.contains("postgres") {
+                vec!["postgres", "postgresql"]
+            } else if value.contains("mysql") {
+                vec!["mysql"]
+            } else {
+                Vec::new()
+            };
+            if markers.is_empty() || markers.iter().any(|marker| content.contains(*marker)) {
+                None
+            } else {
+                Some(format!("{key}={value}"))
+            }
+        })
+        .collect::<Vec<_>>();
+    if !missing_signals.is_empty() {
+        issues.push(issue(
+            "TASK_RESULT_STACK_CONFORMANCE_INVALID",
+            "changedFiles",
+            &format!(
+                "Persistence obligation {} must show accepted provider evidence for {} in changed source or configuration files.",
+                persistence_obligation.obligation_id,
+                missing_signals.join(", ")
+            ),
+        ));
+    }
+}
+
+pub(crate) fn is_generated_output_path(path: &str) -> bool {
+    path.split('/').any(|part| {
+        matches!(
+            part,
+            "target"
+                | "dist"
+                | "build"
+                | "coverage"
+                | ".cache"
+                | "cache"
+                | "reports"
+                | "report"
+                | "logs"
+                | "log"
+                | "test-results"
+                | "playwright-report"
+                | ".playwright"
+                | ".pytest_cache"
+                | ".next"
+                | "out"
+                | "node_modules"
+        )
+    })
+}
+
 fn validate_requirement_detail_evidence(
     result: &TaskResult,
     task: &TaskDefinition,
@@ -2025,33 +2915,6 @@ fn required_requirement_detail_ids(task: &TaskDefinition) -> Vec<String> {
         }
     }
     required_detail_ids
-}
-
-fn verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
-    task.verification_intents
-        .iter()
-        .filter(|intent| {
-            intent
-                .requirement_detail_refs
-                .iter()
-                .any(|id| id == detail_id)
-        })
-        .map(|intent| intent.verification_id.clone())
-        .collect()
-}
-
-fn verification_ids_for_detail_with_fallback(
-    task: &TaskDefinition,
-    detail_id: &str,
-) -> Vec<String> {
-    let direct = verification_ids_for_detail(task, detail_id);
-    if !direct.is_empty() {
-        return direct;
-    }
-    if task.verification_intents.len() == 1 {
-        return vec![task.verification_intents[0].verification_id.clone()];
-    }
-    Vec::new()
 }
 
 fn validate_concept_evidence(
@@ -2638,9 +3501,29 @@ fn validate_runtime_delivery_evidence(
         ));
         return;
     };
-    let checked_fields = string_array_at(evidence, "checkedFields");
+    if let Some(cleanup) = evidence.runtime_probe_cleanup.as_deref() {
+        let invalid_cleanup = cleanup.trim().is_empty();
+        if invalid_cleanup {
+            issues.push(issue(
+                "TASK_RESULT_RUNTIME_EVIDENCE_INVALID",
+                "runtimeDeliveryEvidence.runtimeProbeCleanup",
+                "runtimeDeliveryEvidence.runtimeProbeCleanup must be null or a non-empty cleanup outcome.",
+            ));
+        }
+    }
+    if evidence
+        .commands_run
+        .iter()
+        .any(|command| command.trim().is_empty())
+    {
+        issues.push(issue(
+            "TASK_RESULT_RUNTIME_EVIDENCE_INVALID",
+            "runtimeDeliveryEvidence.commandsRun",
+            "runtimeDeliveryEvidence.commandsRun must be an array of non-empty command strings.",
+        ));
+    }
     for field in &requirement.affected_contract_fields {
-        if !checked_fields.contains(field) {
+        if !evidence.checked_fields.contains(field) {
             issues.push(issue(
                 "TASK_RESULT_REF_INVALID",
                 "runtimeDeliveryEvidence.checkedFields",
@@ -2648,7 +3531,12 @@ fn validate_runtime_delivery_evidence(
             ));
         }
     }
-    let result_check_ids = object_array_string_field(evidence, "codeLevelChecks", "checkId");
+    let result_check_ids = evidence
+        .code_level_checks
+        .iter()
+        .filter_map(|check| check.check_id.as_deref())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
     let allowed_check_ids = requirement
         .required_code_level_checks
         .iter()
@@ -2707,7 +3595,11 @@ fn validate_frontend_experience_self_check(
         }
         return;
     };
-    let covered = string_array_at(self_check, "closureRequirementIds");
+    let covered = self_check
+        .closure_requirement_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     for closure_id in closure_ids {
         if !covered.contains(&closure_id) {
             issues.push(issue(
@@ -2717,19 +3609,19 @@ fn validate_frontend_experience_self_check(
             ));
         }
     }
-    let status = self_check.get("status").and_then(Value::as_str);
-    let data_binding = self_check.get("dataBinding").unwrap_or(&Value::Null);
-    let binding_mode = data_binding.get("mode").and_then(Value::as_str);
-    let known_gaps = data_binding
-        .get("knownGaps")
-        .and_then(Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    if status == Some("satisfied") && (binding_mode != Some("wired") || known_gaps > 0) {
+    if self_check.status == "satisfied"
+        && (self_check.data_binding.mode != "wired"
+            || !self_check.data_binding.known_gaps.is_empty()
+            || self_check.evidence_refs.is_empty()
+            || self_check
+                .evidence_refs
+                .iter()
+                .any(|reference| reference.trim().is_empty()))
+    {
         issues.push(issue(
             "TASK_RESULT_WORKFLOW_CLOSURE_INVALID",
             "frontendExperienceSelfCheck.dataBinding",
-            "Satisfied frontendExperienceSelfCheck requires wired dataBinding and no known gaps.",
+            "Satisfied frontendExperienceSelfCheck requires wired dataBinding, no known gaps, and at least one concrete evidence ref.",
         ));
     }
 }
@@ -2757,26 +3649,6 @@ fn validate_frontend_quality_self_check(
         return;
     };
     let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
-    for obsolete_field in [
-        "referenceIdsChecked",
-        "scenarioKind",
-        "qualityLevel",
-        "referenceGroupsChecked",
-        "referenceFilesChecked",
-        "statesCovered",
-        "businessUiRulesChecked",
-        "forbiddenContentCheck",
-        "surfacesCovered",
-        "gateResults",
-    ] {
-        if self_check.get(obsolete_field).is_some() {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.{obsolete_field}"),
-                "frontendQualitySelfCheck must use the surface decision evidence contract only; legacy UI quality self-check fields are not allowed.",
-            ));
-        }
-    }
     let surface_contract = frontend_requirement
         .and_then(|requirement| {
             requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
@@ -2804,6 +3676,15 @@ fn validate_frontend_quality_self_check(
         TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
     );
     let self_check_status = self_check.get("status").and_then(Value::as_str);
+    if self_check_status == Some("satisfied")
+        && non_empty_string_array_at(&self_check, "evidenceRefs").is_empty()
+    {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.evidenceRefs",
+            "Satisfied frontendQualitySelfCheck must cite at least one concrete evidence ref so Review can trace the accepted quality result.",
+        ));
+    }
     let violations = self_check
         .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
         .and_then(Value::as_array)
@@ -3261,6 +4142,13 @@ fn string_array_at(value: &Value, field: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn non_empty_string_array_at(value: &Value, field: &str) -> Vec<String> {
+    string_array_at(value, field)
+        .into_iter()
+        .filter(|item| !item.trim().is_empty())
         .collect()
 }
 
@@ -3734,6 +4622,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
                         &result,
                         &hydrated_task,
                         browser_profile.as_ref(),
+                        &current_task_plan.engineering_quality_requirements,
                         &code_quality_requirements,
                         &required_top_level_fields,
                         &blocked_output,
@@ -3886,6 +4775,7 @@ fn materialize_task_result_repair(
         "taskProjection.objective",
         "taskProjection.acceptanceRefs",
         "taskProjection.requirementDetailRefs",
+        "taskProjection.implementationObligations",
         "taskProjection.verificationIntents",
         "outputContract.blockedReasonOptions",
         "repairContract.profile",
@@ -3937,11 +4827,11 @@ fn materialize_task_result_repair(
         "outputContract.schemaShape.properties.changedFiles",
         "outputContract.schemaShape.properties.noChangeReason",
         "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.implementationObligationResults",
         "outputContract.schemaShape.properties.selfRepairSummary",
         "outputContract.schemaShape.properties.failure",
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
     ];
@@ -4010,7 +4900,8 @@ fn materialize_task_result_repair(
             "resultTemplate": result_template,
             "resultRules": [
                 "The replacement must be a TaskResult JSON, not a repair summary.",
-                "Runtime, frontend, requirement detail, and concept evidence must follow the original output contract."
+                "implementationObligationResults must contain exactly one entry for each canonical obligation in the supplied order; Loom derives obligationId and verificationIds.",
+                "Runtime, frontend, and concept evidence must follow the original output contract; requirement-detail evidence is derived by Loom from verification results."
             ]
         },
         "requestReadPlan": {
@@ -4093,6 +4984,7 @@ fn task_projection(task: &TaskDefinition) -> Value {
         "title",
         "taskKind",
         "implementationActions",
+        "implementationObligations",
         "objective",
         "dependsOn",
         "scopeRefs",
@@ -4115,6 +5007,10 @@ fn task_projection(task: &TaskDefinition) -> Value {
     projection.insert(
         "verificationIntents".to_string(),
         compact_verification_intents(full.get("verificationIntents")),
+    );
+    projection.insert(
+        "implementationObligations".to_string(),
+        compact_implementation_obligations(full.get("implementationObligations")),
     );
     if let Some(requirement) = full.get("frontendExperienceRequirement") {
         projection.insert(
@@ -4157,6 +5053,32 @@ fn compact_verification_intents(value: Option<&Value>) -> Value {
                         "behavior",
                         "preferredEvidence",
                         "acceptableEvidence",
+                    ],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn compact_implementation_obligations(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|obligation| {
+                compact_object_fields(
+                    obligation,
+                    &[
+                        "obligationId",
+                        "kind",
+                        "sourceRefs",
+                        "artifactRefs",
+                        "requiredOutcome",
+                        "required",
+                        "acceptableEvidence",
+                        "verificationIds",
+                        "deferPolicy",
                     ],
                 )
             })
@@ -4563,8 +5485,15 @@ fn task_result_issue_conflicts(
     context: &RepairContextInput,
     issues: &[delivery_core::RepairIssue],
 ) -> Vec<Value> {
+    let mut seen = BTreeSet::new();
     issues
         .iter()
+        .filter(|issue| {
+            seen.insert((
+                issue.code.clone(),
+                issue.field_path.clone().unwrap_or_default(),
+            ))
+        })
         .map(|issue| {
             let base = json!({
                 "code": issue.code,
@@ -4592,9 +5521,82 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_CODE_QUALITY_INVALID" {
                 return task_result_code_quality_conflict(context, base);
             }
+            if matches!(
+                issue.code.as_str(),
+                "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INVALID"
+                    | "TASK_RESULT_IMPLEMENTATION_OBLIGATION_INCOMPLETE"
+            ) {
+                return task_result_implementation_obligation_conflict(context, base);
+            }
             base
         })
         .collect()
+}
+
+fn task_result_implementation_obligation_conflict(
+    context: &RepairContextInput,
+    mut base: Value,
+) -> Value {
+    let expected = context
+        .task
+        .implementation_obligations
+        .iter()
+        .map(|obligation| {
+            json!({
+                "obligationId": obligation.obligation_id,
+                "kind": obligation.kind,
+                "required": obligation.required,
+                "acceptableEvidence": obligation.acceptable_evidence,
+                "verificationIds": obligation.verification_ids
+            })
+        })
+        .collect::<Vec<_>>();
+    let current = context
+        .submitted_result
+        .get("implementationObligationResults")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "obligationId": item.get("obligationId").cloned().unwrap_or(Value::Null),
+                        "status": item.get("status").cloned().unwrap_or(Value::Null),
+                        "verificationIds": item.get("verificationIds").cloned().unwrap_or_else(|| json!([])),
+                        "evidenceRefCount": item.get("evidenceRefs").and_then(Value::as_array).map(|refs| refs.len()).unwrap_or(0)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    base["expectedImplementationObligations"] = json!(expected);
+    base["current"] = json!({
+        "implementationObligationResults": current,
+        "passedVerifications": context
+            .submitted_result
+            .get("verificationResults")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("status").and_then(Value::as_str) == Some("passed"))
+                    .map(|item| {
+                        json!({
+                            "verificationId": item.get("verificationId"),
+                            "evidenceType": item.get("evidenceType")
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    base["validRepairChoices"] = json!([
+        "Keep implementationObligationResults in the canonical obligation order and do not add, remove, rename, or reorder entries to change their meaning; Loom derives obligationId and verificationIds.",
+        "Fill evidenceRefs with concrete project-relative implementation or verification evidence; do not author linkage fields.",
+        "Mark an obligation satisfied only when the cited verification passed and its evidence capability proves the requiredOutcome. A build or reference read alone cannot satisfy a behavioral obligation.",
+        "Keep status completed only when every required obligation is satisfied; otherwise submit the actual incomplete status and gap.",
+    ]);
+    base
 }
 
 fn task_result_browser_verification_conflict(
@@ -5066,13 +6068,14 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .any(|issue| issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID")
     {
         rules.push("Keep runtimeDeliveryEvidence.codeLevelChecks in the request order and repair status/evidence only; Loom derives check ids and contract fields.");
-        rules.push("For passed runtime checks, omit reason; use a non-empty reason only for failed, blocked, or not_applicable checks.");
+        rules.push("Use the code-level check evidence field for a concise outcome; do not add an uncontracted reason field.");
     }
     if issues
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
     {
         rules.push("When uiSurfaceDecisionContractRef is present, frontendQualitySelfCheck must prove the task-scoped surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from uiProductionBrief.");
+        rules.push("A satisfied frontendQualitySelfCheck must include at least one non-empty evidenceRefs entry; this is the trace from the persisted TaskResult to concrete source, test, command, or browser evidence used by Review.");
         rules.push("frontendQualitySelfCheck must not include removed legacy UI quality self-check fields such as scenarioKind, referenceFilesChecked, statesCovered, surfacesCovered, or gateResults.");
         rules.push("frontendQualitySelfCheck.status=satisfied is valid only when contentBoundaryEvidence has no forbidden content violations and knownGaps is empty.");
     }
@@ -5148,17 +6151,190 @@ fn merge_submitted_task_result_fields(
     };
     let conflicted_fields = issue_top_level_fields(issues);
     for (key, submitted_value) in submitted_object {
+        if key == "requirementDetailEvidence" {
+            continue;
+        }
         if conflicted_fields.contains(key.as_str()) {
             continue;
         }
         if !template_object.contains_key(key) {
             continue;
         }
-        if keeps_template_array_shape(template_object.get(key), submitted_value) {
+        let Some(agent_value) = project_agent_owned_task_result_field(key, submitted_value) else {
+            continue;
+        };
+        if keeps_template_array_shape(template_object.get(key), &agent_value) {
             continue;
         }
-        template_object.insert(key.clone(), submitted_value.clone());
+        template_object.insert(key.clone(), agent_value);
     }
+}
+
+fn project_agent_owned_task_result_field(key: &str, value: &Value) -> Option<Value> {
+    if key == "frontendExperienceSelfCheck" {
+        let mut projected =
+            compact_object_fields(value, &["status", "dataBinding", "evidenceRefs"]);
+        if let Some(binding) = projected.get_mut("dataBinding") {
+            *binding = compact_object_fields(binding, &["mode", "knownGaps"]);
+        }
+        return Some(projected);
+    }
+    if key == "frontendQualitySelfCheck" {
+        let mut projected = compact_object_fields(
+            value,
+            &[
+                "status",
+                "evidenceRefs",
+                "surfaceRegionEvidence",
+                "surfaceActionEvidence",
+                "surfaceStateEvidence",
+                "surfaceQualityRuleEvidence",
+                "contentBoundaryEvidence",
+                "referencePlanFilesChecked",
+                "designTokenEvidence",
+                "knownGaps",
+            ],
+        );
+        for field in [
+            "surfaceRegionEvidence",
+            "surfaceActionEvidence",
+            "surfaceStateEvidence",
+            "surfaceQualityRuleEvidence",
+        ] {
+            if let Some(items) = projected.get_mut(field) {
+                *items = compact_array_items(items, &["status", "files", "evidence"]);
+            }
+        }
+        if let Some(content) = projected.get_mut("contentBoundaryEvidence") {
+            *content = compact_object_fields(
+                content,
+                &[
+                    "checked",
+                    "allowedContentExamples",
+                    "forbiddenContentViolations",
+                    "evidence",
+                ],
+            );
+        }
+        if let Some(tokens) = projected.get_mut("designTokenEvidence") {
+            *tokens = compact_object_fields(
+                tokens,
+                &[
+                    "strategyUsed",
+                    "templateIdUsed",
+                    "tokenAssetFiles",
+                    "tokenConsumerFiles",
+                    "existingTokenSystemReused",
+                    "parallelTokenSystemCreated",
+                    "mergeSummary",
+                ],
+            );
+        }
+        return Some(projected);
+    }
+    if key == "runtimeDeliveryEvidence" {
+        let mut projected = compact_object_fields(
+            value,
+            &[
+                "codeLevelChecks",
+                "commandsRun",
+                "unverifiedItems",
+                "runtimeProbeCleanup",
+            ],
+        );
+        if let Some(checks) = projected.get_mut("codeLevelChecks") {
+            *checks = compact_array_items(checks, &["status", "evidence"]);
+        }
+        return Some(projected);
+    }
+    if !matches!(
+        key,
+        "verificationResults"
+            | "implementationObligationResults"
+            | "conceptEvidence"
+            | "architectureQualityEvidence"
+            | "apiContractEvidence"
+            | "codeQualityEvidence"
+    ) {
+        return Some(value.clone());
+    }
+    let items = value.as_array()?;
+    let projected = match key {
+        "verificationResults" => items
+            .iter()
+            .map(|item| {
+                let mut item = compact_object_fields(
+                    item,
+                    &[
+                        "status",
+                        "evidenceType",
+                        "summary",
+                        "provenance",
+                        "browserChecks",
+                    ],
+                );
+                if let Some(provenance) = item.get_mut("provenance") {
+                    *provenance = compact_object_fields(
+                        provenance,
+                        &[
+                            "evidenceRefs",
+                            "changedFiles",
+                            "testCaseRefs",
+                            "command",
+                            "exitCode",
+                        ],
+                    );
+                }
+                if let Some(checks) = item.get_mut("browserChecks") {
+                    *checks = compact_array_items(
+                        checks,
+                        &[
+                            "status",
+                            "command",
+                            "attempts",
+                            "artifactRefs",
+                            "observedOutcome",
+                            "blockedReason",
+                        ],
+                    );
+                }
+                item
+            })
+            .collect::<Vec<_>>(),
+        "implementationObligationResults" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "evidenceRefs", "summary"]))
+            .collect::<Vec<_>>(),
+        "conceptEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["evidenceType", "refs", "summary"]))
+            .collect::<Vec<_>>(),
+        "architectureQualityEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "summary"]))
+            .collect::<Vec<_>>(),
+        "apiContractEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "knownGaps", "summary"]))
+            .collect::<Vec<_>>(),
+        "codeQualityEvidence" => items
+            .iter()
+            .map(|item| {
+                compact_object_fields(
+                    item,
+                    &[
+                        "status",
+                        "referenceGroupsChecked",
+                        "referenceFilesChecked",
+                        "knownGaps",
+                        "summary",
+                    ],
+                )
+            })
+            .collect::<Vec<_>>(),
+        _ => unreachable!("known task result field was not projected"),
+    };
+    Some(Value::Array(projected))
 }
 
 fn issue_top_level_fields(issues: &[delivery_core::RepairIssue]) -> BTreeSet<&str> {
@@ -5674,6 +6850,7 @@ mod tests {
             title: "Implement the workbench".to_string(),
             task_kind: TaskKind::FrontendExperience,
             implementation_actions: vec![],
+            implementation_obligations: vec![],
             objective: "Implement the task-owned workbench flow.".to_string(),
             depends_on: vec![],
             scope_refs: vec!["scope-ui".to_string()],
@@ -5719,9 +6896,26 @@ mod tests {
 
     #[test]
     fn task_result_repair_projection_keeps_task_contract_without_full_task_copy() {
-        let projection = task_projection(&compact_projection_task());
+        let mut task = compact_projection_task();
+        task.implementation_obligations = vec![serde_json::from_value(json!({
+            "obligationId": "obligation-task-ui-frontend-experience",
+            "kind": "frontend_experience",
+            "sourceRefs": ["detail-ui"],
+            "artifactRefs": {},
+            "requiredOutcome": "Implement the task-owned frontend surface.",
+            "required": true,
+            "acceptableEvidence": ["browser_automation"],
+            "verificationIds": ["verify-ui"],
+            "deferPolicy": "must_be_satisfied_before_completed"
+        }))
+        .expect("implementation obligation")];
+        let projection = task_projection(&task);
 
         assert_eq!(projection["projectionKind"], "task_scoped_repair_contract");
+        assert_eq!(
+            projection["implementationObligations"][0]["obligationId"],
+            "obligation-task-ui-frontend-experience"
+        );
         assert!(projection.get("conceptResponsibilities").is_none());
         assert!(projection
             .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/regionsInScope/0/regionId")
@@ -5732,6 +6926,64 @@ mod tests {
         assert!(projection
             .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/unrelatedLargeSource")
             .is_none());
+    }
+
+    #[test]
+    fn implementation_obligation_normalization_matches_ids_instead_of_positions() {
+        let mut task = compact_projection_task();
+        task.implementation_obligations = serde_json::from_value(json!([
+            {
+                "obligationId": "obligation-a",
+                "kind": "business_rule",
+                "artifactRefs": {},
+                "requiredOutcome": "Implement rule A.",
+                "required": true,
+                "acceptableEvidence": ["automated_test"],
+                "verificationIds": ["verify-a"],
+                "deferPolicy": "must_be_satisfied_before_completed"
+            },
+            {
+                "obligationId": "obligation-b",
+                "kind": "state_transition",
+                "artifactRefs": {},
+                "requiredOutcome": "Implement state B.",
+                "required": true,
+                "acceptableEvidence": ["runtime_api_check"],
+                "verificationIds": ["verify-b"],
+                "deferPolicy": "must_be_satisfied_before_completed"
+            }
+        ]))
+        .expect("implementation obligations");
+        let mut object = json!({
+            "implementationObligationResults": [
+                {"obligationId": "obligation-b", "status": "satisfied", "summary": "B"},
+                {"obligationId": "obsolete", "status": "partial", "summary": "obsolete"},
+                {"obligationId": "obligation-a", "status": "satisfied", "summary": "A"}
+            ]
+        });
+
+        normalize_implementation_obligation_results(
+            object.as_object_mut().expect("result object"),
+            &task,
+        );
+
+        assert_eq!(
+            object["implementationObligationResults"][0]["obligationId"],
+            "obligation-a"
+        );
+        assert_eq!(object["implementationObligationResults"][0]["summary"], "A");
+        assert_eq!(
+            object["implementationObligationResults"][1]["obligationId"],
+            "obligation-b"
+        );
+        assert_eq!(object["implementationObligationResults"][1]["summary"], "B");
+        assert_eq!(
+            object["implementationObligationResults"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -5837,6 +7089,44 @@ mod tests {
                 == Some("frontendQualitySelfCheck.surfaceQualityRuleEvidence")),
             "{issues:#?}"
         );
+    }
+
+    #[test]
+    fn frontend_surface_evidence_projection_discards_legacy_unconsumed_fields() {
+        let mut self_check = json!({
+            "surfaceRegionEvidence": [{
+                "id": "region_primary",
+                "status": "satisfied",
+                "files": ["src/App.tsx"],
+                "evidence": "The primary region is implemented.",
+                "states": ["loading", "success"],
+                "actions": ["create"],
+                "summary": "Legacy summary with no review consumer."
+            }]
+        })
+        .as_object_mut()
+        .cloned()
+        .expect("self check object");
+
+        normalize_frontend_surface_evidence_array(
+            &mut self_check,
+            "surfaceRegionEvidence",
+            &surface_contract(),
+            "regionsInScope",
+            "regionId",
+        );
+
+        let evidence = &self_check["surfaceRegionEvidence"][0];
+        assert_eq!(evidence["id"], json!("region-main"));
+        assert_eq!(evidence["status"], json!("satisfied"));
+        assert_eq!(evidence["files"], json!(["src/App.tsx"]));
+        assert_eq!(
+            evidence["evidence"],
+            json!("The primary region is implemented.")
+        );
+        assert!(evidence.get("states").is_none());
+        assert!(evidence.get("actions").is_none());
+        assert!(evidence.get("summary").is_none());
     }
 
     #[test]

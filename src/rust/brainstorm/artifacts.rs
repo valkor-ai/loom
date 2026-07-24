@@ -110,6 +110,7 @@ pub fn write_accepted_artifacts(
         },
         roadmap: candidate.roadmap.clone(),
         phase_plan: candidate.phase_plan.clone(),
+        security_requirement: candidate.security_requirement.clone(),
         concept_grounding: candidate.concept_grounding.clone(),
         concept_confirmation: candidate.concept_confirmation.clone(),
         clarification_progress: candidate.clarification_progress.clone(),

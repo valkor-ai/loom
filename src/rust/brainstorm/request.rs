@@ -270,6 +270,8 @@ pub fn build_brainstorm_candidate_write_request_root(
                         "enumRefs.frontendActionEntryPoint",
                         "enumRefs.frontendResultObservationMode",
                         "enumRefs.frontendInteractionState",
+                        "enumRefs.securityRequirementApplicability",
+                        "enumRefs.clientTrustModel",
                         "rules.candidateWrite"
                     ])
                 }
@@ -285,7 +287,8 @@ fn schema_projection() -> Value {
             "scope",
             "roadmap",
             "phasePlan",
-            "acceptance"
+            "acceptance",
+            "securityRequirement"
         ],
         "phaseScopeFields": [
             "scope.included",
@@ -299,6 +302,12 @@ fn schema_projection() -> Value {
             "phasePlan.current.acceptanceRefs",
             "phasePlan.current.status",
             "phasePlan.nextPhasePreview"
+        ],
+        "securityRequirementFields": [
+            "securityRequirement.applies",
+            "securityRequirement.clientTrustModels",
+            "securityRequirement.sourceRefs",
+            "securityRequirement.rationale"
         ],
         "conceptGroundingFields": [
             "acceptance",
@@ -464,6 +473,12 @@ fn candidate_result_template(phase_id: &str) -> Value {
             "confirmedConceptRefs": [],
             "confirmationSummary": ""
         },
+        "securityRequirement": {
+            "applies": "not_applicable | required | optional | deferred_with_risk",
+            "clientTrustModels": ["same_origin_browser | external_api | service_to_service"],
+            "sourceRefs": ["source id"],
+            "rationale": "why security is or is not in scope"
+        },
         "frontendExperience": {
             "required": true,
             "kind": "",
@@ -546,7 +561,9 @@ fn enum_refs() -> Value {
         "frontendTargetSelectionMode": ["query_and_select", "direct_id_lookup", "preselected_context", "not_applicable"],
         "frontendActionEntryPoint": ["result_row_action", "detail_button", "form_submit", "bulk_action", "inline_action", "navigation_entry"],
         "frontendResultObservationMode": ["list_refresh", "detail_refresh", "inline_status_update", "response_message", "not_applicable"],
-        "frontendInteractionState": ["loading", "success", "error", "empty", "business_blocking"]
+        "frontendInteractionState": ["loading", "success", "error", "empty", "business_blocking"],
+        "securityRequirementApplicability": ["not_applicable", "required", "optional", "deferred_with_risk"],
+        "clientTrustModel": ["same_origin_browser", "external_api", "service_to_service"]
     })
 }
 

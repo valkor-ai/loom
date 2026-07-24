@@ -28,7 +28,7 @@ pub struct ReviewEvidenceRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewFinding {
     #[schemars(skip)]
     pub finding_id: String,
@@ -67,7 +67,7 @@ pub struct ReviewFinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewAcceptanceAssessment {
     pub acceptance_ref: String,
     pub status: String,
@@ -79,7 +79,7 @@ pub struct ReviewAcceptanceAssessment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCoverageSummary {
     pub total_must: u32,
     pub satisfied: u32,
@@ -89,7 +89,7 @@ pub struct ReviewCoverageSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCoverageAssessment {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub must_acceptance: Vec<ReviewAcceptanceAssessment>,
@@ -97,7 +97,7 @@ pub struct ReviewCoverageAssessment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewLimitation {
     pub code: String,
     pub summary: String,
@@ -105,7 +105,7 @@ pub struct ReviewLimitation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPendingAction {
     pub r#type: String,
     #[schemars(skip)]
@@ -115,7 +115,7 @@ pub struct ReviewPendingAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewNextAction {
     pub r#type: String,
     pub reason: String,
@@ -137,7 +137,7 @@ pub struct ReviewNextAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResult {
     #[schemars(skip)]
     pub schema_version: String,

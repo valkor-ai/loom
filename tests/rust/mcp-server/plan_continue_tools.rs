@@ -692,16 +692,16 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             .expect("brainstorm accept"),
     );
 
-    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_eq!(accepted["state"], "user_gate", "{accepted:#}");
     assert_eq!(
-        accepted["next"]["artifactKind"],
-        "technical_baseline_candidate"
+        accepted["gate"]["gateId"],
+        "new_project_baseline_confirmation"
     );
-    assert_ne!(
-        accepted["gate"]["currentBlock"], "phase_scope",
-        "accepted full confirmation must not reopen the phase scope gate"
+    assert_eq!(
+        accepted["gate"]["responseContract"]["maxMessages"],
+        json!(1)
     );
-    let baseline_ref = accepted["next"]["requestRef"]
+    let baseline_ref = accepted["requestRef"]
         .as_str()
         .expect("technical baseline request ref");
     let baseline = state::inspect_request(InspectRequestInput {
@@ -1159,6 +1159,12 @@ fn read_request_storage_manifest(fixture: &Fixture, request_id: &str) -> Value {
 }
 
 fn populate_confirmed_brainstorm_candidate(candidate: &mut Value) {
+    candidate["securityRequirement"] = json!({
+        "applies": "not_applicable",
+        "clientTrustModels": [],
+        "sourceRefs": [],
+        "rationale": "当前阶段没有受保护接口。"
+    });
     candidate["requestSummary"]["title"] = json!("证券账户模块闭环");
     candidate["requestSummary"]["oneLine"] = json!("第一阶段完成证券账户生命周期办理路径。");
     candidate["requestSummary"]["businessGoal"] = json!("先完成交易身份和持仓归属账户的闭环。");

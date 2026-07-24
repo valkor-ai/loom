@@ -296,7 +296,16 @@ pub fn finalize_output_contract(
         .and_then(Value::as_str)
         .map(str::to_string)
     {
-        let normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind);
+        let mut normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind)
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect::<BTreeSet<_>>();
+        normalized_fields.extend(
+            field_policies
+                .iter()
+                .filter(|(_, policy)| policy.owner == AgentFieldOwner::Mcp)
+                .map(|(path, _)| path.clone()),
+        );
         if !normalized_fields.is_empty() {
             contract.insert(
                 "mcpNormalizedFields".to_string(),
@@ -524,6 +533,7 @@ pub fn validate_agent_write_contract(
         &contract,
         "candidate",
         true,
+        target_id,
         &mcp_normalized_fields,
         &domain_validation_paths,
         &mut issues,
@@ -557,15 +567,26 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "section",
             "createdAt",
             "content.source",
+            "content.runtimeDelivery.runtimeDependencies",
+            "content.architectureQuality.decisions[].decisionId",
+            "content.architectureQuality.decisions[].category",
+            "content.architectureQuality.decisions[].sourceRefs",
+            "content.architectureQuality.decisions[].ownerArtifactRefs",
+            "content.architectureQuality.nfrs[].nfrId",
+            "content.architectureQuality.nfrs[].category",
+            "content.architectureQuality.nfrs[].source",
+            "content.architectureQuality.nfrs[].sourceRefs",
+            "content.architectureQuality.nfrs[].ownerArtifactRefs",
+            "content.architectureQuality.nfrs[].architectureRefs",
+            "content.architectureQuality.risks[].riskId",
+            "content.architectureQuality.risks[].category",
+            "content.architectureQuality.risks[].ownerArtifactRefs",
         ],
-        "task_plan_candidate" => &[
-            "schemaVersion",
-            "requestId",
-            "deliveryId",
-            "phaseId",
-            "taskPlanId",
-            "createdAt",
-        ],
+        // TaskPlan proposals intentionally contain no MCP-owned projection. The
+        // accepted plan is materialized from these proposals and structured AAC
+        // ownership facts; allowing these paths here would reintroduce the
+        // producer/validator split that caused repeated repair loops.
+        "task_plan_candidate" => &[],
         "task_result" | "task_result_repair" => &[
             "schemaVersion",
             "taskResultId",
@@ -573,6 +594,27 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "taskId",
             "createdAt",
             "updatedAt",
+            "verificationResults[].verificationId",
+            "verificationResults[].evidenceType",
+            "implementationObligationResults[].obligationId",
+            "implementationObligationResults[].verificationIds",
+            "frontendExperienceSelfCheck.closureRequirementIds",
+            "frontendQualitySelfCheck.surfaceDecisionContractRef",
+            "frontendQualitySelfCheck.surfaceRegionEvidence[].id",
+            "frontendQualitySelfCheck.surfaceActionEvidence[].id",
+            "frontendQualitySelfCheck.surfaceStateEvidence[].id",
+            "frontendQualitySelfCheck.surfaceQualityRuleEvidence[].id",
+            "runtimeDeliveryEvidence.requirementRef",
+            "runtimeDeliveryEvidence.checkedFields",
+            "runtimeDeliveryEvidence.codeLevelChecks[].checkId",
+            "runtimeDeliveryEvidence.codeLevelChecks[].contractField",
+            "architectureQualityEvidence[].requirementId",
+            "architectureQualityEvidence[].verificationIds",
+            "apiContractEvidence[].requirementId",
+            "apiContractEvidence[].interfaceRefs",
+            "apiContractEvidence[].verificationIds",
+            "codeQualityEvidence[].requirementId",
+            "codeQualityEvidence[].verificationIds",
         ],
         "review_result" => &[
             "schemaVersion",
@@ -580,6 +622,12 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "source",
             "createdAt",
             "updatedAt",
+            "findings[].findingId",
+            "pendingActions[].findingRefs",
+            "nextAction.targetTaskIds",
+            "nextAction.findingRefs",
+            "nextAction.targetPhaseId",
+            "nextAction.targetNode",
         ],
         "manual_review_resolution" => &[
             "schemaVersion",
@@ -588,6 +636,9 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "deliveryId",
             "phaseId",
             "createdAt",
+            "nextAction.targetTaskIds",
+            "nextAction.findingRefs",
+            "nextAction.targetPhaseId",
         ],
         "technical_baseline_candidate" => &["projectKind", "source"],
         "deploy_execution_repair_result" => &["schemaVersion", "repairId", "deploymentFailureRef"],
@@ -665,6 +716,18 @@ fn merge_contract_nodes(base: &mut Value, supplement: &Value) {
         return;
     };
 
+    for key in [
+        "owner",
+        "applicability",
+        "emptyPolicy",
+        "preserveOnRepair",
+        "constraints",
+    ] {
+        if let Some(value) = supplement_object.get(key) {
+            base_object.insert(key.to_string(), value.clone());
+        }
+    }
+
     if base_object
         .get("type")
         .and_then(Value::as_str)
@@ -673,6 +736,13 @@ fn merge_contract_nodes(base: &mut Value, supplement: &Value) {
         if let Some(kind) = supplement_object.get("type") {
             base_object.insert("type".to_string(), kind.clone());
         }
+    }
+    if supplement_object
+        .get("nullable")
+        .and_then(Value::as_bool)
+        .is_some_and(|nullable| nullable)
+    {
+        base_object.insert("nullable".to_string(), Value::Bool(true));
     }
 
     if let Some(supplement_properties) = supplement_object
@@ -710,11 +780,35 @@ fn validate_contract_node(
     contract: &Value,
     path: &str,
     root: bool,
+    target_id: &str,
     mcp_normalized_fields: &BTreeSet<String>,
     domain_validation_paths: &BTreeSet<String>,
     issues: &mut Vec<RepairIssue>,
 ) {
     if is_mcp_normalized_field(path, mcp_normalized_fields) {
+        return;
+    }
+    if contract
+        .get("applicability")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "not_applicable")
+        && !value.is_null()
+    {
+        issues.push(RepairIssue {
+            code: "WRITE_CONTRACT_FIELD_NOT_APPLICABLE".to_string(),
+            message: format!(
+                "{path} is not applicable to the current request and must be omitted."
+            ),
+            target_id: Some(target_id.to_string()),
+            field_path: Some(path.to_string()),
+        });
+        return;
+    }
+    let nullable = contract
+        .get("nullable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if value.is_null() && nullable {
         return;
     }
     let expected_type = contract.get("type").and_then(Value::as_str);
@@ -733,7 +827,7 @@ fn validate_contract_node(
             issues.push(RepairIssue {
                 code: "WRITE_CONTRACT_TYPE_INVALID".to_string(),
                 message: format!("{path} must be a {expected_type}."),
-                target_id: Some("candidate".to_string()),
+                target_id: Some(target_id.to_string()),
                 field_path: Some(path.to_string()),
             });
             return;
@@ -746,7 +840,7 @@ fn validate_contract_node(
                 message: format!(
                     "{path} must use one of the values declared by the current write contract."
                 ),
-                target_id: Some("candidate".to_string()),
+                target_id: Some(target_id.to_string()),
                 field_path: Some(path.to_string()),
             });
         }
@@ -766,7 +860,7 @@ fn validate_contract_node(
                         message: format!(
                             "{path}.{field} is required by the current write contract."
                         ),
-                        target_id: Some("candidate".to_string()),
+                        target_id: Some(target_id.to_string()),
                         field_path: Some(format!("{path}.{field}")),
                     });
                 }
@@ -783,7 +877,7 @@ fn validate_contract_node(
                 issues.push(RepairIssue {
                     code: "WRITE_CONTRACT_FIELD_UNKNOWN".to_string(),
                     message: format!("{child_path} is not declared by the current write contract."),
-                    target_id: Some("candidate".to_string()),
+                    target_id: Some(target_id.to_string()),
                     field_path: Some(child_path),
                 });
                 continue;
@@ -793,6 +887,7 @@ fn validate_contract_node(
                 child_contract,
                 &child_path,
                 false,
+                target_id,
                 mcp_normalized_fields,
                 domain_validation_paths,
                 issues,
@@ -806,6 +901,7 @@ fn validate_contract_node(
                 item_contract,
                 &format!("{path}.{index}"),
                 false,
+                target_id,
                 mcp_normalized_fields,
                 domain_validation_paths,
                 issues,
@@ -847,6 +943,10 @@ fn compact_schema_node(
     depth: usize,
     sparse_paths: Option<&BTreeSet<String>>,
 ) -> Value {
+    if let Some(shape) = schema.get("shape") {
+        return compact_manual_node(shape, path, required, policies, depth, sparse_paths);
+    }
+    let nullable = schema_allows_null(schema, root_schema, 0);
     let schema = if depth < 32 {
         resolved_schema(schema, root_schema, 0)
     } else {
@@ -855,6 +955,9 @@ fn compact_schema_node(
     let mut node = Map::new();
     let schema_kind = schema_type(schema);
     node.insert("type".to_string(), json!(schema_kind));
+    if nullable {
+        node.insert("nullable".to_string(), json!(true));
+    }
     if required {
         node.insert("required".to_string(), json!(true));
     }
@@ -952,6 +1055,35 @@ fn resolved_schema<'a>(schema: &'a Value, root_schema: &'a Value, depth: usize) 
     schema
 }
 
+fn schema_allows_null(schema: &Value, root_schema: &Value, depth: usize) -> bool {
+    if depth >= 32 {
+        return false;
+    }
+    if schema.get("type").and_then(Value::as_str) == Some("null") {
+        return true;
+    }
+    if schema
+        .get("type")
+        .and_then(Value::as_array)
+        .is_some_and(|types| types.iter().any(|item| item.as_str() == Some("null")))
+    {
+        return true;
+    }
+    if let Some(reference) = schema
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/"))
+        .and_then(|reference| root_schema.pointer(&format!("/{reference}")))
+    {
+        return schema_allows_null(reference, root_schema, depth + 1);
+    }
+    ["anyOf", "oneOf"]
+        .iter()
+        .filter_map(|key| schema.get(*key).and_then(Value::as_array))
+        .flatten()
+        .any(|variant| schema_allows_null(variant, root_schema, depth + 1))
+}
+
 fn compact_manual_node(
     shape: &Value,
     path: &str,
@@ -973,6 +1105,16 @@ fn compact_manual_node(
         Value::Bool(_) => ("boolean", None),
         Value::Number(_) => ("number", None),
         Value::String(description) => {
+            if let Some(base_type) = description.trim().strip_suffix(" or null").map(str::trim) {
+                let kind = matches!(
+                    base_type,
+                    "object" | "string" | "boolean" | "number" | "array"
+                )
+                .then_some(base_type)
+                .unwrap_or("unknown");
+                let value = json!({"type": kind, "nullable": true, "required": required});
+                return add_policy(value, path, required, policies);
+            }
             if matches!(
                 description.trim(),
                 "object" | "string" | "boolean" | "number" | "array"
@@ -1221,5 +1363,81 @@ fn canonical_json(value: &Value) -> String {
                     .join(",")
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nullable_manual_shapes_accept_null_without_relaxing_object_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "failure": {
+                    "shape": "object or null"
+                }
+            }
+        });
+        let contract = compact_agent_field_contract(&schema, &BTreeMap::new());
+        let failure_contract = contract
+            .pointer("/properties/failure")
+            .expect("failure contract");
+        assert_eq!(failure_contract["type"], json!("object"));
+        assert_eq!(failure_contract["nullable"], json!(true));
+
+        let mut issues = Vec::new();
+        validate_contract_node(
+            &Value::Null,
+            failure_contract,
+            "candidate.failure",
+            false,
+            "candidate",
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &mut issues,
+        );
+        assert!(
+            issues.is_empty(),
+            "nullable null should be valid: {issues:#?}"
+        );
+
+        let mut issues = Vec::new();
+        validate_contract_node(
+            &json!({"code": "VERIFICATION_FAILED"}),
+            failure_contract,
+            "candidate.failure",
+            false,
+            "candidate",
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &mut issues,
+        );
+        assert!(
+            issues.is_empty(),
+            "nullable object should remain valid: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn nullable_schema_variants_are_preserved_in_agent_projection() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "noChangeReason": {
+                    "anyOf": [
+                        {"type": "object", "properties": {"summary": {"type": "string"}}},
+                        {"type": "null"}
+                    ]
+                }
+            }
+        });
+        let contract = compact_agent_field_contract(&schema, &BTreeMap::new());
+        let reason_contract = contract
+            .pointer("/properties/noChangeReason")
+            .expect("no-change contract");
+        assert_eq!(reason_contract["type"], json!("object"));
+        assert_eq!(reason_contract["nullable"], json!(true));
     }
 }
