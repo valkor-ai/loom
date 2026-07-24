@@ -3069,13 +3069,13 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     );
     assert!(
         taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
-            ["conceptResponsibilities"][0]
-            .is_object()
+            ["proposalId"]
+            .is_string()
     );
     assert!(
         taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
-            ["conceptVerificationIntents"][0]
-            .is_object()
+            ["taskKindHint"]
+            .is_string()
     );
     let frontend_requirement_template =
         &taskplan_contract_fields["outputContract.frontendExperienceRequirementTemplate"].value;
@@ -3158,16 +3158,22 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         &taskplan_contract_fields["generationRules.verificationEvidenceRules"].value;
     let verification_rules_text =
         serde_json::to_string(verification_rules).expect("serialize verification rules");
-    assert!(verification_rules_text.contains("Every covered current-phase detailId"));
-    assert!(verification_rules_text.contains("same parent task.requirementDetailRefs"));
+    assert!(verification_rules_text.contains("Do not write verificationIntents in proposals"));
+    assert!(verification_rules_text.contains("MCP derives one or more stable verification intents"));
     let detail_ownership_rules =
         &taskplan_contract_fields["generationRules.detailOwnershipRules"].value;
-    assert!(detail_ownership_rules["assignmentRule"]
-        .as_str()
-        .is_some_and(|rule| rule.contains("artifactRefHints")));
+    assert!(
+        detail_ownership_rules["assignmentRule"]
+            .as_str()
+            .is_some_and(|rule| rule.contains("every covered detail")
+                && rule.contains("canonical implementation owner")),
+        "{detail_ownership_rules:#}"
+    );
     assert!(detail_ownership_rules["acceptNormalization"]
         .as_str()
-        .is_some_and(|rule| rule.contains("exactly one owner task")));
+        .is_some_and(
+            |rule| rule.contains("canonical task ids") && rule.contains("verification intents")
+        ));
     let engineering_template =
         &taskplan_contract_fields["outputContract.engineeringQualityRequirementTemplate"].value;
     assert_eq!(
@@ -4146,10 +4152,13 @@ fn external_browser_evidence_updates_closure_and_returns_to_review() {
         .as_array()
         .expect("frontend quality matrix");
     assert!(!frontend.is_empty());
-    assert!(frontend.iter().all(|item| {
-        item["browserVerification"]["environmentBlocked"] == json!(false)
-            && item["browserVerification"]["satisfied"] == json!(true)
-    }));
+    assert!(
+        frontend.iter().all(|item| {
+            item["browserVerification"]["environmentBlocked"] == json!(false)
+                && item["browserVerification"]["satisfied"] == json!(true)
+        }),
+        "{frontend:#?}"
+    );
     let signals = matrices["outputContract.reviewSignals.items"]
         .value
         .as_array()
@@ -4311,6 +4320,9 @@ fn task_result_repair_uses_canonical_task_for_nullable_request_projection() {
         &fixture,
         &execution_request_ref,
     );
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["executionContinuity"]["taskResultSubmittedAfterVerification"] = json!(false);
+    });
     let repair_action = call_submit(
         "loom.recordTaskResultFile",
         &execution_request_ref,
@@ -4468,26 +4480,9 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
     write_taskplan_grouped_candidates(&fixture, taskplan_request_ref);
     let group_file = first_taskplan_group_file(&fixture, taskplan_request_ref);
     let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
+    let group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["taskKind"] = json!("ui_flow_increment");
-    group_value["tasks"][0]["implementationActions"] =
-        json!(["wire_reference_in_api_or_ui", "add_or_update_tests"]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] =
-        json!(["api.account.open"]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["userFlows"] =
-        json!(["flow.account-lifecycle"]);
-    group_value["tasks"][0]["verificationIntents"][0]["preferredEvidence"] =
-        json!(["runtime_api_check"]);
-    group_value["tasks"][0]["verificationIntents"][0]["acceptableEvidence"] = json!([
-        "automated_test",
-        "runtime_api_check",
-        "manual_command_output"
-    ]);
-    group_value["tasks"][0]["conceptRefs"] = json!(["concept-account-ui"]);
-    group_value["tasks"][0]["frontendExperienceRequirement"] =
-        frontend_requirement_template_from_taskplan_request(&fixture, taskplan_request_ref);
     write_json_atomic(&group_path, &group_value).expect("write enriched group file");
 
     let accepted = call_submit(
@@ -4526,20 +4521,43 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         .as_str()
         .expect("taskId")
         .to_string();
-    let expected_detail_id = fields["task.requirementDetailRefs"].value[0]
-        .as_str()
-        .expect("detail id")
-        .to_string();
-    let expected_verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
-        .as_str()
-        .expect("verification id")
-        .to_string();
+    let expected_detail_id = fields["task.requirementDetailRefs"]
+        .value
+        .as_array()
+        .and_then(|refs| refs.first())
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let expected_verification_id = fields["task.verificationIntents"]
+        .value
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["verificationId"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("verification intents missing: {fields:#?}"));
+    let expected_detail_verification_ids = expected_detail_id
+        .as_ref()
+        .map(|detail_id| {
+            fields["task.verificationIntents"]
+                .value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|intent| {
+                    intent["requirementDetailRefs"]
+                        .as_array()
+                        .is_some_and(|refs| refs.iter().any(|reference| reference == detail_id))
+                })
+                .filter_map(|intent| intent["verificationId"].as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let expected_closure_id = fields
         ["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"]
-        .value[0]["closureId"]
-        .as_str()
-        .expect("closure id")
-        .to_string();
+        .value
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["closureId"].as_str())
+        .map(str::to_string);
     write_task_result_candidate(&fixture, &execution_request_ref);
     mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
         result["taskPlanId"] = json!("wrong-taskplan");
@@ -4550,11 +4568,30 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
             "code": "STALE_FAILURE",
             "summary": "This stale failure must not force a repair for a completed result."
         });
-        result["requirementDetailEvidence"][0]["detailId"] = json!("wrong-detail");
-        result["requirementDetailEvidence"][0]["verificationIds"] = json!(["wrong-verification"]);
-        result["requirementDetailEvidence"][0]["evidenceRefs"] = json!(["src/App.tsx"]);
-        result["conceptEvidence"][0]["conceptRef"] = json!("wrong-concept");
-        result["frontendExperienceSelfCheck"]["closureRequirementIds"] = json!(["wrong-closure"]);
+        if let Some(evidence) = result
+            .get_mut("requirementDetailEvidence")
+            .and_then(Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+        {
+            evidence["detailId"] = json!("wrong-detail");
+            evidence["verificationIds"] = json!(["wrong-verification"]);
+            evidence["evidenceRefs"] = json!(["src/App.tsx"]);
+        }
+        if let Some(evidence) = result
+            .get_mut("conceptEvidence")
+            .and_then(Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+        {
+            evidence["conceptRef"] = json!("wrong-concept");
+        }
+        if expected_closure_id.is_some()
+            && result
+                .get("frontendExperienceSelfCheck")
+                .is_some_and(Value::is_object)
+        {
+            result["frontendExperienceSelfCheck"]["closureRequirementIds"] =
+                json!(["wrong-closure"]);
+        }
     });
 
     let accepted_result = call_submit(
@@ -4594,28 +4631,38 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         json!(expected_verification_id)
     );
     assert!(persisted["failure"].is_null());
-    assert_eq!(
-        persisted["requirementDetailEvidence"][0]["detailId"],
-        json!(expected_detail_id)
-    );
-    assert_eq!(
-        persisted["requirementDetailEvidence"][0]["verificationIds"],
-        json!([expected_verification_id])
-    );
-    assert_eq!(
-        persisted["conceptEvidence"][0]["conceptRef"],
-        json!("concept-account-ui")
-    );
-    assert_eq!(
-        persisted["frontendExperienceSelfCheck"]["closureRequirementIds"],
-        json!([expected_closure_id])
-    );
-    assert!(
-        persisted["frontendExperienceSelfCheck"]["dataBinding"]
-            .get("closureRequirementIds")
-            .is_none(),
-        "dataBinding must not duplicate top-level closure ids"
-    );
+    if let Some(expected_detail_id) = expected_detail_id {
+        assert_eq!(
+            persisted["requirementDetailEvidence"][0]["detailId"],
+            json!(expected_detail_id)
+        );
+        assert_eq!(
+            persisted["requirementDetailEvidence"][0]["verificationIds"],
+            json!(expected_detail_verification_ids)
+        );
+    }
+    if persisted
+        .get("conceptEvidence")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+    {
+        assert_eq!(
+            persisted["conceptEvidence"][0]["conceptRef"],
+            json!("concept-account-ui")
+        );
+    }
+    if let Some(expected_closure_id) = expected_closure_id {
+        assert_eq!(
+            persisted["frontendExperienceSelfCheck"]["closureRequirementIds"],
+            json!([expected_closure_id])
+        );
+        assert!(
+            persisted["frontendExperienceSelfCheck"]["dataBinding"]
+                .get("closureRequirementIds")
+                .is_none(),
+            "dataBinding must not duplicate top-level closure ids"
+        );
+    }
 }
 
 #[test]
@@ -5173,6 +5220,9 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         &fixture,
         &execution_request_ref,
     );
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["frontendQualitySelfCheck"]["status"] = json!("partial");
+    });
     let invalid_task_result = call_submit(
         "loom.recordTaskResultFile",
         &execution_request_ref,
@@ -5234,11 +5284,10 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         task_result_repair_fields["outputContract.resultTemplate"].value["changedFiles"],
         json!(["src/main.tsx"])
     );
-    assert!(
-        task_result_repair_fields["outputContract.resultTemplate"].value
-            ["requirementDetailEvidence"][0]
-            .is_object()
-    );
+    assert!(task_result_repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("requirementDetailEvidence")
+        .is_none());
     let task_result_repair_root =
         read_request_root_value(fixture.root_str(), &task_result_repair_action_ref);
     assert!(task_result_repair_root["source"].get("issues").is_none());
@@ -5594,14 +5643,6 @@ fn taskplan_accept_normalizes_forbidden_paths_before_execution() {
         .to_string();
     write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
 
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    group_value["tasks"][0]["writeBoundary"]["forbiddenPaths"] = json!(["node_modules", "dist"]);
-    write_json_atomic(&group_path, &group_value).expect("write incomplete forbidden paths");
-
     let execution_result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -5835,6 +5876,15 @@ fn review_request_carries_engineering_quality_signals() {
     );
     assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
 
+    // This fixture exercises the accepted persistence obligation. Give the
+    // canonical changed file provider markers so the stack-conformance check
+    // evaluates evidence rather than an empty temporary workspace.
+    write_json_atomic(
+        &fixture.root.join("src/main.tsx"),
+        &json!("fixture persistence mapping: postgres @entity @repository"),
+    )
+    .expect("write persistence evidence fixture");
+
     let mut execution_request_ref = accepted["next"]["requestRef"]
         .as_str()
         .expect("execution requestRef")
@@ -5954,7 +6004,7 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
                 .is_some_and(|tasks| {
                     tasks
                         .iter()
-                        .any(|task| task["taskKind"] == json!("runtime_delivery_closure"))
+                        .any(|task| task["taskKindHint"] == json!("runtime_delivery_closure"))
                 })
                 .then_some(group_id.to_string())
         })
@@ -5965,12 +6015,11 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
             .expect("read closure group"),
     )
     .expect("parse closure group");
-    let mut closure_task = closure_group_value["tasks"][0].clone();
-    let closure_task_id = closure_task["taskId"]
+    let closure_task = closure_group_value["tasks"][0].clone();
+    let closure_task_id = closure_task["proposalId"]
         .as_str()
         .expect("closure task id")
         .to_string();
-    closure_task["groupId"] = json!(implementation_group_id);
 
     let implementation_group_file = group_pattern.replace("{groupId}", &implementation_group_id);
     let implementation_group_path = fixture.root.join(&implementation_group_file);
@@ -5978,10 +6027,6 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
         &std::fs::read_to_string(&implementation_group_path).expect("read implementation group"),
     )
     .expect("parse implementation group");
-    implementation_group_value["group"]["taskIds"]
-        .as_array_mut()
-        .expect("implementation group task ids")
-        .push(json!(closure_task_id.clone()));
     implementation_group_value["tasks"]
         .as_array_mut()
         .expect("implementation group tasks")
@@ -6055,27 +6100,6 @@ fn runtime_task_execution_request_scopes_runtime_rules_to_closure() {
         .to_string();
 
     write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
-        "appliesToThisTask": true,
-        "reason": "This task changes runtime delivery wiring.",
-        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
-        "affectedContractFields": ["runtimeSurfaces"],
-        "requiredCodeLevelChecks": [{
-            "checkId": "check-runtime-wiring",
-            "contractField": "runtimeSurfaces",
-            "objective": "Verify runtime surface wiring still works.",
-            "acceptableEvidence": ["runtime_api_check", "static_check"]
-        }],
-        "evidenceExpectedInTaskResult": [],
-        "forbiddenActions": []
-    });
-    write_json_atomic(&group_path, &group_value).expect("write runtime group file");
-
     let accepted = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -6122,27 +6146,6 @@ fn task_result_repair_template_restores_missing_runtime_evidence() {
         .to_string();
 
     write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
-        "appliesToThisTask": true,
-        "reason": "This task changes runtime delivery wiring.",
-        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
-        "affectedContractFields": ["runtimeSurfaces"],
-        "requiredCodeLevelChecks": [{
-            "checkId": "check-runtime-wiring",
-            "contractField": "runtimeSurfaces",
-            "objective": "Verify runtime surface wiring still works.",
-            "acceptableEvidence": ["runtime_api_check", "static_check"]
-        }],
-        "evidenceExpectedInTaskResult": [],
-        "forbiddenActions": []
-    });
-    write_json_atomic(&group_path, &group_value).expect("write runtime group file");
-
     let accepted = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -6632,14 +6635,12 @@ fn blocked_task_result_routes_to_taskplan_repair() {
     assert!(repair_fields["outputContract.groupResultTemplate"].value["group"].is_object());
     assert!(repair_fields["outputContract.groupResultTemplate"].value["tasks"][0].is_object());
     assert!(
-        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]
-            ["conceptResponsibilities"][0]
-            .is_object()
+        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]["proposalId"]
+            .is_string()
     );
     assert!(
-        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]
-            ["conceptVerificationIntents"][0]
-            .is_object()
+        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]["taskKindHint"]
+            .is_string()
     );
 }
 
@@ -8318,12 +8319,7 @@ fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
             .expect("parse group file");
     group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
         "appliesToThisTask": true,
-        "reason": "This task touches runtime delivery.",
-        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
-        "affectedContractFields": ["runtimeSurfaces"],
-        "requiredCodeLevelChecks": ["manual_command_output"],
-        "evidenceExpectedInTaskResult": [],
-        "forbiddenActions": []
+        "reason": "This task touches runtime delivery."
     });
     write_json_atomic(&group_path, &group_value).expect("write invalid group file");
 
@@ -8337,7 +8333,7 @@ fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
     assert_eq!(result["targetFile"], json!(group_file));
     assert!(
         result["issues"].as_array().unwrap().iter().any(|issue| {
-            issue["fieldPath"] == "tasks[0].runtimeDeliveryRequirement.requiredCodeLevelChecks[0]"
+            issue["fieldPath"] == "tasks[0].runtimeDeliveryRequirement"
                 && issue["code"] == "TASKPLAN_GROUP_SCHEMA_INVALID"
         }),
         "{result:#}"
@@ -8355,43 +8351,6 @@ fn taskplan_submit_normalizes_unique_missing_requirement_detail_owner() {
         .to_string();
 
     write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
-    let mut detail_ref = None;
-    for group_file in taskplan_group_files(&fixture, &taskplan_request_ref) {
-        let group_path = fixture.root.join(&group_file);
-        let mut group_value: Value =
-            serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-                .expect("parse group file");
-        if detail_ref.is_none() {
-            detail_ref = group_value["tasks"]
-                .as_array()
-                .expect("group tasks")
-                .iter()
-                .find_map(|task| {
-                    task["requirementDetailRefs"]
-                        .as_array()
-                        .and_then(|refs| refs.first())
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
-        }
-        for task in group_value["tasks"]
-            .as_array_mut()
-            .expect("group tasks")
-            .iter_mut()
-        {
-            task["requirementDetailRefs"] = json!([]);
-            for intent in task["verificationIntents"]
-                .as_array_mut()
-                .expect("verification intents")
-                .iter_mut()
-            {
-                intent["requirementDetailRefs"] = json!([]);
-            }
-        }
-        write_json_atomic(&group_path, &group_value).expect("write group without detail refs");
-    }
-    let detail_ref = detail_ref.expect("detail ref");
-
     let result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -8404,7 +8363,6 @@ fn taskplan_submit_normalizes_unique_missing_requirement_detail_owner() {
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    let detail_json = json!(detail_ref);
     let owner_task = persisted["tasks"]
         .as_array()
         .expect("persisted tasks")
@@ -8413,16 +8371,22 @@ fn taskplan_submit_normalizes_unique_missing_requirement_detail_owner() {
             task["taskKind"] != json!("runtime_delivery_closure")
                 && task["requirementDetailRefs"]
                     .as_array()
-                    .is_some_and(|refs| refs.iter().any(|item| item == &detail_json))
+                    .is_some_and(|refs| !refs.is_empty())
         })
         .expect("normalized owner task");
     assert!(owner_task["verificationIntents"]
         .as_array()
         .expect("verification intents")
         .iter()
-        .any(|intent| intent["requirementDetailRefs"]
+        .all(|intent| intent["requirementDetailRefs"]
             .as_array()
-            .is_some_and(|refs| refs.iter().any(|item| item == &detail_json))));
+            .is_some_and(|refs| {
+                refs.iter().all(|item| {
+                    owner_task["requirementDetailRefs"]
+                        .as_array()
+                        .is_some_and(|owner_refs| owner_refs.contains(item))
+                })
+            })));
 }
 
 #[test]
@@ -8446,20 +8410,8 @@ fn taskplan_submit_requires_covered_requirement_detail_assignment_when_owner_can
             .expect("group tasks")
             .iter_mut()
         {
-            if task["taskKind"] != json!("runtime_delivery_closure") {
-                task["taskKind"] = json!("verification_increment");
-                task["implementationActions"] = json!(["add_or_update_tests"]);
-                task.as_object_mut()
-                    .expect("task object")
-                    .remove("frontendExperienceRequirement");
-            }
-            task["requirementDetailRefs"] = json!([]);
-            for intent in task["verificationIntents"]
-                .as_array_mut()
-                .expect("verification intents")
-                .iter_mut()
-            {
-                intent["requirementDetailRefs"] = json!([]);
+            if task["taskKindHint"] != json!("runtime_delivery_closure") {
+                task["taskKindHint"] = json!("verification_increment");
             }
         }
         write_json_atomic(&group_path, &group_value).expect("write group without detail refs");
@@ -8501,18 +8453,6 @@ fn taskplan_submit_normalizes_verification_detail_parent_refs() {
         .to_string();
 
     write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    let detail_ref = group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"][0]
-        .as_str()
-        .expect("detail ref")
-        .to_string();
-    group_value["tasks"][0]["requirementDetailRefs"] = json!([]);
-    write_json_atomic(&group_path, &group_value).expect("write group with parent detail gap");
-
     let result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -8525,11 +8465,20 @@ fn taskplan_submit_normalizes_verification_detail_parent_refs() {
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    assert!(persisted["tasks"][0]["requirementDetailRefs"]
+    let task = &persisted["tasks"][0];
+    let detail_refs = task["requirementDetailRefs"]
         .as_array()
-        .expect("task detail refs")
-        .iter()
-        .any(|item| item == &json!(detail_ref)));
+        .expect("task detail refs");
+    assert!(!detail_refs.is_empty());
+    let verification_intents = task["verificationIntents"]
+        .as_array()
+        .expect("verification intents");
+    assert!(verification_intents.iter().all(|intent| {
+        intent
+            .get("requirementDetailRefs")
+            .and_then(Value::as_array)
+            .is_none_or(|refs| refs.iter().all(|item| detail_refs.contains(item)))
+    }));
 }
 
 #[test]
@@ -8550,18 +8499,6 @@ fn taskplan_submit_normalizes_missing_verification_detail_refs() {
         .to_string();
 
     write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    let detail_ref = group_value["tasks"][0]["requirementDetailRefs"][0]
-        .as_str()
-        .expect("detail ref")
-        .to_string();
-    group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"] = json!([]);
-    write_json_atomic(&group_path, &group_value).expect("write group with verification detail gap");
-
     let result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -8574,13 +8511,14 @@ fn taskplan_submit_normalizes_missing_verification_detail_refs() {
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    assert!(
-        persisted["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"]
+    assert!(persisted["tasks"][0]["verificationIntents"]
+        .as_array()
+        .expect("verification intents")
+        .iter()
+        .any(|intent| !intent["requirementDetailRefs"]
             .as_array()
-            .expect("verification detail refs")
-            .iter()
-            .any(|item| item == &json!(detail_ref))
-    );
+            .unwrap()
+            .is_empty()));
 }
 
 #[test]
@@ -8601,26 +8539,6 @@ fn taskplan_submit_normalizes_missing_verification_detail_refs_with_multiple_mat
         .to_string();
 
     write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
-    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    let detail_ref = group_value["tasks"][0]["requirementDetailRefs"][0]
-        .as_str()
-        .expect("detail ref")
-        .to_string();
-    let mut second_intent = group_value["tasks"][0]["verificationIntents"][0].clone();
-    second_intent["verificationId"] = json!("verify-account-002");
-    second_intent["requirementDetailRefs"] = json!([]);
-    group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"] = json!([]);
-    group_value["tasks"][0]["verificationIntents"]
-        .as_array_mut()
-        .expect("verification intents")
-        .push(second_intent);
-    write_json_atomic(&group_path, &group_value)
-        .expect("write group with ambiguous verification detail gap");
-
     let result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -8633,13 +8551,14 @@ fn taskplan_submit_normalizes_missing_verification_detail_refs_with_multiple_mat
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    assert!(
-        persisted["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"]
+    assert!(persisted["tasks"][0]["verificationIntents"]
+        .as_array()
+        .expect("verification intents")
+        .iter()
+        .any(|intent| !intent["requirementDetailRefs"]
             .as_array()
-            .expect("verification detail refs")
-            .iter()
-            .any(|item| item == &json!(detail_ref))
-    );
+            .unwrap()
+            .is_empty()));
 }
 
 #[test]
@@ -8658,13 +8577,7 @@ fn taskplan_submit_requires_frontend_task_when_frontend_required() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["taskKind"] = json!("feature_increment");
-    group_value["tasks"][0]["implementationActions"] =
-        json!(["create_or_update_interface", "add_or_update_tests"]);
-    group_value["tasks"][0]
-        .as_object_mut()
-        .expect("task object")
-        .remove("frontendExperienceRequirement");
+    group_value["tasks"][0]["taskKindHint"] = json!("feature_increment");
     write_json_atomic(&group_path, &group_value).expect("write group without frontend task");
 
     let result = call_submit(
@@ -8739,8 +8652,9 @@ fn taskplan_submit_normalizes_interface_write_refs_when_not_opened() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] =
-        json!(["api.not-opened"]);
+    group_value["tasks"][0]["writeBoundary"] = json!({
+        "artifactRefs": {"interfaces": ["api.not-opened"]}
+    });
     write_json_atomic(&group_path, &group_value).expect("write group with unavailable interface");
 
     let result = call_submit(
@@ -8749,18 +8663,11 @@ fn taskplan_submit_normalizes_interface_write_refs_when_not_opened() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "auto_runnable", "{result:#}");
-    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
-    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
-    let persisted: Value =
-        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
-            .expect("parse persisted taskplan");
-    assert!(
-        persisted["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"]
-            .as_array()
-            .map(|items| items.is_empty())
-            .unwrap_or(true)
-    );
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == json!("TASKPLAN_GROUP_SCHEMA_INVALID")
+            && issue["fieldPath"] == json!("tasks[0].writeBoundary")
+    }));
 }
 
 #[test]
@@ -8786,7 +8693,7 @@ fn taskplan_submit_requires_workflow_closure_assignment() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["implementationActions"] = json!(["add_or_update_tests"]);
+    group_value["tasks"][0]["taskKindHint"] = json!("verification_increment");
     write_json_atomic(&group_path, &group_value).expect("write group without workflow wiring");
 
     let result = call_submit(
@@ -8858,27 +8765,6 @@ fn taskplan_submit_derives_runtime_closure_check_identity() {
         .to_string();
 
     write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
-    let fields = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: taskplan_request_ref.to_string(),
-        fields: vec!["outputContract.groupFilePattern".to_string()],
-    })
-    .expect("read taskplan group pattern")
-    .fields;
-    let group_pattern = fields["outputContract.groupFilePattern"]
-        .value
-        .as_str()
-        .expect("group pattern");
-    let closure_group_file = group_pattern.replace("{groupId}", "group-runtime-delivery-closure");
-    let closure_group_path = fixture.root.join(&closure_group_file);
-    let mut closure_group: Value = serde_json::from_str(
-        &std::fs::read_to_string(&closure_group_path).expect("read closure group"),
-    )
-    .expect("parse closure group");
-    closure_group["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"][0]
-        ["checkId"] = json!("wrong-runtime-check-id");
-    write_json_atomic(&closure_group_path, &closure_group).expect("write bad closure group");
-
     let result = call_submit(
         "loom.taskPlanAcceptFile",
         &taskplan_request_ref,
@@ -8936,8 +8822,7 @@ fn taskplan_submit_repairs_task_enum_shape_before_parse() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["verificationIntents"][0]["acceptableEvidence"] =
-        json!(["static_check", "shell_output"]);
+    group_value["tasks"][0]["taskKindHint"] = json!("not_a_task_kind");
     write_json_atomic(&group_path, &group_value).expect("write invalid group file");
 
     let result = call_submit(
@@ -8950,8 +8835,8 @@ fn taskplan_submit_repairs_task_enum_shape_before_parse() {
     assert_eq!(result["targetFile"], json!(group_file));
     assert!(
         result["issues"].as_array().unwrap().iter().any(|issue| {
-            issue["fieldPath"] == "tasks[0].verificationIntents[0].acceptableEvidence[1]"
-                && issue["code"] == "TASKPLAN_GROUP_SCHEMA_INVALID"
+            issue["fieldPath"] == "tasks[].taskKindHint"
+                && issue["code"] == "TASK_KIND_HINT_INVALID"
         }),
         "{result:#}"
     );
@@ -10313,29 +10198,6 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     })
     .expect("read taskplan fields")
     .fields;
-    let allowed_refs = json!({
-        "scopeRefs": field_value(&fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": field_value(&fields, "allowedRefs.acceptanceRefs"),
-        "requirementDetailIds": field_value(&fields, "allowedRefs.requirementDetailIds"),
-        "moduleRefs": field_value(&fields, "allowedRefs.moduleRefs"),
-        "entityRefs": field_value(&fields, "allowedRefs.entityRefs"),
-        "interfaceRefs": field_value(&fields, "allowedRefs.interfaceRefs"),
-        "userFlowRefs": field_value(&fields, "allowedRefs.userFlowRefs"),
-        "stateMachineRefs": field_value(&fields, "allowedRefs.stateMachineRefs"),
-        "decisionRefs": field_value(&fields, "allowedRefs.decisionRefs"),
-        "nfrRefs": field_value(&fields, "allowedRefs.nfrRefs"),
-        "riskRefs": field_value(&fields, "allowedRefs.riskRefs")
-    });
-    let decision_refs = first_ref_array(&allowed_refs["decisionRefs"]);
-    let nfr_refs = first_ref_array(&allowed_refs["nfrRefs"]);
-    let risk_refs = first_ref_array(&allowed_refs["riskRefs"]);
-    let scope_id = allowed_refs["scopeRefs"][0].as_str().expect("scope ref");
-    let acceptance_id = allowed_refs["acceptanceRefs"][0]
-        .as_str()
-        .expect("acceptance ref");
-    let detail_id = allowed_refs["requirementDetailIds"][0]
-        .as_str()
-        .expect("detail id");
     let outline_file = fields["outputContract.outlineFile"]
         .value
         .as_str()
@@ -10357,19 +10219,13 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                 "groupId": group_id,
                 "title": "Account capability",
                 "objective": "Implement the account capability slice.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [task_id]
+                "dependsOn": []
             },
             {
                 "groupId": closure_group_id,
                 "title": "Runtime delivery closure",
                 "objective": "Verify the final RuntimeDeliveryContract code-level closure.",
-                "dependsOn": [group_id],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [closure_task_id]
+                "dependsOn": [group_id]
             }
         ])
     } else {
@@ -10377,10 +10233,7 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
             "groupId": group_id,
             "title": "Account capability",
             "objective": "Implement the account capability slice.",
-            "dependsOn": [],
-            "scopeRefs": [scope_id],
-            "acceptanceRefs": [acceptance_id],
-            "taskIds": [task_id]
+            "dependsOn": []
         }])
     };
     write_json_atomic(
@@ -10398,8 +10251,6 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     )
     .expect("write taskplan outline");
     let group_file = group_pattern.replace("{groupId}", group_id);
-    let frontend_requirement_template =
-        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
     write_json_atomic(
         &fixture.root.join(group_file),
         &json!({
@@ -10409,50 +10260,18 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
             "phaseId": phase_id,
             "status": "ready",
             "group": {
-                "groupId": group_id,
-                "title": "Account capability",
-                "objective": "Implement the account capability slice.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [task_id]
+            "groupId": group_id,
+            "title": "Account capability",
+            "objective": "Implement the account capability slice.",
+                "dependsOn": []
             },
             "tasks": [{
-                "taskId": task_id,
-                "groupId": group_id,
+                "proposalId": task_id,
                 "title": "Implement account flow",
-                "taskKind": "ui_flow_increment",
-                "implementationActions": ["create_or_update_interface", "wire_reference_in_api_or_ui", "add_or_update_tests"],
                 "objective": "Implement account lifecycle behavior, UI action wiring, and success feedback.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "requirementDetailRefs": [detail_id],
-                "writeBoundary": {
-                    "forbiddenPaths": [".loom"],
-                    "artifactRefs": {
-                        "modules": ["module.account-service"],
-                        "entities": [allowed_refs["entityRefs"].get(0).and_then(Value::as_str).unwrap_or("entity.account")],
-                        "interfaces": [allowed_refs["interfaceRefs"].get(0).and_then(Value::as_str).unwrap_or("api.account")],
-                        "userFlows": [allowed_refs["userFlowRefs"].get(0).and_then(Value::as_str).unwrap_or("flow.account-lifecycle")],
-                        "stateMachines": [allowed_refs["stateMachineRefs"].get(0).and_then(Value::as_str).unwrap_or("machine.account-status")],
-                        "decisions": decision_refs,
-                        "nfrs": nfr_refs,
-                        "risks": risk_refs
-                    }
-                },
-                "verificationIntents": [{
-                    "verificationId": "verify-account-001",
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "behavior": "Verify account lifecycle behavior and visible success feedback.",
-                    "preferredEvidence": ["static_check"],
-                    "acceptableEvidence": ["static_check", "manual_command_output"]
-                }],
-                "frontendExperienceRequirement": frontend_requirement_template,
-                "conceptRefs": [],
-                "conceptResponsibilities": [],
-                "conceptVerificationIntents": []
+                "description": "Implement account lifecycle behavior, UI action wiring, and success feedback.",
+                "taskKindHint": "ui_flow_increment",
+                "dependsOn": []
             }],
             "createdAt": "2026-06-24T10:00:00+08:00"
         }),
@@ -10460,7 +10279,6 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     .expect("write taskplan group");
     if has_runtime_closure {
         let closure_group_file = group_pattern.replace("{groupId}", closure_group_id);
-        let closure_requirement = runtime_closure_template["runtimeDeliveryRequirement"].clone();
         write_json_atomic(
             &fixture.root.join(closure_group_file),
             &json!({
@@ -10473,47 +10291,15 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                     "groupId": closure_group_id,
                     "title": "Runtime delivery closure",
                     "objective": "Verify the final RuntimeDeliveryContract code-level closure.",
-                    "dependsOn": [group_id],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "taskIds": [closure_task_id]
+                    "dependsOn": [group_id]
                 },
                 "tasks": [{
-                    "taskId": closure_task_id,
-                    "groupId": closure_group_id,
+                    "proposalId": closure_task_id,
                     "title": "Verify runtime delivery closure",
-                    "taskKind": "runtime_delivery_closure",
-                    "implementationActions": ["implement_runtime_delivery_contract", "add_or_update_tests"],
                     "objective": "Verify build, start, runtime surfaces, probes, frontend/API serving, and environment fields against RuntimeDeliveryContract.",
-                    "dependsOn": [],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "writeBoundary": {
-                        "forbiddenPaths": [".loom"],
-                        "artifactRefs": {
-                            "modules": ["module.account-service"],
-                            "entities": [],
-                            "interfaces": [],
-                            "userFlows": [],
-                            "stateMachines": [],
-                            "decisions": [],
-                            "nfrs": [],
-                            "risks": []
-                        }
-                    },
-                    "verificationIntents": [{
-                        "verificationId": "verify-runtime-delivery-closure",
-                        "acceptanceRefs": [acceptance_id],
-                        "requirementDetailRefs": [detail_id],
-                        "behavior": "Verify runtime delivery contract fields are closed at code level.",
-                        "preferredEvidence": ["static_check"],
-                        "acceptableEvidence": ["static_check", "manual_command_output", "runtime_api_check"]
-                    }],
-                    "runtimeDeliveryRequirement": closure_requirement,
-                    "conceptRefs": [],
-                    "conceptResponsibilities": [],
-                    "conceptVerificationIntents": []
+                    "description": "Verify runtime delivery contract fields are closed at code level.",
+                    "taskKindHint": "runtime_delivery_closure",
+                    "dependsOn": []
                 }],
                 "createdAt": "2026-06-24T10:00:00+08:00"
             }),
@@ -10551,33 +10337,6 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
     })
     .expect("read taskplan persistence fields")
     .fields;
-    let scope_id = fields["allowedRefs.scopeRefs"].value[0]
-        .as_str()
-        .expect("scope ref");
-    let acceptance_id = fields["allowedRefs.acceptanceRefs"].value[0]
-        .as_str()
-        .expect("acceptance ref");
-    let detail_id = fields["allowedRefs.requirementDetailIds"].value[0]
-        .as_str()
-        .expect("detail id");
-    let module_id = fields["allowedRefs.moduleRefs"].value[0]
-        .as_str()
-        .unwrap_or("module.account-service");
-    let entity_id = fields["allowedRefs.entityRefs"].value[0]
-        .as_str()
-        .unwrap_or("entity.account");
-    let interface_id = fields["allowedRefs.interfaceRefs"].value[0]
-        .as_str()
-        .unwrap_or("api.account.open");
-    let user_flow_id = fields["allowedRefs.userFlowRefs"].value[0]
-        .as_str()
-        .unwrap_or("flow.account-lifecycle");
-    let state_machine_id = fields["allowedRefs.stateMachineRefs"].value[0]
-        .as_str()
-        .unwrap_or("machine.account-status");
-    let decision_refs = first_ref_array(&fields["allowedRefs.decisionRefs"].value);
-    let nfr_refs = first_ref_array(&fields["allowedRefs.nfrRefs"].value);
-    let risk_refs = first_ref_array(&fields["allowedRefs.riskRefs"].value);
     let outline_file = fields["outputContract.outlineFile"]
         .value
         .as_str()
@@ -10605,19 +10364,13 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
                     "groupId": backend_group_id,
                     "title": "Backend persistence and API",
                     "objective": "Implement persisted backend capability.",
-                    "dependsOn": [],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "taskIds": [backend_data_task_id, backend_api_task_id]
+                    "dependsOn": []
                 },
                 {
                     "groupId": frontend_group_id,
                     "title": "Frontend workflow",
                     "objective": "Implement staff-facing UI workflow.",
-                    "dependsOn": [backend_group_id],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "taskIds": [frontend_task_id]
+                    "dependsOn": [backend_group_id]
                 }
             ],
             "createdAt": "2026-06-24T10:00:00+08:00"
@@ -10635,97 +10388,27 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
             "phaseId": phase_id,
             "status": "ready",
             "group": {
-                "groupId": backend_group_id,
-                "title": "Backend persistence and API",
-                "objective": "Implement persisted backend capability.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [backend_data_task_id, backend_api_task_id]
+                    "groupId": backend_group_id,
+                    "title": "Backend persistence and API",
+                    "objective": "Implement persisted backend capability.",
+                    "dependsOn": []
             },
             "tasks": [
                 {
-                    "taskId": backend_data_task_id,
-                    "groupId": backend_group_id,
+                    "proposalId": backend_data_task_id,
                     "title": "Implement persisted domain model",
-                    "taskKind": "data_model_increment",
-                    "implementationActions": [
-                        "create_or_update_entity",
-                        "create_or_update_persistence",
-                        "create_entity_migration",
-                        "create_entity_repository",
-                        "add_or_update_tests"
-                    ],
                     "objective": "Create the persisted entity, schema or migration, repository mapping, and provider-backed tests.",
-                    "dependsOn": [],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "writeBoundary": {
-                        "forbiddenPaths": [".loom"],
-                        "artifactRefs": {
-                            "modules": [module_id],
-                            "entities": [entity_id],
-                            "interfaces": [],
-                            "userFlows": [],
-                            "stateMachines": [state_machine_id],
-                            "decisions": decision_refs,
-                            "nfrs": nfr_refs,
-                            "risks": risk_refs
-                        }
-                    },
-                    "verificationIntents": [{
-                        "verificationId": "verify-backend-data-001",
-                        "acceptanceRefs": [acceptance_id],
-                        "requirementDetailRefs": [detail_id],
-                        "behavior": "Verify persisted fields, schema mapping, and repository readback with the selected provider.",
-                        "preferredEvidence": ["automated_test"],
-                        "acceptableEvidence": ["automated_test", "manual_command_output"]
-                    }],
-                    "conceptRefs": [],
-                    "conceptResponsibilities": [],
-                    "conceptVerificationIntents": []
+                    "description": "Create the persisted entity, schema or migration, repository mapping, and provider-backed tests.",
+                    "taskKindHint": "data_model_increment",
+                    "dependsOn": []
                 },
                 {
-                    "taskId": backend_api_task_id,
-                    "groupId": backend_group_id,
+                    "proposalId": backend_api_task_id,
                     "title": "Implement persisted API behavior",
-                    "taskKind": "interface_increment",
-                    "implementationActions": [
-                        "create_or_update_interface",
-                        "create_or_update_business_rule",
-                        "wire_reference_in_api_or_ui",
-                        "add_or_update_tests"
-                    ],
                     "objective": "Expose create/list/detail API behavior on top of the persisted entity.",
-                    "dependsOn": [backend_data_task_id],
-                    "scopeRefs": [scope_id],
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "writeBoundary": {
-                        "forbiddenPaths": [".loom"],
-                        "artifactRefs": {
-                            "modules": [module_id],
-                            "entities": [entity_id],
-                            "interfaces": [interface_id],
-                            "userFlows": [],
-                            "stateMachines": [state_machine_id],
-                            "decisions": [],
-                            "nfrs": [],
-                            "risks": []
-                        }
-                    },
-                    "verificationIntents": [{
-                        "verificationId": "verify-backend-api-001",
-                        "acceptanceRefs": [acceptance_id],
-                        "requirementDetailRefs": [detail_id],
-                        "behavior": "Verify API DTOs, validation errors, persisted create/read behavior, and query fields stay aligned.",
-                        "preferredEvidence": ["automated_test"],
-                        "acceptableEvidence": ["automated_test", "runtime_api_check"]
-                    }],
-                    "conceptRefs": [],
-                    "conceptResponsibilities": [],
-                    "conceptVerificationIntents": []
+                    "description": "Verify API DTOs, validation errors, persisted create/read behavior, and query fields stay aligned.",
+                    "taskKindHint": "interface_increment",
+                    "dependsOn": [backend_data_task_id]
                 }
             ],
             "createdAt": "2026-06-24T10:00:00+08:00"
@@ -10733,8 +10416,6 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
     )
     .expect("write backend taskplan group");
 
-    let frontend_requirement_template =
-        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
     let frontend_group_file = group_pattern.replace("{groupId}", frontend_group_id);
     write_json_atomic(
         &fixture.root.join(frontend_group_file),
@@ -10745,55 +10426,18 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
             "phaseId": phase_id,
             "status": "ready",
             "group": {
-                "groupId": frontend_group_id,
-                "title": "Frontend workflow",
-                "objective": "Implement staff-facing UI workflow.",
-                "dependsOn": [backend_group_id],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [frontend_task_id]
+                    "groupId": frontend_group_id,
+                    "title": "Frontend workflow",
+                    "objective": "Implement staff-facing UI workflow.",
+                    "dependsOn": [backend_group_id]
             },
             "tasks": [{
-                "taskId": frontend_task_id,
-                "groupId": frontend_group_id,
+                "proposalId": frontend_task_id,
                 "title": "Implement frontend workflow",
-                "taskKind": "ui_flow_increment",
-                "implementationActions": [
-                    "create_or_update_ui_flow",
-                    "wire_reference_in_api_or_ui",
-                    "implement_frontend_experience_contract",
-                    "add_or_update_tests"
-                ],
                 "objective": "Implement the staff-facing workflow UI and bind it to the backend API.",
-                "dependsOn": [backend_api_task_id],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "requirementDetailRefs": [detail_id],
-                "writeBoundary": {
-                    "forbiddenPaths": [".loom"],
-                    "artifactRefs": {
-                        "modules": [module_id],
-                        "entities": [entity_id],
-                        "interfaces": [interface_id],
-                        "userFlows": [user_flow_id],
-                        "stateMachines": [state_machine_id],
-                        "decisions": [],
-                        "nfrs": [],
-                        "risks": []
-                    }
-                },
-                "verificationIntents": [{
-                    "verificationId": "verify-frontend-001",
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "behavior": "Verify the UI displays the workflow, submits the action, and shows success or blocking feedback.",
-                    "preferredEvidence": ["static_check"],
-                    "acceptableEvidence": ["static_check", "runtime_api_check"]
-                }],
-                "frontendExperienceRequirement": frontend_requirement_template,
-                "conceptRefs": [],
-                "conceptResponsibilities": [],
-                "conceptVerificationIntents": []
+                "description": "Verify the UI displays the workflow, submits the action, and shows success or blocking feedback.",
+                "taskKindHint": "ui_flow_increment",
+                "dependsOn": [backend_api_task_id]
             }],
             "createdAt": "2026-06-24T10:00:00+08:00"
         }),
@@ -10847,18 +10491,6 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     })
     .expect("read taskplan fields")
     .fields;
-    let scope_id = fields["allowedRefs.scopeRefs"].value[0]
-        .as_str()
-        .expect("scope ref");
-    let acceptance_id = fields["allowedRefs.acceptanceRefs"].value[0]
-        .as_str()
-        .expect("acceptance ref");
-    let detail_id = fields["allowedRefs.requirementDetailIds"].value[0]
-        .as_str()
-        .expect("detail id");
-    let decision_refs = first_ref_array(&field_value(&fields, "allowedRefs.decisionRefs"));
-    let nfr_refs = first_ref_array(&field_value(&fields, "allowedRefs.nfrRefs"));
-    let risk_refs = first_ref_array(&field_value(&fields, "allowedRefs.riskRefs"));
     let outline_file = fields["outputContract.outlineFile"]
         .value
         .as_str()
@@ -10879,21 +10511,16 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
             "status": "ready",
             "taskPlanId": "taskplan-phase-1",
             "groups": [{
-                "groupId": group_id,
-                "title": "Account UI workflow",
-                "objective": "Wire the account UI workflow to the declared backend interface.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [task_id]
+            "groupId": group_id,
+            "title": "Account UI workflow",
+            "objective": "Wire the account UI workflow to the declared backend interface.",
+                "dependsOn": []
             }],
             "createdAt": "2026-06-24T10:00:00+08:00"
         }),
     )
     .expect("write taskplan outline");
     let group_file = group_pattern.replace("{groupId}", group_id);
-    let frontend_requirement_template =
-        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
     write_json_atomic(
         &fixture.root.join(group_file),
         &json!({
@@ -10903,50 +10530,18 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
             "phaseId": phase_id,
             "status": "ready",
             "group": {
-                "groupId": group_id,
-                "title": "Account UI workflow",
-                "objective": "Wire the account UI workflow to the declared backend interface.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [task_id]
+            "groupId": group_id,
+            "title": "Account UI workflow",
+            "objective": "Wire the account UI workflow to the declared backend interface.",
+                "dependsOn": []
             },
             "tasks": [{
-                "taskId": task_id,
-                "groupId": group_id,
+                "proposalId": task_id,
                 "title": "Wire account opening UI",
-                "taskKind": "ui_flow_increment",
-                "implementationActions": ["wire_reference_in_api_or_ui", "add_or_update_tests"],
                 "objective": "Wire the account opening UI action to the declared open-account API and verify success feedback.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "requirementDetailRefs": [detail_id],
-                "writeBoundary": {
-                    "forbiddenPaths": [".loom"],
-                    "artifactRefs": {
-                        "modules": ["module.account-service"],
-                        "entities": ["entity.account"],
-                        "interfaces": ["api.account.open"],
-                        "userFlows": ["flow.account-lifecycle"],
-                        "stateMachines": ["machine.account-status"],
-                        "decisions": decision_refs,
-                        "nfrs": nfr_refs,
-                        "risks": risk_refs
-                    }
-                },
-                "verificationIntents": [{
-                    "verificationId": "verify-account-ui-001",
-                    "acceptanceRefs": [acceptance_id],
-                    "requirementDetailRefs": [detail_id],
-                    "behavior": "Verify the UI action invokes the declared API and shows success feedback.",
-                    "preferredEvidence": ["runtime_api_check"],
-                    "acceptableEvidence": ["automated_test", "browser_automation", "runtime_api_check", "manual_command_output"]
-                }],
-                "frontendExperienceRequirement": frontend_requirement_template,
-                "conceptRefs": [],
-                "conceptResponsibilities": [],
-                "conceptVerificationIntents": []
+                "description": "Verify the UI action invokes the declared API and shows success feedback.",
+                "taskKindHint": "ui_flow_increment",
+                "dependsOn": []
             }],
             "createdAt": "2026-06-24T10:00:00+08:00"
         }),
@@ -10959,22 +10554,6 @@ fn first_taskplan_group_file(fixture: &Fixture, request_ref: &str) -> String {
         .into_iter()
         .next()
         .expect("first taskplan group file")
-}
-
-fn frontend_requirement_template_from_taskplan_request(
-    fixture: &Fixture,
-    request_ref: &str,
-) -> Value {
-    let fields = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: request_ref.to_string(),
-        fields: vec!["outputContract.frontendExperienceRequirementTemplate".to_string()],
-    })
-    .expect("read frontend requirement template")
-    .fields;
-    fields["outputContract.frontendExperienceRequirementTemplate"]
-        .value
-        .clone()
 }
 
 fn taskplan_group_files(fixture: &Fixture, request_ref: &str) -> Vec<String> {
@@ -11591,6 +11170,11 @@ fn write_task_result_candidate_with_detail_evidence(
         .get_mut("frontendExperienceSelfCheck")
         .and_then(Value::as_object_mut)
     {
+        self_check.insert("status".to_string(), json!("satisfied"));
+        self_check.insert(
+            "dataBinding".to_string(),
+            json!({"mode": "wired", "knownGaps": []}),
+        );
         self_check.insert("evidenceRefs".to_string(), json!(["src/App.tsx"]));
     }
     complete_frontend_quality_token_evidence_for_test(&mut result);
@@ -12107,21 +11691,6 @@ fn start_frontend_quality_task_execution_without_architecture_quality(fixture: &
         "risks": []
     });
     write_json_atomic(&aac_path, &aac).expect("remove architecture quality from AAC");
-    let group_file = first_taskplan_group_file(fixture, taskplan_request_ref);
-    let group_path = fixture.root.join(&group_file);
-    let mut group_value: Value =
-        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
-            .expect("parse group file");
-    group_value["tasks"][0]["architectureQualityRequirementRefs"] = json!([]);
-    group_value["tasks"][0]["apiContractRequirementRefs"] = json!([]);
-    group_value["tasks"][0]["codeQualityRequirementRefs"] = json!([]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["decisions"] = json!([]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["nfrs"] = json!([]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["risks"] = json!([]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"] = json!([]);
-    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] = json!([]);
-    write_json_atomic(&group_path, &group_value).expect("write frontend-only group file");
-
     let execution_result = call_submit(
         "loom.taskPlanAcceptFile",
         taskplan_request_ref,
@@ -12675,14 +12244,6 @@ fn field_value(
         .unwrap_or(Value::Null)
 }
 
-fn first_ref_array(value: &Value) -> Value {
-    value
-        .get(0)
-        .and_then(Value::as_str)
-        .map(|reference| json!([reference]))
-        .unwrap_or_else(|| json!([]))
-}
-
 fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> Value {
     let request_root = read_request_root_value(fixture.root_str(), request_ref);
     let request_id = request_root["requestId"].as_str().expect("requestId");
@@ -12778,6 +12339,9 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
                 .and_then(Value::as_str)
         });
+    let frontend_source_refs = frontend_authority_ref
+        .map(|reference| json!({"brainstormFrontendExperienceRef": reference}))
+        .unwrap_or_else(|| json!({}));
     let technical_baseline_ref = fields
         .get("sourceRefs.technicalBaselineRef")
         .map(|field| &field.value)
@@ -12870,9 +12434,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "actions": [],
                 "operationPaths": [],
                 "surfaceDecisionCandidate": frontend_surface_decision_candidate_json(),
-                "sourceRefs": {
-                    "brainstormFrontendExperienceRef": frontend_authority_ref
-                }
+                "sourceRefs": frontend_source_refs
             }
         }),
         "runtime_delivery" => json!({

@@ -1149,6 +1149,20 @@ where
         return Ok(stale);
     }
     let root = Path::new(&input.project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.clone(),
+        phase_id: phase_id.clone(),
+    };
+    let (current_task_plan, current_run) = load_current_plan_and_run(root, &locator)?;
+    let current_task_results = load_task_results(root, &locator, &current_task_plan, &current_run)?;
+    if !review_request_matches_current_task_results(
+        &input.project_root,
+        &input.request_ref,
+        &current_task_plan,
+        &current_task_results,
+    ) {
+        return materialize_review_request_inner(&input.project_root, &delivery_id, &phase_id);
+    }
     let fields = read_review_submit_fields(input)?;
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
     let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id, &fields);
@@ -1181,10 +1195,6 @@ where
     if !issues.is_empty() {
         return review_result_repairable(input, authorized, target.path.clone(), issues);
     }
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.clone(),
-        phase_id: phase_id.clone(),
-    };
     let persisted = review_result_file(root, &locator, &result.review_id);
     state::store::write_json_atomic(&persisted, &result)?;
     state::lifecycle_store::finalize_agent_candidate(root, &target.path)?;
@@ -3086,6 +3096,19 @@ fn apply_browser_quality_resolution(
             verification.summary =
                 "Required browser evidence was supplied through the external evidence gate."
                     .to_string();
+            let evidence_refs = verification
+                .browser_checks
+                .iter()
+                .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
+                .flat_map(|check| check.artifact_refs.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            verification.provenance = Some(contracts::VerificationProvenance {
+                evidence_refs: evidence_refs.into_iter().collect(),
+                changed_files: Vec::new(),
+                test_case_refs: Vec::new(),
+                command: Some("external_browser_evidence".to_string()),
+                exit_code: Some(0),
+            });
         }
     }
     let has_non_passed = result
@@ -3516,25 +3539,36 @@ fn task_result_status_matches_run_state(
 }
 
 fn build_concept_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Vec<Value> {
-    let evidence_refs = task_results
-        .iter()
-        .flat_map(|result| {
-            result
-                .concept_evidence
-                .iter()
-                .map(|evidence| evidence.concept_ref.clone())
-        })
-        .collect::<BTreeSet<_>>();
     task_plan
         .tasks
         .iter()
         .flat_map(|task| {
             task.concept_refs.iter().map(|concept_ref| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == task.task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .concept_evidence
+                        .iter()
+                        .find(|evidence| evidence.concept_ref == *concept_ref)
+                });
+                let satisfied = result.is_some_and(|result| {
+                    matches!(
+                        result.status,
+                        contracts::TaskResultStatus::Completed
+                            | contracts::TaskResultStatus::CompletedWithNotes
+                    ) && evidence.is_some_and(|evidence| {
+                        !evidence.refs.is_empty() && !evidence.summary.trim().is_empty()
+                    })
+                });
                 json!({
                     "conceptRef": concept_ref,
                     "taskId": task.task_id,
-                    "status": if evidence_refs.contains(concept_ref) { "satisfied" } else { "missing_evidence" },
-                    "recommendedNextAction": if evidence_refs.contains(concept_ref) { "none" } else { "execution_repair" }
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "status": if satisfied { "satisfied" } else { "missing_evidence" },
+                    "evidenceRefCount": evidence.map(|evidence| evidence.refs.len()).unwrap_or(0),
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
                 })
             })
         })
@@ -3561,7 +3595,10 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
                         result
                             .verification_results
                             .iter()
-                            .filter(|verification| verification.status == "passed")
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
                             .map(|verification| verification.verification_id.as_str())
                             .collect::<BTreeSet<_>>()
                     })
@@ -3653,7 +3690,10 @@ fn build_implementation_obligation_review_matrix(
                     result
                         .verification_results
                         .iter()
-                        .filter(|verification| verification.status == "passed")
+                        .filter(|verification| {
+                            verification.status == "passed"
+                                && verification_is_traceable(verification)
+                        })
                         .map(|verification| verification.verification_id.as_str())
                         .collect::<BTreeSet<_>>()
                 })
@@ -3814,6 +3854,19 @@ fn build_code_quality_review_matrix(
                         .iter()
                         .find(|evidence| evidence.requirement_id == requirement.requirement_id)
                 });
+                let passed_traceable_ids = result
+                    .map(|result| {
+                        result
+                            .verification_results
+                            .iter()
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
+                            .map(|verification| verification.verification_id.as_str())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
                 let satisfied = result
                     .map(|result| {
                         matches!(
@@ -3839,6 +3892,10 @@ fn build_code_quality_review_matrix(
                                     && !evidence.reference_groups_checked.is_empty()
                                     && files_satisfied
                                     && !evidence.verification_ids.is_empty()
+                                    && evidence
+                                        .verification_ids
+                                        .iter()
+                                        .all(|id| passed_traceable_ids.contains(id.as_str()))
                             })
                             .unwrap_or(false)
                     })
@@ -3952,7 +4009,10 @@ fn build_architecture_quality_review_matrix(
                     result
                         .verification_results
                         .iter()
-                        .filter(|verification| verification.status == "passed")
+                        .filter(|verification| {
+                            verification.status == "passed"
+                                && verification_is_traceable(verification)
+                        })
                         .map(|verification| verification.verification_id.clone())
                         .collect::<BTreeSet<_>>()
                 })
@@ -4010,7 +4070,10 @@ fn build_api_contract_review_matrix(
                         result
                             .verification_results
                             .iter()
-                            .filter(|verification| verification.status == "passed")
+                            .filter(|verification| {
+                                verification.status == "passed"
+                                    && verification_is_traceable(verification)
+                            })
                             .map(|verification| verification.verification_id.clone())
                             .collect::<BTreeSet<_>>()
                     })
@@ -4098,7 +4161,9 @@ fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
     result
         .verification_results
         .iter()
-        .filter(|verification| verification.status == "passed")
+        .filter(|verification| {
+            verification.status == "passed" && verification_is_traceable(verification)
+        })
         .map(|verification| {
             json!({
                 "verificationId": verification.verification_id,
@@ -4236,7 +4301,12 @@ fn build_frontend_quality_review_matrix(
                 .collect::<BTreeSet<_>>();
             let passed_browser_check_ids = task_results
                 .iter()
-                .flat_map(|result| result.verification_results.iter())
+                .flat_map(|result| {
+                    result
+                        .verification_results
+                        .iter()
+                        .filter(|verification| verification_is_traceable(verification))
+                })
                 .flat_map(|verification| verification.browser_checks.iter())
                 .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
                 .map(|check| check.check_id.clone())

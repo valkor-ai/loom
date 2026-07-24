@@ -882,10 +882,10 @@ fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
                 .get("currentFrontendExperienceRef")
                 .and_then(Value::as_str)
         })
-        .unwrap_or_default();
-    json!({
-        "brainstormFrontendExperienceRef": authority_ref
-    })
+        .filter(|reference| !reference.trim().is_empty());
+    authority_ref
+        .map(|reference| json!({"brainstormFrontendExperienceRef": reference}))
+        .unwrap_or_else(|| json!({}))
 }
 
 fn build_allowed_refs(planning_contract: &PlanningGenerationContract) -> Value {

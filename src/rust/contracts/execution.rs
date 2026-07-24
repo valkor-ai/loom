@@ -399,6 +399,30 @@ pub struct TaskPlanBlockedReason {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskPlanGroupProposalAgentWritable {
+    pub group_id: String,
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDefinitionProposalAgentWritable {
+    pub proposal_id: String,
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_kind_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanOutlineCandidateAgentWritable {
     #[serde(default)]
     #[schemars(skip)]
@@ -417,7 +441,7 @@ pub struct TaskPlanOutlineCandidateAgentWritable {
     #[schemars(skip)]
     pub task_plan_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub groups: Vec<TaskPlanGroup>,
+    pub groups: Vec<TaskPlanGroupProposalAgentWritable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
     #[serde(default)]
@@ -441,9 +465,9 @@ pub struct TaskPlanGroupCandidateAgentWritable {
     #[schemars(skip)]
     pub phase_id: String,
     pub status: String,
-    pub group: TaskPlanGroup,
+    pub group: TaskPlanGroupProposalAgentWritable,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<TaskDefinition>,
+    pub tasks: Vec<TaskDefinitionProposalAgentWritable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
     #[serde(default)]

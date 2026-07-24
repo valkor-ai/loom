@@ -10,10 +10,7 @@ pub(crate) fn taskplan_outline_result_template() -> Value {
             "groupId": "group-current-capability",
             "title": "Current capability group",
             "objective": "Deliver one taskable current-phase capability slice.",
-            "dependsOn": [],
-            "scopeRefs": ["allowedRefs.scopeRefs item"],
-            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-            "taskIds": ["task-current-001"]
+            "dependsOn": []
         }],
         "blockedReasons": []
     })
@@ -26,53 +23,15 @@ pub(crate) fn taskplan_group_result_template() -> Value {
             "groupId": "group-current-capability",
             "title": "Current capability group",
             "objective": "Deliver one taskable current-phase capability slice.",
-            "dependsOn": [],
-            "scopeRefs": ["allowedRefs.scopeRefs item"],
-            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-            "taskIds": ["task-current-001"]
+            "dependsOn": []
         },
         "tasks": [{
-            "taskId": "task-current-001",
-            "groupId": "group-current-capability",
+            "proposalId": "task-current-001",
             "title": "",
-            "taskKind": "feature_increment",
-            "implementationActions": ["create_or_update_business_rule"],
             "objective": "",
-            "dependsOn": [],
-            "scopeRefs": ["allowedRefs.scopeRefs item"],
-            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-            "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"],
-            "writeBoundary": {
-                "forbiddenPaths": [".loom"],
-                "artifactRefs": {
-                    "modules": [],
-                    "entities": [],
-                    "interfaces": [],
-                    "userFlows": [],
-                    "stateMachines": [],
-                    "decisions": [],
-                    "nfrs": [],
-                    "risks": []
-                }
-            },
-            "verificationIntents": [{
-                "verificationId": "verify-task-current-001",
-                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"],
-                "behavior": "",
-                "preferredEvidence": ["automated_test"],
-                "acceptableEvidence": ["automated_test", "manual_command_output", "static_check"]
-            }],
-            "conceptRefs": ["contextProjection.requirementDetailTransfer.conceptRefs item"],
-            "conceptResponsibilities": [{
-                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
-                "responsibility": "How this task preserves or implements that concept."
-            }],
-            "conceptVerificationIntents": [{
-                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
-                "evidenceType": "static_check",
-                "intent": "How verification will prove this task preserved or implemented that concept."
-            }]
+            "description": "Optional concise semantic boundary for this task.",
+            "taskKindHint": "feature_increment",
+            "dependsOn": []
         }],
         "blockedReasons": []
     })
@@ -185,17 +144,6 @@ pub(crate) fn task_result_template_with_code_quality(
             result
         })
         .collect::<Vec<_>>();
-    let requirement_detail_evidence = task
-        .requirement_detail_refs
-        .iter()
-        .map(|_| {
-            json!({
-                "status": "not_verified",
-                "evidenceRefs": [],
-                "summary": ""
-            })
-        })
-        .collect::<Vec<_>>();
     let implementation_obligation_results = task
         .implementation_obligations
         .iter()
@@ -226,7 +174,6 @@ pub(crate) fn task_result_template_with_code_quality(
             "notes": []
         },
         "notes": [],
-        "requirementDetailEvidence": requirement_detail_evidence,
         "blockedReasons": []
     });
     let Some(object) = template.as_object_mut() else {
@@ -318,7 +265,6 @@ pub(crate) fn task_result_contract_read_fields(task: &TaskDefinition) -> Vec<&'s
         "outputContract.schemaShape.properties.failure",
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
         "outputContract.blockedReasonOptions",
@@ -417,14 +363,6 @@ pub(crate) fn task_result_schema_shape(
         }),
     );
     properties.insert("notes".to_string(), json!(["string"]));
-    properties.insert(
-        "requirementDetailEvidence".to_string(),
-        json!([{
-            "status": "satisfied | partial | not_verified",
-            "evidenceRefs": ["project-relative evidence ref"],
-            "summary": "string"
-        }]),
-    );
     properties.insert(
         "implementationObligationResults".to_string(),
         json!([{
@@ -577,7 +515,6 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
         "failure",
         "executionContinuity",
         "notes",
-        "requirementDetailEvidence",
         "blockedReasons",
     ];
     if frontend_self_check_applies(task) {

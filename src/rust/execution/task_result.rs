@@ -229,6 +229,7 @@ where
         &result,
         &task,
         browser_profile.as_ref(),
+        &current_task_plan.engineering_quality_requirements,
         &code_quality_requirements,
         &required_top_level_fields,
         &blocked_output,
@@ -431,6 +432,7 @@ fn validate_result(
     result: &TaskResult,
     task: &TaskDefinition,
     browser_profile: Option<&BrowserVerificationProfile>,
+    engineering_quality_requirements: &[contracts::EngineeringQualityRequirement],
     code_quality_requirements: &[CodeQualityRequirement],
     required_top_level_fields: &[String],
     blocked_output: &Value,
@@ -495,6 +497,13 @@ fn validate_result(
     validate_verification_results(result, task, &mut issues);
     validate_verification_provenance(project_root, result, &mut issues);
     validate_implementation_obligation_results(project_root, result, task, &mut issues);
+    validate_stack_conformance(
+        project_root,
+        result,
+        task,
+        engineering_quality_requirements,
+        &mut issues,
+    );
     validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
@@ -650,7 +659,6 @@ fn task_result_required_field_applies_to_status(field: &str, status: &TaskResult
             | "architectureQualityEvidence"
             | "apiContractEvidence"
             | "codeQualityEvidence"
-            | "requirementDetailEvidence"
     )
 }
 
@@ -1893,68 +1901,82 @@ fn normalize_requirement_detail_evidence_machine_fields(
     task: &TaskDefinition,
     detail_ids: &[String],
 ) {
-    let raw_items = object
-        .get("requirementDetailEvidence")
+    let verification_values = object
+        .get("verificationResults")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut used = BTreeSet::new();
-    let mut normalized = Vec::new();
-    for (index, detail_id) in detail_ids.iter().enumerate() {
-        let raw = ordered_machine_item(&raw_items, index, "detailId", detail_id, &mut used, false);
-        let raw_object = raw.as_object();
-        let mut item = serde_json::Map::new();
-        item.insert("detailId".to_string(), json!(detail_id));
-        item.insert(
-            "status".to_string(),
-            raw_object
-                .and_then(|value| value.get("status"))
-                .filter(|value| value.as_str().is_some_and(|status| !status.is_empty()))
-                .cloned()
-                .unwrap_or_else(|| json!("not_verified")),
-        );
-        let detail_verification_ids = verification_ids_for_detail_with_fallback(task, detail_id);
-        if !detail_verification_ids.is_empty() {
-            item.insert(
-                "verificationIds".to_string(),
-                json!(detail_verification_ids),
-            );
-        } else if !item
-            .get("verificationIds")
-            .and_then(Value::as_array)
-            .is_some()
-        {
-            item.insert(
-                "verificationIds".to_string(),
-                raw_object
-                    .and_then(|value| value.get("verificationIds"))
-                    .filter(|value| value.is_array())
-                    .cloned()
-                    .unwrap_or_else(|| json!([])),
-            );
-            normalize_string_array_field(&mut item, "verificationIds");
-        }
-        item.insert(
-            "evidenceRefs".to_string(),
-            raw_object
-                .and_then(|value| value.get("evidenceRefs"))
-                .filter(|value| value.is_array())
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-        );
-        normalize_string_array_field(&mut item, "evidenceRefs");
-        item.insert(
-            "summary".to_string(),
-            raw_object
-                .and_then(|value| value.get("summary"))
-                .filter(|value| value.as_str().is_some_and(|summary| !summary.is_empty()))
-                .cloned()
-                .unwrap_or_else(|| {
-                    json!("Requirement detail evidence was not reported before TaskResult submission.")
-                }),
-        );
-        normalized.push(Value::Object(item));
-    }
+    let normalized = detail_ids
+        .iter()
+        .map(|detail_id| {
+            let verification_ids = task
+                .verification_intents
+                .iter()
+                .filter(|intent| {
+                    intent
+                        .requirement_detail_refs
+                        .iter()
+                        .any(|id| id == detail_id)
+                })
+                .map(|intent| intent.verification_id.clone())
+                .collect::<Vec<_>>();
+            let evidence = verification_values
+                .iter()
+                .filter(|verification| {
+                    verification
+                        .get("verificationId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| verification_ids.iter().any(|expected| expected == id))
+                })
+                .collect::<Vec<_>>();
+            let status = if !evidence.is_empty()
+                && evidence.iter().all(|verification| {
+                    verification.get("status").and_then(Value::as_str) == Some("passed")
+                }) {
+                "satisfied"
+            } else if evidence.iter().any(|verification| {
+                matches!(
+                    verification.get("status").and_then(Value::as_str),
+                    Some("failed" | "blocked" | "inconclusive")
+                )
+            }) {
+                "partial"
+            } else {
+                "not_verified"
+            };
+            let evidence_refs = evidence
+                .iter()
+                .flat_map(|verification| {
+                    verification
+                        .pointer("/provenance/evidenceRefs")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .chain(
+                            verification
+                                .pointer("/provenance/changedFiles")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten(),
+                        )
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<BTreeSet<_>>();
+            let summary = evidence
+                .iter()
+                .filter_map(|verification| verification.get("summary").and_then(Value::as_str))
+                .find(|summary| !summary.trim().is_empty())
+                .unwrap_or("Evidence is derived from the task-scoped verification results.");
+            json!({
+                "detailId": detail_id,
+                "status": status,
+                "verificationIds": verification_ids,
+                "evidenceRefs": evidence_refs.into_iter().collect::<Vec<_>>(),
+                "summary": summary
+            })
+        })
+        .collect::<Vec<_>>();
     object.insert(
         "requirementDetailEvidence".to_string(),
         Value::Array(normalized),
@@ -2657,6 +2679,106 @@ fn validate_obligation_evidence_refs(
     }
 }
 
+fn validate_stack_conformance(
+    project_root: &Path,
+    result: &TaskResult,
+    task: &TaskDefinition,
+    engineering_quality_requirements: &[contracts::EngineeringQualityRequirement],
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(requirement) = engineering_quality_requirements.iter().find(|requirement| {
+        requirement
+            .applies_to_task_ids
+            .iter()
+            .any(|id| id == &task.task_id)
+    }) else {
+        return;
+    };
+    let Some(persistence_obligation) = task
+        .implementation_obligations
+        .iter()
+        .find(|obligation| obligation.kind == "persistence_mapping")
+    else {
+        return;
+    };
+    let files = result
+        .changed_files
+        .iter()
+        .filter_map(|file| from_project_relative(project_root, file).ok())
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<Vec<_>>();
+    let content = files.join("\n").to_ascii_lowercase();
+    if content.contains("inmemory")
+        || content.contains("in_memory")
+        || content.contains("hashmap<")
+        || content.contains("hashmap::")
+    {
+        issues.push(issue(
+            "TASK_RESULT_STACK_CONFORMANCE_INVALID",
+            "changedFiles",
+            "A task with an accepted durable persistence contract must not complete with an in-memory HashMap repository or equivalent transient store.",
+        ));
+    }
+
+    let required_signals = requirement
+        .stack_signals
+        .iter()
+        .filter(|(key, _)| matches!(key.as_str(), "persistence" | "dataAccess"))
+        .map(|(key, value)| (key.clone(), value.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    let missing_signals = required_signals
+        .iter()
+        .filter_map(|(key, value)| {
+            let markers = if key == "dataAccess" {
+                if value.contains("mybatis") {
+                    vec!["mybatis", "basemapper", "@tableid"]
+                } else if value.contains("jpa") || value.contains("hibernate") {
+                    vec![
+                        "jakarta.persistence",
+                        "javax.persistence",
+                        "@entity",
+                        "jparepository",
+                    ]
+                } else if value.contains("prisma") {
+                    vec!["prisma"]
+                } else if value.contains("sqlalchemy") || value.contains("sqlmodel") {
+                    vec!["sqlalchemy", "sqlmodel"]
+                } else if value.contains("entity framework") || value.contains("ef core") {
+                    vec!["entityframework", "dbcontext"]
+                } else if value.contains("gorm") {
+                    vec!["gorm"]
+                } else {
+                    vec!["repository", "query", "sql"]
+                }
+            } else if value.contains("sqlite") {
+                vec!["sqlite", "jdbc:sqlite"]
+            } else if value.contains("postgres") {
+                vec!["postgres", "postgresql"]
+            } else if value.contains("mysql") {
+                vec!["mysql"]
+            } else {
+                Vec::new()
+            };
+            if markers.is_empty() || markers.iter().any(|marker| content.contains(*marker)) {
+                None
+            } else {
+                Some(format!("{key}={value}"))
+            }
+        })
+        .collect::<Vec<_>>();
+    if !missing_signals.is_empty() {
+        issues.push(issue(
+            "TASK_RESULT_STACK_CONFORMANCE_INVALID",
+            "changedFiles",
+            &format!(
+                "Persistence obligation {} must show accepted provider evidence for {} in changed source or configuration files.",
+                persistence_obligation.obligation_id,
+                missing_signals.join(", ")
+            ),
+        ));
+    }
+}
+
 pub(crate) fn is_generated_output_path(path: &str) -> bool {
     path.split('/').any(|part| {
         matches!(
@@ -2793,33 +2915,6 @@ fn required_requirement_detail_ids(task: &TaskDefinition) -> Vec<String> {
         }
     }
     required_detail_ids
-}
-
-fn verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
-    task.verification_intents
-        .iter()
-        .filter(|intent| {
-            intent
-                .requirement_detail_refs
-                .iter()
-                .any(|id| id == detail_id)
-        })
-        .map(|intent| intent.verification_id.clone())
-        .collect()
-}
-
-fn verification_ids_for_detail_with_fallback(
-    task: &TaskDefinition,
-    detail_id: &str,
-) -> Vec<String> {
-    let direct = verification_ids_for_detail(task, detail_id);
-    if !direct.is_empty() {
-        return direct;
-    }
-    if task.verification_intents.len() == 1 {
-        return vec![task.verification_intents[0].verification_id.clone()];
-    }
-    Vec::new()
 }
 
 fn validate_concept_evidence(
@@ -4527,6 +4622,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
                         &result,
                         &hydrated_task,
                         browser_profile.as_ref(),
+                        &current_task_plan.engineering_quality_requirements,
                         &code_quality_requirements,
                         &required_top_level_fields,
                         &blocked_output,
@@ -4736,7 +4832,6 @@ fn materialize_task_result_repair(
         "outputContract.schemaShape.properties.failure",
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
     ];
@@ -4806,7 +4901,7 @@ fn materialize_task_result_repair(
             "resultRules": [
                 "The replacement must be a TaskResult JSON, not a repair summary.",
                 "implementationObligationResults must contain exactly one entry for each canonical obligation in the supplied order; Loom derives obligationId and verificationIds.",
-                "Runtime, frontend, requirement detail, and concept evidence must follow the original output contract."
+                "Runtime, frontend, and concept evidence must follow the original output contract; requirement-detail evidence is derived by Loom from verification results."
             ]
         },
         "requestReadPlan": {
@@ -6056,17 +6151,190 @@ fn merge_submitted_task_result_fields(
     };
     let conflicted_fields = issue_top_level_fields(issues);
     for (key, submitted_value) in submitted_object {
+        if key == "requirementDetailEvidence" {
+            continue;
+        }
         if conflicted_fields.contains(key.as_str()) {
             continue;
         }
         if !template_object.contains_key(key) {
             continue;
         }
-        if keeps_template_array_shape(template_object.get(key), submitted_value) {
+        let Some(agent_value) = project_agent_owned_task_result_field(key, submitted_value) else {
+            continue;
+        };
+        if keeps_template_array_shape(template_object.get(key), &agent_value) {
             continue;
         }
-        template_object.insert(key.clone(), submitted_value.clone());
+        template_object.insert(key.clone(), agent_value);
     }
+}
+
+fn project_agent_owned_task_result_field(key: &str, value: &Value) -> Option<Value> {
+    if key == "frontendExperienceSelfCheck" {
+        let mut projected =
+            compact_object_fields(value, &["status", "dataBinding", "evidenceRefs"]);
+        if let Some(binding) = projected.get_mut("dataBinding") {
+            *binding = compact_object_fields(binding, &["mode", "knownGaps"]);
+        }
+        return Some(projected);
+    }
+    if key == "frontendQualitySelfCheck" {
+        let mut projected = compact_object_fields(
+            value,
+            &[
+                "status",
+                "evidenceRefs",
+                "surfaceRegionEvidence",
+                "surfaceActionEvidence",
+                "surfaceStateEvidence",
+                "surfaceQualityRuleEvidence",
+                "contentBoundaryEvidence",
+                "referencePlanFilesChecked",
+                "designTokenEvidence",
+                "knownGaps",
+            ],
+        );
+        for field in [
+            "surfaceRegionEvidence",
+            "surfaceActionEvidence",
+            "surfaceStateEvidence",
+            "surfaceQualityRuleEvidence",
+        ] {
+            if let Some(items) = projected.get_mut(field) {
+                *items = compact_array_items(items, &["status", "files", "evidence"]);
+            }
+        }
+        if let Some(content) = projected.get_mut("contentBoundaryEvidence") {
+            *content = compact_object_fields(
+                content,
+                &[
+                    "checked",
+                    "allowedContentExamples",
+                    "forbiddenContentViolations",
+                    "evidence",
+                ],
+            );
+        }
+        if let Some(tokens) = projected.get_mut("designTokenEvidence") {
+            *tokens = compact_object_fields(
+                tokens,
+                &[
+                    "strategyUsed",
+                    "templateIdUsed",
+                    "tokenAssetFiles",
+                    "tokenConsumerFiles",
+                    "existingTokenSystemReused",
+                    "parallelTokenSystemCreated",
+                    "mergeSummary",
+                ],
+            );
+        }
+        return Some(projected);
+    }
+    if key == "runtimeDeliveryEvidence" {
+        let mut projected = compact_object_fields(
+            value,
+            &[
+                "codeLevelChecks",
+                "commandsRun",
+                "unverifiedItems",
+                "runtimeProbeCleanup",
+            ],
+        );
+        if let Some(checks) = projected.get_mut("codeLevelChecks") {
+            *checks = compact_array_items(checks, &["status", "evidence"]);
+        }
+        return Some(projected);
+    }
+    if !matches!(
+        key,
+        "verificationResults"
+            | "implementationObligationResults"
+            | "conceptEvidence"
+            | "architectureQualityEvidence"
+            | "apiContractEvidence"
+            | "codeQualityEvidence"
+    ) {
+        return Some(value.clone());
+    }
+    let items = value.as_array()?;
+    let projected = match key {
+        "verificationResults" => items
+            .iter()
+            .map(|item| {
+                let mut item = compact_object_fields(
+                    item,
+                    &[
+                        "status",
+                        "evidenceType",
+                        "summary",
+                        "provenance",
+                        "browserChecks",
+                    ],
+                );
+                if let Some(provenance) = item.get_mut("provenance") {
+                    *provenance = compact_object_fields(
+                        provenance,
+                        &[
+                            "evidenceRefs",
+                            "changedFiles",
+                            "testCaseRefs",
+                            "command",
+                            "exitCode",
+                        ],
+                    );
+                }
+                if let Some(checks) = item.get_mut("browserChecks") {
+                    *checks = compact_array_items(
+                        checks,
+                        &[
+                            "status",
+                            "command",
+                            "attempts",
+                            "artifactRefs",
+                            "observedOutcome",
+                            "blockedReason",
+                        ],
+                    );
+                }
+                item
+            })
+            .collect::<Vec<_>>(),
+        "implementationObligationResults" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "evidenceRefs", "summary"]))
+            .collect::<Vec<_>>(),
+        "conceptEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["evidenceType", "refs", "summary"]))
+            .collect::<Vec<_>>(),
+        "architectureQualityEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "summary"]))
+            .collect::<Vec<_>>(),
+        "apiContractEvidence" => items
+            .iter()
+            .map(|item| compact_object_fields(item, &["status", "knownGaps", "summary"]))
+            .collect::<Vec<_>>(),
+        "codeQualityEvidence" => items
+            .iter()
+            .map(|item| {
+                compact_object_fields(
+                    item,
+                    &[
+                        "status",
+                        "referenceGroupsChecked",
+                        "referenceFilesChecked",
+                        "knownGaps",
+                        "summary",
+                    ],
+                )
+            })
+            .collect::<Vec<_>>(),
+        _ => unreachable!("known task result field was not projected"),
+    };
+    Some(Value::Array(projected))
 }
 
 fn issue_top_level_fields(issues: &[delivery_core::RepairIssue]) -> BTreeSet<&str> {

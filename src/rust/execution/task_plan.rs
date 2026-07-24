@@ -12,8 +12,9 @@ use contracts::{
     BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
     BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
     EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
-    TaskGroupRunState, TaskImplementationObligation, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
+    TaskDefinitionProposalAgentWritable, TaskGroupRunState, TaskImplementationObligation, TaskKind,
+    TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanGroupProposalAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
     TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
     TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
     TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
@@ -574,9 +575,6 @@ fn taskplan_candidate_contract_fields(
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
-        "enumRefs.implementationAction",
-        "enumRefs.verificationEvidence",
-        "enumRefs.uiQuality",
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
@@ -812,8 +810,12 @@ where
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
-    let mut groups = Vec::new();
-    let mut tasks = Vec::new();
+    let mut group_candidates = Vec::<(
+        TaskPlanGroupProposalAgentWritable,
+        Vec<TaskDefinitionProposalAgentWritable>,
+    )>::new();
+    let mut proposal_ids = BTreeSet::new();
+    let mut repair_target = outline_ref.clone();
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let mut group_value = read_project_json_value(root, &group_file)?;
@@ -823,7 +825,7 @@ where
             &delivery_id,
             &phase_id,
         );
-        let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
+        let candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
             "TASKPLAN_GROUP_SCHEMA_INVALID",
@@ -834,11 +836,25 @@ where
                 return Ok(repairable(input, authorized, group_file, vec![issue], mode));
             }
         };
-        normalize_taskplan_write_boundaries(&mut candidate.tasks, &allowed_refs);
-        issues.extend(validate_group_candidate(&candidate, group));
-        groups.push(candidate.group.clone());
-        tasks.extend(candidate.tasks);
+        let group_issues = validate_group_candidate(&candidate, group);
+        if !group_issues.is_empty() {
+            repair_target = group_file.clone();
+        }
+        issues.extend(group_issues);
+        for task in &candidate.tasks {
+            if !proposal_ids.insert(task.proposal_id.clone()) {
+                repair_target = group_file.clone();
+                issues.push(issue(
+                    "DUPLICATE_TASK_PROPOSAL_ID",
+                    "tasks[].proposalId",
+                    "Task proposal ids must be unique across the current TaskPlan generation.",
+                    Some(&group.group_id),
+                ));
+            }
+        }
+        group_candidates.push((candidate.group, candidate.tasks));
     }
+    let (mut groups, mut tasks) = materialize_task_plan_proposals(&group_candidates);
     let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
     let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
     let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
@@ -882,7 +898,9 @@ where
         // with no eligible owner is reported only as a generic preflight
         // failure and the agent cannot repair the missing assignment.
         issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
-        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+        issues.extend(validate_frontend_task_presence(&tasks, &aac));
+        issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
+        return Ok(repairable(input, authorized, repair_target, issues, mode));
     }
 
     issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
@@ -896,7 +914,7 @@ where
         aac.runtime_delivery.as_ref(),
     ));
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+        return Ok(repairable(input, authorized, repair_target, issues, mode));
     }
     normalize_taskplan_write_boundaries(&mut tasks, &allowed_refs);
     let now = state::store::now_string();
@@ -1217,12 +1235,31 @@ fn validate_outline(
             Some("outline"),
         ));
     }
+    let mut group_ids = BTreeSet::new();
+    for group in &outline.groups {
+        if group.group_id.trim().is_empty() || !group_ids.insert(group.group_id.clone()) {
+            issues.push(issue(
+                "GROUP_PROPOSAL_ID_INVALID",
+                "outline.groups[].groupId",
+                "Each group must have a unique non-empty proposal id.",
+                Some("outline"),
+            ));
+        }
+        if group.title.trim().is_empty() || group.objective.trim().is_empty() {
+            issues.push(issue(
+                "GROUP_PROPOSAL_CONTENT_MISSING",
+                "outline.groups[]",
+                "Each group proposal must include a title and objective.",
+                Some(&group.group_id),
+            ));
+        }
+    }
     issues
 }
 
 fn validate_group_candidate(
     candidate: &TaskPlanGroupCandidateAgentWritable,
-    expected: &TaskPlanGroup,
+    expected: &TaskPlanGroupProposalAgentWritable,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let target = Some(candidate.group.group_id.as_str());
@@ -1242,59 +1279,185 @@ fn validate_group_candidate(
             target,
         ));
     }
-    let task_ids = candidate
-        .tasks
-        .iter()
-        .map(|task| task.task_id.clone())
-        .collect::<Vec<_>>();
-    if task_ids != expected.task_ids {
-        issues.push(issue(
-            "TASK_IDS_MISMATCH",
-            "group.taskIds",
-            "TaskPlan group taskIds must equal the task ids in its group file.",
-            target,
-        ));
-    }
     for task in &candidate.tasks {
-        if task.group_id != candidate.group.group_id {
-            issues.push(issue(
-                "TASK_GROUP_ID_MISMATCH",
-                "tasks[].groupId",
-                "Each task.groupId must equal its group.groupId.",
-                target,
-            ));
-        }
-        if !task
-            .write_boundary
-            .forbidden_paths
-            .iter()
-            .any(|path| path == ".loom")
+        if task.proposal_id.trim().is_empty()
+            || task.title.trim().is_empty()
+            || task.objective.trim().is_empty()
         {
             issues.push(issue(
-                "WRITE_BOUNDARY_MISSING_LOOM",
-                "tasks[].writeBoundary.forbiddenPaths",
-                "Each task must protect .loom from source edits.",
+                "TASK_PROPOSAL_CONTENT_MISSING",
+                "tasks[]",
+                "Each task proposal must include a unique proposalId, title, and objective.",
                 target,
             ));
         }
-        if task.verification_intents.is_empty() {
+        if task
+            .task_kind_hint
+            .as_deref()
+            .is_some_and(|hint| parse_task_kind_hint(hint).is_none())
+        {
             issues.push(issue(
-                "VERIFICATION_INTENTS_REQUIRED",
-                "tasks[].verificationIntents",
-                "Each task must include verification intents.",
-                target,
-            ));
-        }
-        if !task.implementation_obligations.is_empty() {
-            issues.push(issue(
-                "IMPLEMENTATION_OBLIGATIONS_MCP_OWNED",
-                "tasks[].implementationObligations",
-                "TaskPlan candidates must not author implementationObligations; Loom derives them from accepted contracts and task ownership during acceptance.",
+                "TASK_KIND_HINT_INVALID",
+                "tasks[].taskKindHint",
+                "taskKindHint must be one of the TaskKind enum values; MCP derives the canonical task kind and actions from it.",
                 target,
             ));
         }
     }
     issues
+}
+
+fn materialize_task_plan_proposals(
+    candidates: &[(
+        TaskPlanGroupProposalAgentWritable,
+        Vec<TaskDefinitionProposalAgentWritable>,
+    )],
+) -> (Vec<TaskPlanGroup>, Vec<TaskDefinition>) {
+    let mut group_ids = BTreeMap::new();
+    let mut used_group_ids = BTreeSet::<String>::new();
+    for (index, (group, _)) in candidates.iter().enumerate() {
+        let proposal_id = if group.group_id.trim().is_empty() {
+            format!("proposal-{index}")
+        } else {
+            group.group_id.clone()
+        };
+        let preferred = normalized_identifier(&proposal_id);
+        let canonical =
+            next_unique_identifier(&preferred, used_group_ids.iter().map(String::as_str));
+        used_group_ids.insert(canonical.clone());
+        group_ids.insert(group.group_id.clone(), canonical);
+    }
+
+    let mut task_ids = BTreeMap::new();
+    let mut used_task_ids = BTreeSet::<String>::new();
+    for (_, proposals) in candidates {
+        for (index, proposal) in proposals.iter().enumerate() {
+            let proposal_id = if proposal.proposal_id.trim().is_empty() {
+                format!("proposal-{index}")
+            } else {
+                proposal.proposal_id.clone()
+            };
+            let preferred = normalized_identifier(&proposal_id);
+            let canonical =
+                next_unique_identifier(&preferred, used_task_ids.iter().map(String::as_str));
+            used_task_ids.insert(canonical.clone());
+            task_ids.insert(proposal_id, canonical);
+        }
+    }
+
+    let groups = candidates
+        .iter()
+        .map(|(group, proposals)| {
+            let group_id = group_ids
+                .get(&group.group_id)
+                .cloned()
+                .unwrap_or_else(|| "group-unassigned".to_string());
+            TaskPlanGroup {
+                group_id,
+                title: group.title.clone(),
+                objective: group.objective.clone(),
+                depends_on: group
+                    .depends_on
+                    .iter()
+                    .filter_map(|dependency| group_ids.get(dependency).cloned())
+                    .collect(),
+                scope_refs: Vec::new(),
+                acceptance_refs: Vec::new(),
+                task_ids: proposals
+                    .iter()
+                    .filter_map(|proposal| task_ids.get(&proposal.proposal_id).cloned())
+                    .collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut tasks = Vec::new();
+    for (group, proposals) in candidates {
+        let canonical_group_id = group_ids
+            .get(&group.group_id)
+            .cloned()
+            .unwrap_or_else(|| "group-unassigned".to_string());
+        for proposal in proposals {
+            let proposal_id = proposal.proposal_id.clone();
+            let task_id = task_ids.get(&proposal_id).cloned().unwrap_or_else(|| {
+                format!(
+                    "task-{}-unassigned",
+                    normalized_identifier(&canonical_group_id)
+                )
+            });
+            let task_kind = proposal
+                .task_kind_hint
+                .as_deref()
+                .and_then(parse_task_kind_hint)
+                .unwrap_or(TaskKind::FeatureIncrement);
+            let objective = if proposal.objective.trim().is_empty() {
+                proposal.description.clone()
+            } else {
+                proposal.objective.clone()
+            };
+            tasks.push(TaskDefinition {
+                task_id,
+                group_id: canonical_group_id.clone(),
+                title: proposal.title.clone(),
+                task_kind,
+                implementation_actions: implementation_actions_for_task_kind(task_kind),
+                implementation_obligations: Vec::new(),
+                objective,
+                depends_on: proposal
+                    .depends_on
+                    .iter()
+                    .filter_map(|dependency| task_ids.get(dependency).cloned())
+                    .collect(),
+                scope_refs: Vec::new(),
+                acceptance_refs: Vec::new(),
+                requirement_detail_refs: Vec::new(),
+                write_boundary: TaskWriteBoundary {
+                    forbidden_paths: vec![".loom".to_string()],
+                    artifact_refs: TaskArtifactRefs::default(),
+                },
+                verification_intents: Vec::new(),
+                concept_refs: Vec::new(),
+                concept_responsibilities: Vec::new(),
+                concept_verification_intents: Vec::new(),
+                frontend_experience_requirement: None,
+                runtime_delivery_requirement: None,
+                engineering_quality_requirement_refs: Vec::new(),
+                architecture_quality_requirement_refs: Vec::new(),
+                api_contract_requirement_refs: Vec::new(),
+                code_quality_requirement_refs: Vec::new(),
+            });
+        }
+    }
+    (groups, tasks)
+}
+
+fn parse_task_kind_hint(value: &str) -> Option<TaskKind> {
+    serde_json::from_value(json!(value.trim())).ok()
+}
+
+fn implementation_actions_for_task_kind(task_kind: TaskKind) -> Vec<ImplementationAction> {
+    match task_kind {
+        TaskKind::DataModelIncrement => vec![
+            ImplementationAction::CreateOrUpdateEntity,
+            ImplementationAction::CreateOrUpdatePersistence,
+            ImplementationAction::CreateEntityRepository,
+        ],
+        TaskKind::InterfaceIncrement => vec![ImplementationAction::CreateOrUpdateInterface],
+        TaskKind::UiFlowIncrement | TaskKind::FrontendExperience => vec![
+            ImplementationAction::CreateOrUpdateUiFlow,
+            ImplementationAction::ImplementFrontendExperienceContract,
+        ],
+        TaskKind::IntegrationIncrement => vec![ImplementationAction::WireReferenceInApiOrUi],
+        TaskKind::RuntimeDelivery | TaskKind::RuntimeDeliveryClosure => {
+            vec![ImplementationAction::ImplementRuntimeDeliveryContract]
+        }
+        TaskKind::BrowserQualityClosure | TaskKind::VerificationIncrement => {
+            vec![ImplementationAction::AddOrUpdateTests]
+        }
+        TaskKind::ConfigurationSupport => vec![ImplementationAction::AddOrUpdateConfig],
+        TaskKind::RefactorSupport => vec![ImplementationAction::RefactorSupportingCode],
+        TaskKind::FeatureIncrement => vec![ImplementationAction::CreateOrUpdateBusinessRule],
+    }
 }
 
 fn validate_taskplan_graph(
@@ -1681,7 +1844,181 @@ fn canonicalize_task_ownership(
     canonicalize_acceptance_owners(tasks, pgc);
     normalize_artifact_refs(tasks, aac);
     canonicalize_workflow_closure_owners(tasks, aac);
+    derive_api_interface_ownership(tasks, aac);
+    derive_consumed_interface_ownership(tasks, aac);
     canonicalize_group_ownership(groups, tasks);
+}
+
+fn derive_api_interface_ownership(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let interfaces = aac
+        .interfaces
+        .iter()
+        .filter(|interface| is_http_api_interface(interface))
+        .filter_map(|interface| {
+            string_at(interface, "interfaceId").map(|interface_id| (interface_id, interface))
+        })
+        .collect::<Vec<_>>();
+    if interfaces.is_empty() {
+        return;
+    }
+
+    let owner_indices = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task_can_own_api_interface(task))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if owner_indices.is_empty() {
+        return;
+    }
+
+    for (interface_id, interface) in interfaces {
+        let interface_modules = string_array_at(interface, "moduleRefs")
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut candidates = owner_indices
+            .iter()
+            .copied()
+            .filter_map(|index| {
+                let task = &tasks[index];
+                let module_match = task
+                    .write_boundary
+                    .artifact_refs
+                    .modules
+                    .iter()
+                    .filter(|module| interface_modules.contains(*module))
+                    .count() as u32;
+                Some((
+                    index,
+                    module_match,
+                    task_owner_rank(task),
+                    task.task_id.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let matching = candidates
+            .iter()
+            .filter(|(_, module_match, _, _)| *module_match > 0)
+            .map(|(index, _, _, _)| *index)
+            .collect::<BTreeSet<_>>();
+        if !matching.is_empty() {
+            candidates.retain(|(index, _, _, _)| matching.contains(index));
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        let Some((owner_index, _, _, _)) = candidates.first() else {
+            continue;
+        };
+        push_unique(
+            &mut tasks[*owner_index].write_boundary.artifact_refs.interfaces,
+            interface_id,
+        );
+    }
+}
+
+fn task_can_own_api_interface(task: &TaskDefinition) -> bool {
+    !task_is_frontend_task(task) && matches!(task.task_kind, TaskKind::InterfaceIncrement)
+        || (!task_is_frontend_task(task)
+            && task.implementation_actions.iter().any(|action| {
+                matches!(
+                    action,
+                    ImplementationAction::CreateOrUpdateInterface
+                        | ImplementationAction::CreateEntityCrud
+                )
+            }))
+}
+
+fn derive_consumed_interface_ownership(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let accepted_interfaces = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| string_at(interface, "interfaceId"))
+        .collect::<BTreeSet<_>>();
+    if accepted_interfaces.is_empty() {
+        return;
+    }
+
+    let closure_interfaces = workflow_closure_requirements(aac)
+        .iter()
+        .flat_map(|requirement| string_array_at(requirement, "interfaceRefs"))
+        .collect::<BTreeSet<_>>();
+    let frontend_interfaces = aac
+        .frontend_experience
+        .as_ref()
+        .map(|frontend| {
+            array_at(frontend, "operationPaths")
+                .into_iter()
+                .flat_map(|path| string_array_at(path, "interfaceRefs"))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    for task in tasks.iter_mut() {
+        if !task_can_consume_api_contract(task) {
+            continue;
+        }
+        let mut consumed = task
+            .write_boundary
+            .artifact_refs
+            .consumed_interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if task_is_frontend_task(task) {
+            if let Some(frontend) = aac.frontend_experience.as_ref() {
+                let (_, _, _, _, _, interfaces) = task_owned_frontend_ids(task, aac, frontend);
+                consumed.extend(interfaces);
+            }
+            // Frontend operation paths may describe their API binding through
+            // the structured behavior flow rather than repeating
+            // `interfaceRefs` on every path. Closure requirements are the
+            // canonical bridge for that shape.
+            consumed.extend(closure_interfaces.iter().cloned());
+            consumed.extend(frontend_interfaces.iter().cloned());
+            if consumed.is_empty() {
+                // A frontend requirement without an explicit operation-path
+                // binding still consumes the accepted phase API surface. This
+                // is a structured absence fallback, not a prose or framework
+                // keyword inference; later ownership filtering removes any
+                // interface the same task owns.
+                consumed.extend(accepted_interfaces.iter().cloned());
+            }
+        } else if matches!(
+            task.task_kind,
+            TaskKind::IntegrationIncrement
+                | TaskKind::VerificationIncrement
+                | TaskKind::BrowserQualityClosure
+        ) {
+            consumed.extend(closure_interfaces.iter().cloned());
+            if consumed.is_empty() {
+                consumed.extend(accepted_interfaces.iter().cloned());
+            }
+        }
+        let owned = task
+            .write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        task.write_boundary.artifact_refs.consumed_interfaces = consumed
+            .into_iter()
+            .filter(|interface| {
+                accepted_interfaces.contains(interface) && !owned.contains(interface)
+            })
+            .collect();
+    }
 }
 
 fn canonicalize_group_ownership(groups: &mut [TaskPlanGroup], tasks: &[TaskDefinition]) {
@@ -2087,12 +2424,7 @@ fn task_is_workflow_closure_artifact_owner(
     artifact_ref: &str,
     aac: &ArchitectureArtifactContract,
 ) -> bool {
-    if !task.frontend_experience_requirement.is_some()
-        || !task
-            .implementation_actions
-            .iter()
-            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
-    {
+    if !task_is_frontend_task(task) {
         return false;
     }
     workflow_closure_requirements(aac)
@@ -2105,16 +2437,7 @@ fn task_is_workflow_closure_artifact_owner(
                     .iter()
                     .any(|reference| reference == artifact_ref);
             (workflow_matches || interface_matches)
-                && requirement
-                    .get("workflowRef")
-                    .and_then(Value::as_str)
-                    .is_some_and(|workflow_ref| {
-                        task.write_boundary
-                            .artifact_refs
-                            .user_flows
-                            .iter()
-                            .any(|reference| reference == workflow_ref)
-                    })
+                && workflow_closure_task_scope_score(task, requirement, aac) > 0
         })
 }
 
@@ -2168,16 +2491,13 @@ fn canonicalize_workflow_closure_owners(
             .enumerate()
             .filter(|(_, task)| {
                 is_business_owner_task(task)
-                    && task.frontend_experience_requirement.is_some()
-                    && task
-                        .write_boundary
-                        .artifact_refs
-                        .user_flows
-                        .iter()
-                        .any(|reference| reference == workflow_ref)
-                    && task.implementation_actions.iter().any(|action| {
+                    && task_is_frontend_task(task)
+                    && (task.implementation_actions.iter().any(|action| {
                         matches!(action, ImplementationAction::WireReferenceInApiOrUi)
-                    })
+                    }) || matches!(
+                        task.task_kind,
+                        TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
+                    ))
             })
             .map(|(index, task)| {
                 let acceptance_match =
@@ -2192,7 +2512,10 @@ fn canonicalize_workflow_closure_owners(
                 }) as u32;
                 (
                     index,
-                    task_owner_rank(task) + acceptance_match * 10 + intent_match * 20,
+                    task_owner_rank(task)
+                        + workflow_closure_task_scope_score(task, &requirement, aac) * 100
+                        + acceptance_match * 10
+                        + intent_match * 20,
                     task.task_id.clone(),
                 )
             })
@@ -2202,6 +2525,19 @@ fn canonicalize_workflow_closure_owners(
             continue;
         };
         let owner = &mut tasks[*owner_index];
+        // Wiring a declared frontend workflow to its accepted interfaces is a
+        // canonical closure obligation. Derive the action from the AAC
+        // relationship instead of requiring the agent to duplicate it in the
+        // proposal and later repairing a valid UI task for omitting it.
+        if !owner
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+        {
+            owner
+                .implementation_actions
+                .push(ImplementationAction::WireReferenceInApiOrUi);
+        }
         push_unique(
             &mut owner.write_boundary.artifact_refs.user_flows,
             workflow_ref.to_string(),
@@ -2219,6 +2555,61 @@ fn canonicalize_workflow_closure_owners(
             }
         }
     }
+}
+
+fn workflow_closure_task_scope_score(
+    task: &TaskDefinition,
+    requirement: &Value,
+    aac: &ArchitectureArtifactContract,
+) -> u32 {
+    let workflow_ref = requirement.get("workflowRef").and_then(Value::as_str);
+    let required_interfaces = string_array_at(requirement, "interfaceRefs");
+    let required_acceptance = string_array_at(requirement, "acceptanceRefs");
+    let required_modules = string_array_at(requirement, "moduleRefs");
+    task.requirement_detail_refs
+        .iter()
+        .filter_map(|detail_id| {
+            aac.detail_coverage
+                .iter()
+                .find(|coverage| &coverage.detail_id == detail_id)
+        })
+        .map(|coverage| {
+            let mut score = 0;
+            if workflow_ref.is_some_and(|reference| {
+                coverage
+                    .artifact_refs
+                    .user_flows
+                    .iter()
+                    .any(|item| item == reference)
+            }) {
+                score += 4;
+            }
+            if coverage.artifact_refs.interfaces.iter().any(|item| {
+                required_interfaces
+                    .iter()
+                    .any(|reference| reference == item)
+            }) {
+                score += 3;
+            }
+            if task.acceptance_refs.iter().any(|item| {
+                required_acceptance
+                    .iter()
+                    .any(|reference| reference == item)
+            }) {
+                score += 2;
+            }
+            if coverage
+                .artifact_refs
+                .modules
+                .iter()
+                .any(|item| required_modules.iter().any(|reference| reference == item))
+            {
+                score += 1;
+            }
+            score
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn accepted_artifact_ref_sets(
@@ -5877,34 +6268,29 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "groupedOutputRules": [
             "First write outputContract.outlineFile.",
             "Then write one group file per outline.groups[].groupId using outputContract.groupFilePattern.",
-            "Do not write the accepted final TaskPlan artifact."
+            "Do not write the accepted final TaskPlan artifact.",
+            "The outline and group files are semantic proposals only; Loom materializes canonical task and group ids after submission."
         ],
         "scopeAndReferenceRules": [
-            "Use only refs from allowedRefs.",
+            "Use the transferred detail and architecture context to describe task intent, but do not copy scope refs, acceptance refs, artifact refs, implementation actions, verification ids, or quality fields into proposals.",
             "Do not implement deferred or excluded scope.",
             "Keep next-phase seeds in deferred scope or next-phase preview only; do not create executable tasks for them."
         ],
         "writeBoundaryRules": [
-            "Every task.writeBoundary.forbiddenPaths must include .loom.",
+            "TaskPlan proposals contain no writeBoundary. MCP creates the .loom exclusion and canonical artifact ownership after acceptance.",
             "Project source edits happen only during TaskExecution, not during TaskPlan generation."
         ],
         "verificationEvidenceRules": [
-            "verificationIntents must use enumRefs.verificationEvidence.",
-            "Each implementation task must have at least one verification intent.",
-            "Every covered current-phase detailId from the detailId column in contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
-            "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
-            "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
-            "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
-            "Avoid broad snapshots or weak no-op checks as the primary verification evidence.",
-            "For a task with browser-owned UI surfaces, workflows, actions, states, rendered viewport rules, or Playwright suite setup, mark each verification intent that truly requires a browser with browser_automation in acceptableEvidence. Do not attach browser_automation to build, lint, unit-only, API-only, or static verification intents."
+            "Do not write verificationIntents in proposals. MCP derives one or more stable verification intents from accepted ownership and architecture behavior.",
+            "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation."
         ],
         "detailOwnershipRules": {
-            "source": "contextProjection.requirementDetailTransfer.requirementDetailAssignment.items",
-            "assignmentRule": "For every covered current-phase detail row, choose the task that owns the matching artifactRefHints through task.writeBoundary.artifactRefs. Use kind, impactTags, and lifecycleStage to break ties between implementation tasks.",
-            "ownerTaskBoundary": "Assign business requirement details to implementation owner tasks, not broad verification, runtime closure, or handoff tasks.",
-            "verificationRule": "After assigning a detail to a task, include the same detailId in that task's verificationIntents[].requirementDetailRefs.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically assigns each covered detail to exactly one owner task (the canonical implementation owner) and removes duplicate detail, scope, acceptance, and artifact ownership from verification or closure tasks.",
-            "artifactOwnershipNormalization": "When candidate tasks repeat the same accepted artifact ref, Loom keeps the detail-derived owner; otherwise it selects one deterministic implementation owner before deriving quality and API requirements."
+            "source": "accepted AAC detail coverage, module ownership, interface provider/consumer relations, and semantic proposal kind hints",
+            "assignmentRule": "The agent proposes semantic task slices only. Loom assigns every covered detail, module, entity, interface, flow, and state artifact to one canonical implementation owner before creating the final TaskPlan.",
+            "ownerTaskBoundary": "Business requirements belong to implementation owner tasks; verification, runtime closure, and browser closure tasks receive only consumed inputs and derived verification scope.",
+            "verificationRule": "Loom derives verification intents after ownership assignment; agents do not repeat detail or artifact ids.",
+            "acceptNormalization": "loom.taskPlanAcceptFile creates canonical task ids, artifact refs, scope refs, acceptance refs, implementation actions, obligations, and verification intents from accepted contracts and proposal boundaries.",
+            "artifactOwnershipNormalization": "No candidate artifact refs are accepted or discarded. The canonical owner projection is created once from AAC ownership facts."
         },
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",
@@ -6451,11 +6837,18 @@ fn normalize_implementation_obligations(
     tasks: &mut [TaskDefinition],
 ) {
     let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    let persistence_selected = has_persistence_quality_signal(&stack_signals)
+        && !stack_signals
+            .get("persistence")
+            .is_some_and(|value| selection_is_absent(value));
     for task in tasks {
         let mut obligations = Vec::new();
         let artifacts = &task.write_boundary.artifact_refs;
 
         for action in &task.implementation_actions {
+            if action_is_persistence(*action) && !persistence_selected {
+                continue;
+            }
             let Some((kind, outcome, evidence)) = implementation_obligation_for_action(*action)
             else {
                 continue;
@@ -6467,7 +6860,7 @@ fn normalize_implementation_obligations(
                 outcome,
                 evidence,
                 artifacts.clone(),
-                obligation_source_refs(task, &[baseline.technical_baseline_id.as_str()]),
+                obligation_source_refs(task, &[]),
             );
         }
 
@@ -6605,14 +6998,71 @@ fn normalize_implementation_obligations(
             );
         }
 
-        let obligation_snapshot = obligations.clone();
-        for (index, obligation) in obligations.iter_mut().enumerate() {
-            obligation.verification_ids =
-                verification_ids_for_obligation(task, &obligation_snapshot, index);
+        // Verification intents are MCP-owned as well. If the accepted
+        // architecture does not provide a scoped intent for an obligation,
+        // create one from the obligation itself instead of guessing by array
+        // position or attaching an unrelated last intent.
+        let missing_intents = obligations
+            .iter()
+            .filter(|obligation| {
+                !task.verification_intents.iter().any(|intent| {
+                    verification_intent_matches_obligation(intent, task)
+                        && verification_intent_matches_scope(intent, obligation)
+                        && verification_intent_matches_evidence(intent, obligation)
+                })
+            })
+            .map(|obligation| {
+                (
+                    format!(
+                        "verify-{}-{}",
+                        normalized_identifier(&task.task_id),
+                        normalized_identifier(&obligation.kind)
+                    ),
+                    obligation.acceptable_evidence.clone(),
+                    obligation.required_outcome.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (verification_id, acceptable_evidence, behavior) in missing_intents {
+            if task
+                .verification_intents
+                .iter()
+                .any(|intent| intent.verification_id == verification_id)
+            {
+                continue;
+            }
+            task.verification_intents.push(VerificationIntent {
+                verification_id,
+                acceptance_refs: task.acceptance_refs.clone(),
+                requirement_detail_refs: task.requirement_detail_refs.clone(),
+                behavior,
+                preferred_evidence: acceptable_evidence.clone(),
+                acceptable_evidence,
+            });
+        }
+
+        for obligation in obligations.iter_mut() {
+            obligation.verification_ids = verification_ids_for_obligation(task, obligation);
         }
         obligations.sort_by(|left, right| left.obligation_id.cmp(&right.obligation_id));
         task.implementation_obligations = obligations;
     }
+}
+
+fn action_is_persistence(action: ImplementationAction) -> bool {
+    matches!(
+        action,
+        ImplementationAction::CreateOrUpdatePersistence
+            | ImplementationAction::CreateEntityRepository
+            | ImplementationAction::CreateEntityMigration
+            | ImplementationAction::CreateEntityCrud
+            | ImplementationAction::CreateOrUpdatePersistenceQuery
+            | ImplementationAction::ImplementPersistenceTransaction
+            | ImplementationAction::OptimizePersistenceQuery
+            | ImplementationAction::ImplementAnalyticalQuery
+            | ImplementationAction::AddOrUpdatePersistenceTests
+            | ImplementationAction::CreateOrUpdateEntity
+    )
 }
 
 fn implementation_obligation_for_action(
@@ -6769,10 +7219,20 @@ fn verification_intent_matches_obligation(
 
 fn verification_ids_for_obligation(
     task: &TaskDefinition,
-    obligations: &[TaskImplementationObligation],
-    obligation_index: usize,
+    obligation: &TaskImplementationObligation,
 ) -> Vec<String> {
-    let obligation = &obligations[obligation_index];
+    let generated_id = format!(
+        "verify-{}-{}",
+        normalized_identifier(&task.task_id),
+        normalized_identifier(&obligation.kind)
+    );
+    if task
+        .verification_intents
+        .iter()
+        .any(|intent| intent.verification_id == generated_id)
+    {
+        return vec![generated_id];
+    }
     let mut matching = task
         .verification_intents
         .iter()
@@ -6784,31 +7244,9 @@ fn verification_ids_for_obligation(
         .map(|intent| intent.verification_id.clone())
         .collect::<Vec<_>>();
 
-    // When a task has no structured refs to distinguish its intents, use the
-    // available evidence capability and stable declaration order. A single
-    // unscoped intent may legitimately verify multiple obligations; unrelated
-    // scoped intents must not be copied into every obligation.
-    if matching.is_empty() {
-        let compatible = task
-            .verification_intents
-            .iter()
-            .filter(|intent| {
-                verification_intent_matches_obligation(intent, task)
-                    && verification_intent_matches_evidence(intent, obligation)
-            })
-            .map(|intent| intent.verification_id.clone())
-            .collect::<Vec<_>>();
-        matching = if compatible.len() == 1 {
-            compatible
-        } else {
-            compatible
-                .get(obligation_index)
-                .or_else(|| compatible.last())
-                .cloned()
-                .into_iter()
-                .collect()
-        };
-    }
+    // An empty match is intentional. The obligation normalizer creates a
+    // deterministic intent before this function is called; this function
+    // must never assign evidence by array position or by a generic fallback.
     matching.sort();
     matching.dedup();
     matching
@@ -6846,19 +7284,9 @@ fn verification_intent_matches_evidence(
 }
 
 fn obligation_source_refs(task: &TaskDefinition, extra: &[&str]) -> Vec<String> {
-    task.scope_refs
+    task.acceptance_refs
         .iter()
-        .chain(task.acceptance_refs.iter())
         .chain(task.requirement_detail_refs.iter())
-        .chain(task.write_boundary.artifact_refs.modules.iter())
-        .chain(task.write_boundary.artifact_refs.entities.iter())
-        .chain(task.write_boundary.artifact_refs.interfaces.iter())
-        .chain(task.write_boundary.artifact_refs.consumed_interfaces.iter())
-        .chain(task.write_boundary.artifact_refs.user_flows.iter())
-        .chain(task.write_boundary.artifact_refs.state_machines.iter())
-        .chain(task.write_boundary.artifact_refs.decisions.iter())
-        .chain(task.write_boundary.artifact_refs.nfrs.iter())
-        .chain(task.write_boundary.artifact_refs.risks.iter())
         .map(String::as_str)
         .chain(extra.iter().copied())
         .filter(|value| !value.trim().is_empty())
@@ -6888,11 +7316,17 @@ fn push_task_implementation_obligation(
     {
         return;
     }
-    let primary = obligations.is_empty();
+    let source_refs = if obligations.is_empty() {
+        source_refs
+    } else {
+        compact_obligation_artifact_ref_set(kind, &task.write_boundary.artifact_refs)
+            .into_iter()
+            .collect()
+    };
     obligations.push(TaskImplementationObligation {
         obligation_id,
         kind: kind.to_string(),
-        source_refs: compact_obligation_source_refs(task, kind, source_refs, primary),
+        source_refs: compact_obligation_source_refs(source_refs),
         artifact_refs: compact_obligation_artifact_refs(kind, artifact_refs),
         required_outcome: required_outcome.to_string(),
         required: true,
@@ -6902,34 +7336,9 @@ fn push_task_implementation_obligation(
     });
 }
 
-fn compact_obligation_source_refs(
-    task: &TaskDefinition,
-    kind: &str,
-    source_refs: Vec<String>,
-    primary: bool,
-) -> Vec<String> {
-    let relevant_artifacts =
-        compact_obligation_artifact_ref_set(kind, &task.write_boundary.artifact_refs);
-    let task_refs = task
-        .scope_refs
-        .iter()
-        .chain(task.acceptance_refs.iter())
-        .chain(task.requirement_detail_refs.iter())
-        .collect::<BTreeSet<_>>();
+fn compact_obligation_source_refs(source_refs: Vec<String>) -> Vec<String> {
     source_refs
         .into_iter()
-        .filter(|value| {
-            if !primary {
-                return relevant_artifacts.contains(value);
-            }
-            task.requirement_detail_refs
-                .iter()
-                .any(|item| item == value)
-                || task.acceptance_refs.iter().any(|item| item == value)
-                || task.scope_refs.iter().any(|item| item == value)
-                || relevant_artifacts.contains(value)
-                || !task_refs.contains(value)
-        })
         .filter(|value| !value.trim().is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -8267,10 +8676,13 @@ mod tests {
             obligation_source_refs(&task, &[]),
         );
 
-        assert_eq!(obligations[0].source_refs.len(), 5);
+        assert_eq!(obligations[0].source_refs.len(), 3);
         assert!(obligations[0]
             .source_refs
             .contains(&"detail-orders-create".to_string()));
+        assert!(!obligations[0]
+            .source_refs
+            .contains(&"technical-baseline".to_string()));
         assert!(!obligations[1]
             .source_refs
             .contains(&"detail-orders-create".to_string()));
@@ -8714,7 +9126,7 @@ mod tests {
             defer_policy: "must_be_satisfied_before_completed".to_string(),
         };
         assert_eq!(
-            verification_ids_for_obligation(&task, &[obligation], 0),
+            verification_ids_for_obligation(&task, &obligation),
             vec!["verify-owned"]
         );
         assert_eq!(
