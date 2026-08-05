@@ -93,7 +93,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
     },
     ToolRegistration {
         name: "verify",
-        description: "Show the V-SEFM verification onboarding and record the required or deferred choice. A required choice opens the configured platform only when the local appkey is absent, then resumes Loom immediately.",
+        description: "Show the V-SEFM verification onboarding with a 1/2 choice and record the decision. Choice 1 opens the configured platform only when the local appkey is absent, then resumes Loom immediately.",
         target_batch: 9,
         input_kind: ToolInputKind::Verification,
         output_kind: ToolOutputKind::ActionResult,

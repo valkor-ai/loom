@@ -26,7 +26,9 @@ pub struct VsefmToolInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VsefmDecision {
+    #[serde(alias = "1")]
     Required,
+    #[serde(alias = "2")]
     Deferred,
 }
 
@@ -83,27 +85,15 @@ where
     };
 
     let (delivery_id, phase_id, resume_action, trigger) = match active {
-        Some((delivery, phase)) => {
-            let resume_action = phase
-                .next_action
-                .as_ref()
-                .and_then(resume_action_from_onboarding)
-                .or_else(|| phase.next_action.clone());
-            let trigger = phase
-                .next_action
-                .as_ref()
-                .and_then(|action| action.details.as_ref())
-                .and_then(|details| details.get("trigger"))
-                .and_then(Value::as_str)
-                .unwrap_or("explicit")
-                .to_string();
-            (
+        Some((delivery, phase)) => match pending_onboarding_context(phase.next_action.as_ref()) {
+            Some((resume_action, trigger)) => (
                 Some(delivery.delivery_id),
                 Some(phase.phase_id),
                 resume_action,
                 trigger,
-            )
-        }
+            ),
+            None => (None, None, None, "explicit".to_string()),
+        },
         None => (None, None, None, "explicit".to_string()),
     };
 
@@ -201,7 +191,7 @@ fn onboarding_action(
         source: "vsefm".to_string(),
         reason: "V-SEFM verification choice is required.".to_string(),
         prompt: Some(config.content.clone()),
-        accepted_responses: vec!["required".to_string(), "deferred".to_string()],
+        accepted_responses: vec!["1".to_string(), "2".to_string()],
         request_ref: None,
         details: Some(json!({
             "gateId": gate_id,
@@ -223,6 +213,27 @@ fn resume_action_from_onboarding(action: &RouteAction) -> Option<RouteAction> {
         .as_ref()
         .and_then(|details| details.get("resumeAction"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+fn pending_onboarding_context(
+    action: Option<&RouteAction>,
+) -> Option<(Option<RouteAction>, String)> {
+    let action = action?;
+    if action.kind != RouteActionKind::VsefmOnboarding {
+        return None;
+    }
+    let trigger = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("trigger"))
+        .and_then(Value::as_str)
+        .unwrap_or("explicit")
+        .to_string();
+    if trigger != "review" {
+        return None;
+    }
+    let resume_action = resume_action_from_onboarding(action);
+    Some((resume_action, trigger))
 }
 
 fn persist_pending_gate(
@@ -295,7 +306,7 @@ fn onboarding_result(
             action.details.clone(),
         )
         .with_agent_instruction(
-            "Present the V-SEFM onboarding content and wait for the user's required or deferred choice. Then call loom.verify with that decision. Loom opens the configured platform only when required and the local appkey is absent, records a warning if browser launch fails, and resumes immediately without waiting for an external V-SEFM result.",
+            "Present the V-SEFM onboarding content and wait for the user's choice: 1 means start verification and 2 means defer verification. Then call loom.verify with decision=required for 1 or decision=deferred for 2. Loom opens the configured platform only for choice 1 when the local appkey is absent, records a warning if browser launch fails, and resumes immediately without waiting for an external V-SEFM result.",
         ),
     )
 }
@@ -655,6 +666,50 @@ mod tests {
 
         restore_env(previous);
         let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn explicit_verify_does_not_capture_an_unrelated_active_route() {
+        let action = RouteAction::done("continue the active delivery");
+        assert!(pending_onboarding_context(Some(&action)).is_none());
+    }
+
+    #[test]
+    fn explicit_onboarding_does_not_capture_a_review_resume_route() {
+        let config = VsefmConfig {
+            content: "verify".to_string(),
+            url: "https://platform.example.test".to_string(),
+            auto_route_after_review: false,
+        };
+        let onboarding = onboarding_action(
+            &config,
+            Some("delivery-1"),
+            Some("phase-1"),
+            Some(RouteAction::done("unrelated route")),
+            "explicit",
+        );
+        assert!(pending_onboarding_context(Some(&onboarding)).is_none());
+    }
+
+    #[test]
+    fn review_onboarding_preserves_only_its_declared_resume_route() {
+        let config = VsefmConfig {
+            content: "verify".to_string(),
+            url: "https://platform.example.test".to_string(),
+            auto_route_after_review: true,
+        };
+        let resume = RouteAction::done("review approved");
+        let onboarding = onboarding_action(
+            &config,
+            Some("delivery-1"),
+            Some("phase-1"),
+            Some(resume.clone()),
+            "review",
+        );
+        let (captured, trigger) =
+            pending_onboarding_context(Some(&onboarding)).expect("review onboarding context");
+        assert_eq!(captured, Some(resume));
+        assert_eq!(trigger, "review");
     }
 
     fn env_lock() -> MutexGuard<'static, ()> {

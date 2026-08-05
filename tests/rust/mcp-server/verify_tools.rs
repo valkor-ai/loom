@@ -25,7 +25,7 @@ fn verify_onboarding_records_deferred_choice_without_creating_appkey() {
     let gate = structured(gate);
     assert_eq!(gate["state"], "user_gate", "{gate:#}");
     assert_eq!(gate["gate"]["kind"], "vsefm_onboarding");
-    assert_eq!(gate["acceptedResponses"], json!(["required", "deferred"]));
+    assert_eq!(gate["acceptedResponses"], json!(["1", "2"]));
     assert!(fixture
         .root
         .join(".loom/verification/v-sefm.json")
@@ -36,7 +36,7 @@ fn verify_onboarding_records_deferred_choice_without_creating_appkey() {
             "loom.verify",
             Some(args(json!({
                 "projectRoot": fixture.root,
-                "decision": "deferred"
+                "decision": "2"
             }))),
         )
         .expect("verify deferred call");
