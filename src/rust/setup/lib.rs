@@ -53,6 +53,7 @@ const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
     "plugins/shared/loom/skills/godot/reviewer/ui/SKILL.md",
 ];
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
+    "plugins/shared/loom/references/verification/v-sefm.json",
     "plugins/shared/loom/references/uix/anti-patterns.md",
     "plugins/shared/loom/references/uix/content.md",
     "plugins/shared/loom/references/uix/core.md",
@@ -660,6 +661,14 @@ impl SetupEnvironment {
 
     pub fn playwright_cache_root(&self) -> PathBuf {
         self.loom_home.join("runtime-cache/playwright")
+    }
+
+    pub fn vsefm_appkey_dir(&self) -> PathBuf {
+        self.loom_home.join("v-sefm")
+    }
+
+    pub fn vsefm_appkey_path(&self) -> PathBuf {
+        self.vsefm_appkey_dir().join("appkey")
     }
 
     pub fn install_registry_path(&self) -> PathBuf {
@@ -1937,6 +1946,9 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
 
     install_runtime(env, &manifest)?;
     install_setup_shim(env, &manifest)?;
+    let appkey_setup_warning = ensure_vsefm_appkey(env)
+        .err()
+        .map(|error| error.to_string());
     for agent in agents {
         install_agent_plugin(env, &manifest, *agent)?;
         write_mcp_registration(env, *agent, &manifest)?;
@@ -1971,6 +1983,14 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
     write_registry(env, &registry)?;
     report.installed_runtime = Some(path_string(env.runtime_current()));
     report.checks = doctor(env, agents, false)?.checks;
+    if let Some(message) = appkey_setup_warning {
+        report.checks.push(DoctorCheck {
+            name: "vsefm.appkey".to_string(),
+            status: "warning".to_string(),
+            detail: message,
+        });
+        report.status = "warning".to_string();
+    }
     Ok(report)
 }
 
@@ -1998,6 +2018,7 @@ pub fn purge(env: &SetupEnvironment) -> Result<SetupReport, SetupError> {
         env.loom_home.join("agent-sessions"),
         env.loom_home.join("runtime-cache"),
         env.loom_home.join("mcp-registrations"),
+        env.vsefm_appkey_dir(),
     ] {
         if path.exists() {
             remove_path(&path)?;
@@ -2027,6 +2048,7 @@ pub fn doctor(
     ));
     report.checks.push(check_mcp_surface());
     report.checks.push(check_python_worker(env));
+    report.checks.push(check_vsefm_appkey(env));
     for agent in agents {
         report.checks.push(check_path(
             &format!("{}.plugin", agent.as_str()),
@@ -3130,6 +3152,7 @@ fn check_mcp_surface() -> DoctorCheck {
     let required = [
         "plan",
         "continue",
+        "verify",
         "readFieldGroup",
         "knowledgeAdd",
         "knowledgeBuild",
@@ -3427,6 +3450,66 @@ fn check_path(name: &str, path: &Path, detail: &str) -> DoctorCheck {
             detail: format!("missing {detail}: {}", path.display()),
         }
     }
+}
+
+fn ensure_vsefm_appkey(env: &SetupEnvironment) -> Result<(), SetupError> {
+    fs::create_dir_all(env.vsefm_appkey_dir()).map_err(|source| SetupError::Io {
+        path: env.vsefm_appkey_dir(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(env.vsefm_appkey_dir())
+            .map_err(|source| SetupError::Io {
+                path: env.vsefm_appkey_dir(),
+                source,
+            })?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(env.vsefm_appkey_dir(), permissions).map_err(|source| {
+            SetupError::Io {
+                path: env.vsefm_appkey_dir(),
+                source,
+            }
+        })?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(env.vsefm_appkey_path())
+        .map_err(|source| SetupError::Io {
+            path: env.vsefm_appkey_path(),
+            source,
+        })?;
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(env.vsefm_appkey_path())
+            .map_err(|source| SetupError::Io {
+                path: env.vsefm_appkey_path(),
+                source,
+            })?
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(env.vsefm_appkey_path(), permissions).map_err(|source| {
+            SetupError::Io {
+                path: env.vsefm_appkey_path(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn check_vsefm_appkey(env: &SetupEnvironment) -> DoctorCheck {
+    check_path(
+        "vsefm.appkey",
+        &env.vsefm_appkey_path(),
+        "V-SEFM appkey file (content is not inspected)",
+    )
 }
 
 fn write_checksums(root: &Path) -> Result<(), SetupError> {

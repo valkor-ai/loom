@@ -21,6 +21,7 @@ pub enum RouteActionKind {
     ArchitectureArtifactRepair,
     NeedsUserDecision,
     ManualReview,
+    VsefmOnboarding,
     ContinueToNextPhase,
     Done,
 }
@@ -70,9 +71,11 @@ impl RouteActionKind {
             | Self::ArchitectureArtifactContract
             | Self::TaskplanGeneration
             | Self::ContinueExecution => Some(8),
-            Self::Review | Self::ExecutionRepair | Self::NeedsUserDecision | Self::ManualReview => {
-                Some(9)
-            }
+            Self::Review
+            | Self::ExecutionRepair
+            | Self::NeedsUserDecision
+            | Self::ManualReview
+            | Self::VsefmOnboarding => Some(9),
             Self::TaskResultRepair | Self::TaskplanRepair | Self::ArchitectureArtifactRepair => {
                 Some(5)
             }
@@ -95,6 +98,7 @@ impl RouteActionKind {
             | Self::ExecutionRepair
             | Self::NeedsUserDecision
             | Self::ManualReview => Some("execution"),
+            Self::VsefmOnboarding => Some("verification"),
             Self::TaskResultRepair | Self::TaskplanRepair | Self::ArchitectureArtifactRepair => {
                 Some("repair")
             }
@@ -109,6 +113,7 @@ impl RouteActionKind {
                 | Self::BrainstormClarification
                 | Self::NeedsUserDecision
                 | Self::ManualReview
+                | Self::VsefmOnboarding
         )
     }
 }

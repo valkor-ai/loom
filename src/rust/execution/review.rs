@@ -25,6 +25,7 @@ use state::{
     write_targets::AuthorizedWriteSet,
 };
 
+use crate::vsefm;
 use crate::{
     api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract},
     paths::{
@@ -2031,7 +2032,12 @@ fn route_after_review<D>(
 where
     D: DomainDispatcher,
 {
-    let next_action = review_route_action(result, &result_ref);
+    let next_action = vsefm::maybe_auto_route_after_review(
+        &input.project_root,
+        delivery_id,
+        phase_id,
+        review_route_action(result, &result_ref),
+    );
     if matches!(
         next_action.kind,
         RouteActionKind::ManualReview | RouteActionKind::NeedsUserDecision
@@ -3243,7 +3249,15 @@ fn route_after_manual_review<D>(
 where
     D: DomainDispatcher,
 {
-    effective_action.request_ref = Some(resolution_ref.clone());
+    effective_action = vsefm::maybe_auto_route_after_review(
+        &input.project_root,
+        &resolution.delivery_id,
+        &resolution.phase_id,
+        effective_action,
+    );
+    if effective_action.kind != RouteActionKind::VsefmOnboarding {
+        effective_action.request_ref = Some(resolution_ref.clone());
+    }
     let engine = TransitionEngine {
         store: FileTransitionStore,
         dispatcher,
@@ -3276,7 +3290,13 @@ fn update_delivery_after_review(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
-    let next_kind = route_kind_for_review_action(&result.next_action.r#type);
+    let next_action = vsefm::maybe_auto_route_after_review(
+        project_root,
+        delivery_id,
+        phase_id,
+        review_route_action(result, result_ref),
+    );
+    let next_kind = next_action.kind.clone();
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -3285,20 +3305,7 @@ fn update_delivery_after_review(
         phase
             .latest_refs
             .insert("reviewResult".to_string(), result_ref.to_string());
-        phase.next_action = Some(RouteAction {
-            kind: next_kind.clone(),
-            source: "review_result".to_string(),
-            reason: result.next_action.reason.clone(),
-            prompt: None,
-            accepted_responses: vec![],
-            request_ref: Some(result_ref.to_string()),
-            details: Some(json!({
-                "reviewId": result.review_id,
-                "decision": result.decision,
-                "nextAction": result.next_action
-            })),
-            target_phase_id: result.next_action.target_phase_id.clone(),
-        });
+        phase.next_action = Some(next_action);
     }
     if next_kind == RouteActionKind::Done {
         delivery.status = DeliveryLifecycleStatus::Completed;
@@ -3379,6 +3386,12 @@ fn update_delivery_after_manual_review_resolution(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
+    let effective_action = vsefm::maybe_auto_route_after_review(
+        project_root,
+        delivery_id,
+        phase_id,
+        effective_action.clone(),
+    );
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -3388,10 +3401,16 @@ fn update_delivery_after_manual_review_resolution(
             "manualReviewResolution".to_string(),
             resolution_ref.to_string(),
         );
-        phase.next_action = Some(RouteAction {
-            request_ref: Some(resolution_ref.to_string()),
-            ..effective_action.clone()
-        });
+        phase.next_action = Some(
+            if effective_action.kind == RouteActionKind::VsefmOnboarding {
+                effective_action.clone()
+            } else {
+                RouteAction {
+                    request_ref: Some(resolution_ref.to_string()),
+                    ..effective_action.clone()
+                }
+            },
+        );
         phase.latest_refs.insert(
             "manualReviewEffectiveDecision".to_string(),
             resolution.decision.clone(),

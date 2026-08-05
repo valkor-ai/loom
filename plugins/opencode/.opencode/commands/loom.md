@@ -11,6 +11,7 @@ Call the matching Loom MCP tool for the current project directory before doing a
 
 - `status` -> `loom.status`
 - `continue`, `resume`, `proceed`, `next`, or empty -> `loom.continue`
+- `verify` -> `loom.verify` without a decision to show the V-SEFM onboarding gate
 - `knowledge ...` -> matching `loom.knowledge*` tool
 - `deploy` -> `loom.deployRun`
 - `deploy ...` -> matching `loom.deploy*` tool
@@ -23,7 +24,7 @@ After the tool returns, follow `LoomMcpActionResult.state`: treat `auto_runnable
 
 Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
 
-For `active_operation`, call only the observation tools named by the result. For `repairable_error`, `stopAllowed=false`: inspect the returned request and read every required repair group first, then repair only the returned file or target ids, follow `agentInstruction`, and call the returned resubmit tool.
+For `active_operation`, call only the observation tools named by the result. For a `user_gate` whose `gate.kind` is `vsefm_onboarding`, present the returned content, wait for `required` or `deferred`, then call `loom.verify` with that decision without waiting for an external result. For `repairable_error`, `stopAllowed=false`: inspect the returned request and read every required repair group first, then repair only the returned file or target ids, follow `agentInstruction`, and call the returned resubmit tool.
 
 ## Request Reading
 

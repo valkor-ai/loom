@@ -161,6 +161,7 @@ fn missing_request_read_next(
             read_groups,
             retry_tool: "loom.brainstormConfirmBlock".to_string(),
         }),
+        warnings: vec![],
     })
 }
 
@@ -202,6 +203,7 @@ fn missing_knowledge_context_next(
             read_groups,
             retry_tool: "loom.brainstormConfirmBlock".to_string(),
         }),
+        warnings: vec![],
     })
 }
 

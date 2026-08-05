@@ -7,6 +7,7 @@ mod task_execution;
 mod task_plan;
 mod task_result;
 mod templates;
+pub mod vsefm;
 
 use delivery_core::{
     DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, ValidatedPlanInput,
@@ -18,6 +19,7 @@ pub use repair::accept_repair_file;
 pub use review::{accept_manual_review_resolution_file, accept_review_result_file};
 pub use task_plan::accept_task_plan_file;
 pub use task_result::accept_task_result_file;
+pub use vsefm::{verify, VsefmDecision, VsefmToolInput};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ExecutionDomainDispatcher;

@@ -17,6 +17,21 @@ pub enum LoomMcpActionResult {
 }
 
 impl LoomMcpActionResult {
+    pub fn with_warnings(self, warnings: Vec<String>) -> Self {
+        if warnings.is_empty() {
+            return self;
+        }
+        match self {
+            Self::AutoRunnable(result) => Self::AutoRunnable(result.with_warnings(warnings)),
+            Self::UserGate(result) => Self::UserGate(result.with_warnings(warnings)),
+            Self::Done(mut result) => {
+                result.warnings.extend(warnings);
+                Self::Done(result)
+            }
+            other => other,
+        }
+    }
+
     pub fn not_implemented_for_batch(
         project_root: impl Into<String>,
         tool_name: impl Into<String>,
@@ -58,6 +73,8 @@ pub struct LoomMcpAutoRunnableResult {
     pub stop_allowed: bool,
     pub agent_instruction: String,
     pub next: LoomMcpNextAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl LoomMcpAutoRunnableResult {
@@ -67,7 +84,13 @@ impl LoomMcpAutoRunnableResult {
             stop_allowed: false,
             agent_instruction: auto_runnable_agent_instruction(&next).to_string(),
             next,
+            warnings: vec![],
         }
+    }
+
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 }
 
@@ -128,6 +151,8 @@ pub struct LoomMcpUserGateResult {
     pub agent_instruction: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pre_response_contract: Option<LoomMcpUserGatePreResponseContract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl LoomMcpUserGateResult {
@@ -158,7 +183,18 @@ impl LoomMcpUserGateResult {
             gate,
             agent_instruction,
             pre_response_contract,
+            warnings: vec![],
         }
+    }
+
+    pub fn with_agent_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.agent_instruction = instruction.into();
+        self
+    }
+
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
     pub fn with_brainstorm_knowledge(mut self, block: impl Into<String>) -> Self {
