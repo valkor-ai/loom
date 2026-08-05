@@ -2580,6 +2580,12 @@ impl Fixture {
                 "autoRouteAfterReview": false
             }),
         );
+        write_file(
+            &self
+                .package_root
+                .join("plugins/shared/loom/references/verification/sefm-verify.md"),
+            "# V-SEFM verification prompt\n",
+        );
         for name in [
             "anti-patterns",
             "content",

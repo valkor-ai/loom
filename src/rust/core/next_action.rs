@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub enum LoomMcpNextAction {
     WriteArtifact(WriteArtifactNext),
     ExecuteTask(ExecuteTaskNext),
+    RunVsefmVerification(VsefmVerificationNext),
+    RunVsefmRepair(VsefmRepairNext),
     RunLoomTool(RunLoomToolNext),
     GenerateKnowledgeSemantics(GenerateKnowledgeSemanticsNext),
     DeployRepairAssets(DeployRepairAssetsNext),
@@ -40,6 +42,8 @@ pub enum ArtifactKind {
     TaskplanRepair,
     ArchitectureArtifactRepair,
     DeployExecutionRepairResult,
+    VsefmVerificationResult,
+    VsefmRepairResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -262,6 +266,34 @@ pub struct ExecuteTaskNext {
     pub verification_policy: ExecuteVerificationPolicy,
     pub repair_context: Option<RepairContext>,
     pub post_submit: PostSubmitAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VsefmVerificationNext {
+    pub verification_id: String,
+    pub request_ref: String,
+    pub result_file: String,
+    pub prompt_ref: String,
+    pub subject_ref: String,
+    pub scope: String,
+    pub read_groups: Vec<ReadGroupRef>,
+    pub submit_tool: String,
+    pub allowed_paths: Vec<String>,
+    pub protected_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VsefmRepairNext {
+    pub repair_id: String,
+    pub verification_id: String,
+    pub request_ref: String,
+    pub result_file: String,
+    pub read_groups: Vec<ReadGroupRef>,
+    pub submit_tool: String,
+    pub allowed_paths: Vec<String>,
+    pub protected_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

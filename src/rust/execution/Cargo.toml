@@ -15,6 +15,7 @@ brainstorm = { path = "../brainstorm" }
 contracts = { path = "../contracts" }
 delivery-core = { path = "../core" }
 schemars.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true

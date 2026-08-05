@@ -110,6 +110,14 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until the TaskResult submit succeeds or Loom returns user_gate, done, blocked, or failed."
             )
         }
+        LoomMcpNextAction::RunVsefmVerification(_) => concat!(
+            "This is a required local V-SEFM verification task. Continue immediately: inspect requestRef, read every verification request group, read the declared sefm-verify reference and subject files, run only bounded read-only checks, write the verification result candidate, and submit it with loom.vsefmVerificationAcceptFile before reporting progress. ",
+            "Do not modify product files or Loom canonical artifacts. If a check cannot be established, record unknown or inconclusive evidence instead of inventing pass. Do not stop until the submit succeeds or Loom returns user_gate, done, blocked, or failed."
+        ),
+        LoomMcpNextAction::RunVsefmRepair(_) => concat!(
+            "This is a required V-SEFM repair task. Continue immediately: inspect requestRef, read every repair request group, modify only the declared allowed paths, run bounded verification commands, write the repair result, and submit it with loom.vsefmRepairAcceptFile before reporting progress. ",
+            "Do not modify Loom canonical artifacts or expand the repair scope. Do not stop until the repair submit succeeds or Loom returns user_gate, done, blocked, or failed."
+        ),
         LoomMcpNextAction::RunLoomTool(_) => {
             concat!(
                 "This is a required continuation checkpoint, not a progress message. Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. ",

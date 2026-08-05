@@ -19,7 +19,11 @@ pub use repair::accept_repair_file;
 pub use review::{accept_manual_review_resolution_file, accept_review_result_file};
 pub use task_plan::accept_task_plan_file;
 pub use task_result::accept_task_result_file;
-pub use vsefm::{verify, VsefmDecision, VsefmToolInput};
+pub use vsefm::{
+    accept_vsefm_repair_file, accept_vsefm_verification_file, resolve_vsefm_verification,
+    resume_unattached_vsefm, verify, VsefmDecision, VsefmToolInput, VsefmVerificationResolution,
+    VsefmVerificationResolveInput,
+};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ExecutionDomainDispatcher;
@@ -57,6 +61,11 @@ impl DomainDispatcher for ExecutionDomainDispatcher {
                     context.finding_refs,
                     context.target_task_ids,
                 )
+            }
+            RouteActionKind::VsefmVerification
+            | RouteActionKind::VsefmResultGate
+            | RouteActionKind::VsefmRepair => {
+                vsefm::resume_vsefm_route_action(project_root, delivery_id, phase_id, action)
             }
             RouteActionKind::TaskResultRepair
             | RouteActionKind::TaskplanRepair

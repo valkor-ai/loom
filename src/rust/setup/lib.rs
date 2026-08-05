@@ -54,6 +54,7 @@ const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
 ];
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/verification/v-sefm.json",
+    "plugins/shared/loom/references/verification/sefm-verify.md",
     "plugins/shared/loom/references/uix/anti-patterns.md",
     "plugins/shared/loom/references/uix/content.md",
     "plugins/shared/loom/references/uix/core.md",

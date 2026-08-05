@@ -48,6 +48,8 @@ const REPAIR_KINDS: &[ArtifactKind] = &[
     ArtifactKind::ArchitectureArtifactRepair,
     ArtifactKind::DeployExecutionRepairResult,
 ];
+const VSEFM_KINDS: &[ArtifactKind] = &[ArtifactKind::VsefmVerificationResult];
+const VSEFM_REPAIR_KINDS: &[ArtifactKind] = &[ArtifactKind::VsefmRepairResult];
 
 pub const SUBMIT_TOOL_SPECS: &[SubmitToolSpec] = &[
     SubmitToolSpec {
@@ -99,6 +101,16 @@ pub const SUBMIT_TOOL_SPECS: &[SubmitToolSpec] = &[
         name: "repairSubmitFile",
         target_batch: 5,
         allowed_artifact_kinds: REPAIR_KINDS,
+    },
+    SubmitToolSpec {
+        name: "vsefmVerificationAcceptFile",
+        target_batch: 10,
+        allowed_artifact_kinds: VSEFM_KINDS,
+    },
+    SubmitToolSpec {
+        name: "vsefmRepairAcceptFile",
+        target_batch: 10,
+        allowed_artifact_kinds: VSEFM_REPAIR_KINDS,
     },
 ];
 
