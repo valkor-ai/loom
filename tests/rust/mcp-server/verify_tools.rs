@@ -326,6 +326,7 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
             .expect("blocked verification result submit"),
     );
     assert_eq!(gated["state"], "user_gate", "{gated:#}");
+    assert_eq!(gated["acceptedResponses"], json!(["1", "2"]));
 
     let repair = structured(
         server
@@ -356,7 +357,8 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
         "{repair_request:#}"
     );
     assert_eq!(
-        repair_request["fields"]["outputContract"]["resultSchema"]["additionalProperties"], false,
+        repair_request["fields"]["outputContract"]["agentOwnedFields"],
+        json!(["status", "summary", "details"]),
         "{repair_request:#}"
     );
     let repair_file = fixture.root.join(
@@ -364,59 +366,18 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
             .as_str()
             .expect("repair result file"),
     );
-    let invalid_repair = json!({
-        "status": "ready",
-        "summary": "The blocking authorization check was repaired and verified.",
-        "resolved_failure_refs": ["AUTH-HORIZONTAL"],
-        "changed_files": [],
-        "verification_commands": ["cargo test --quiet"],
-        "remaining_findings": [],
-        "unexpected": true
-    });
-    write_json(&repair_file, invalid_repair);
-    let first_repair = structured(
-        server
-            .invoke_tool(
-                "loom.vsefmRepairAcceptFile",
-                Some(args(json!({
-                    "projectRoot": fixture.root,
-                    "requestRef": repair_request_ref,
-                    "writtenTargetIds": ["result"]
-                }))),
-            )
-            .expect("first invalid repair submit"),
-    );
-    assert_eq!(
-        first_repair["state"], "repairable_error",
-        "{first_repair:#}"
-    );
-    assert_eq!(first_repair["stopAllowed"], false, "{first_repair:#}");
-    let second_repair = structured(
-        server
-            .invoke_tool(
-                "loom.vsefmRepairAcceptFile",
-                Some(args(json!({
-                    "projectRoot": fixture.root,
-                    "requestRef": repair_request_ref,
-                    "writtenTargetIds": ["result"]
-                }))),
-            )
-            .expect("repeated invalid repair submit"),
-    );
-    assert_eq!(
-        second_repair["state"], "repairable_error",
-        "{second_repair:#}"
-    );
-    assert_eq!(second_repair["stopAllowed"], true, "{second_repair:#}");
+    std::fs::create_dir_all(fixture.root.join("src")).expect("repair source directory");
+    std::fs::write(fixture.root.join("src/repair-needed.txt"), "repair change")
+        .expect("repair source file");
     write_json(
         &repair_file,
         json!({
             "status": "ready",
             "summary": "The blocking authorization check was repaired and verified.",
-            "resolved_failure_refs": ["AUTH-HORIZONTAL"],
-            "changed_files": [],
-            "verification_commands": ["cargo test --quiet"],
-            "remaining_findings": []
+            "details": {
+                "nested": [null, {"note": "user-facing"}]
+            },
+            "legacy_field": {"is_opaque": true}
         }),
     );
     let reverified = structured(
@@ -433,6 +394,21 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
     );
     assert_eq!(reverified["state"], "auto_runnable", "{reverified:#}");
     assert_eq!(reverified["next"]["kind"], "run_vsefm_verification");
+    let state: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(format!(
+                ".loom/verification/sessions/{verification_id}/state.json",
+                verification_id = started["next"]["verificationId"]
+                    .as_str()
+                    .expect("verification id")
+            )))
+        .expect("repair session state"),
+    )
+    .expect("repair session state json");
+    assert!(state["repairChangedFiles"]
+        .as_array()
+        .expect("changed files")
+        .iter()
+        .any(|path| path == "src/repair-needed.txt"));
     let verification_id = started["next"]["verificationId"]
         .as_str()
         .expect("verification id");
@@ -444,7 +420,7 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
             .expect("repair submit audit")
             .lines()
             .count(),
-        3
+        1
     );
 }
 
@@ -484,10 +460,7 @@ fn blocked_vsefm_result_can_be_resolved_by_manual_review() {
             .expect("manual review decision"),
     );
     assert_eq!(manual_gate["state"], "user_gate", "{manual_gate:#}");
-    assert_eq!(
-        manual_gate["acceptedResponses"],
-        json!(["approve_override", "request_changes"])
-    );
+    assert_eq!(manual_gate["acceptedResponses"], json!(["1", "2"]));
 
     let resumed_manual_gate = structured(
         server
@@ -516,7 +489,74 @@ fn blocked_vsefm_result_can_be_resolved_by_manual_review() {
 }
 
 #[test]
-fn repeated_invalid_vsefm_result_reports_path_and_stops_retries() {
+fn repair_rejects_agent_changes_to_loom_control_files() {
+    let (fixture, server, started) = prepare_local_verification("protected-repair");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    write_json(&result_file, blocked_candidate());
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("blocked verification result submit"),
+    );
+    assert_eq!(gated["state"], "user_gate");
+    let repair = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "verificationId": started["next"]["verificationId"],
+                    "decision": "repair"
+                }))),
+            )
+            .expect("repair decision"),
+    );
+    let repair_request_ref = repair["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref");
+    read_request_groups(&server, &fixture, repair_request_ref);
+    let repair_file = fixture.root.join(
+        repair["next"]["resultFile"]
+            .as_str()
+            .expect("repair result file"),
+    );
+    write_json(
+        &repair_file,
+        json!({"status": "ready", "summary": "repair complete"}),
+    );
+    write_json(
+        &fixture.root.join(".loom/forbidden-agent-change.json"),
+        json!({"changedBy": "agent"}),
+    );
+    let rejected = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmRepairAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": repair_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("protected repair submit"),
+    );
+    assert_eq!(rejected["state"], "failed", "{rejected:#}");
+    assert_eq!(rejected["error"]["code"], "VSEFM_REPAIR_PROTECTED_CHANGE");
+}
+
+#[test]
+fn repeated_contract_error_is_not_routed_to_manual_review() {
     let (fixture, server, started) = prepare_local_verification("repeated-invalid");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
     read_request_groups(&server, &fixture, request_ref);
@@ -524,7 +564,10 @@ fn repeated_invalid_vsefm_result_reports_path_and_stops_retries() {
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
     let mut invalid = passing_candidate();
-    invalid["unexpected"] = json!(true);
+    invalid
+        .as_object_mut()
+        .expect("invalid result object")
+        .remove("status");
     write_json(&result_file, invalid.clone());
 
     let first = structured(
@@ -555,12 +598,14 @@ fn repeated_invalid_vsefm_result_reports_path_and_stops_retries() {
             )
             .expect("repeated invalid result submit"),
     );
-    assert_eq!(second["state"], "repairable_error", "{second:#}");
-    assert_eq!(second["stopAllowed"], true, "{second:#}");
-    assert!(second["agentInstruction"]
-        .as_str()
-        .expect("stop instruction")
-        .contains("Stop automatic retries"));
+    assert_eq!(second["state"], "done", "{second:#}");
+    assert!(second["warnings"]
+        .as_array()
+        .expect("contract fault warning")
+        .iter()
+        .any(|warning| warning
+            .as_str()
+            .is_some_and(|warning| warning.contains("contract error repeated"))));
 
     let verification_id = started["next"]["verificationId"]
         .as_str()
@@ -575,6 +620,86 @@ fn repeated_invalid_vsefm_result_reports_path_and_stops_retries() {
             .count(),
         2
     );
+}
+
+#[test]
+fn repeated_repair_contract_error_resumes_without_manual_review() {
+    let (fixture, server, started) = prepare_local_verification("repeated-repair-invalid");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    write_json(&result_file, blocked_candidate());
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("blocked verification result submit"),
+    );
+    let repair = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "verificationId": started["next"]["verificationId"],
+                    "decision": "repair"
+                }))),
+            )
+            .expect("repair decision"),
+    );
+    assert_eq!(gated["state"], "user_gate");
+    let repair_request_ref = repair["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref");
+    read_request_groups(&server, &fixture, repair_request_ref);
+    let repair_file = fixture.root.join(
+        repair["next"]["resultFile"]
+            .as_str()
+            .expect("repair result file"),
+    );
+    let invalid = json!({"status": "ready"});
+    write_json(&repair_file, invalid);
+    let first = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmRepairAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": repair_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("first invalid repair result"),
+    );
+    assert_eq!(first["state"], "repairable_error", "{first:#}");
+    let second = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmRepairAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": repair_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("repeated invalid repair result"),
+    );
+    assert_eq!(second["state"], "done", "{second:#}");
+    assert!(second["warnings"]
+        .as_array()
+        .expect("contract fault warning")
+        .iter()
+        .any(|warning| warning
+            .as_str()
+            .is_some_and(|warning| warning.contains("contract error repeated"))));
 }
 
 fn passing_candidate() -> Value {

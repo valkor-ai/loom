@@ -346,6 +346,28 @@ Code Agent 只写入以下字段；`artifact_id`、`verification_id`、范围、
 
 结果必须严格匹配请求中的 `resultSchema`：不得增加未声明字段，不得使用 `null` 替代必填字符串，也不得修改 MCP-owned 字段。提交合同错误时只修正返回的字段路径，不重新执行已经完成的验证。
 
+## Loom 本地验证修复输出合同
+
+Repair 是修复业务代码后重新执行 V-SEFM 的 Agent 任务，不是反复修改验证规则或 `.loom` 产物。Repair request 中的 `repairWriteBoundary` 是项目根目录范围和受保护路径说明；`subject.changedFiles` 只提供 scope hint，不是写入白名单。
+
+Code Agent 只需要提交最小结果：
+
+```json
+{
+  "status": "ready",
+  "summary": "已修复阻断项。",
+  "details": {
+    "修复说明": "这里可以提供面向用户的说明。"
+  }
+}
+```
+
+`status` 只能是 `ready` 或 `blocked`，`summary` 必须是非空字符串。`details` 是面向用户和审计的透明内容，内部可以使用任意 JSON 结构。`verification_commands`、`changed_files`、`resolved_failure_refs` 和 `remaining_findings` 不属于 Agent 合同；Loom 会从执行记录、修复前后文件快照和重新验证结果中生成对应信息。
+
+Repair Agent 可以修改项目根目录下为修复阻断项所需的普通业务代码、配置、测试、迁移、构建和部署文件，但不得修改 `.loom/**`、`.git/**`、V-SEFM 验证规则或 V-SEFM 配置。`ready` 只表示 Agent 声明修复完成，Loom 接收后必须重新执行同一验证计划，不能直接视为通过。
+
+如果相同结果在相同合同错误下重复提交，这是 Loom/MCP 合同故障，不是软件质量结论。Loom 必须保存原始结果和错误指纹，停止重复提交并记录 `verification_unavailable`，不能把该故障路由为 `manual_review`。
+
 必须能够追踪：
 
 ```text

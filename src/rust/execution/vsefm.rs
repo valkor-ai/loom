@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,6 +40,7 @@ pub enum VsefmVerificationResolution {
     Accept,
     Repair,
     ManualReview,
+    RetryRepair,
     ApproveOverride,
     RequestChanges,
 }
@@ -120,14 +121,12 @@ enum VsefmCheckApplicability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub struct VsefmRepairCandidate {
     pub status: VsefmRepairStatus,
     pub summary: String,
-    pub resolved_failure_refs: Vec<String>,
-    pub changed_files: Vec<String>,
-    pub verification_commands: Vec<String>,
-    pub remaining_findings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1242,9 +1241,11 @@ pub fn resume_vsefm_route_action(
         (RouteActionKind::VsefmVerification, "awaiting_agent")
         | (RouteActionKind::VsefmVerification, "awaiting_user_resolution")
         | (RouteActionKind::VsefmVerification, "manual_review")
+        | (RouteActionKind::VsefmVerification, "repair_incomplete")
         | (RouteActionKind::VsefmRepair, "repairing")
         | (RouteActionKind::VsefmResultGate, "awaiting_user_resolution")
-        | (RouteActionKind::VsefmResultGate, "manual_review") => {
+        | (RouteActionKind::VsefmResultGate, "manual_review")
+        | (RouteActionKind::VsefmResultGate, "repair_incomplete") => {
             resume_vsefm_session_state(project_root, &session, &action.kind)
         }
         (_, "completed") | (_, "completed_with_override") => {
@@ -1274,7 +1275,11 @@ pub fn resume_unattached_vsefm(project_root: &str) -> Option<LoomMcpActionResult
             let status = session.get("status").and_then(Value::as_str)?;
             if !matches!(
                 status,
-                "awaiting_agent" | "awaiting_user_resolution" | "manual_review" | "repairing"
+                "awaiting_agent"
+                    | "awaiting_user_resolution"
+                    | "manual_review"
+                    | "repair_incomplete"
+                    | "repairing"
             ) {
                 return None;
             }
@@ -1290,6 +1295,8 @@ pub fn resume_unattached_vsefm(project_root: &str) -> Option<LoomMcpActionResult
     let (_, session) = pending.pop()?;
     let action_kind = if session.get("status").and_then(Value::as_str) == Some("repairing") {
         RouteActionKind::VsefmRepair
+    } else if session.get("status").and_then(Value::as_str) == Some("repair_incomplete") {
+        RouteActionKind::VsefmResultGate
     } else {
         RouteActionKind::VsefmVerification
     };
@@ -1339,6 +1346,10 @@ fn resume_vsefm_session_state(
         (RouteActionKind::VsefmVerification, "manual_review")
         | (RouteActionKind::VsefmResultGate, "manual_review") => {
             vsefm_manual_review_gate(project_root, session)
+        }
+        (RouteActionKind::VsefmVerification, "repair_incomplete")
+        | (RouteActionKind::VsefmResultGate, "repair_incomplete") => {
+            vsefm_repair_incomplete_gate(project_root, session)
         }
         (RouteActionKind::VsefmRepair, "repairing") => {
             repair_next_from_session(project_root, session)
@@ -1490,46 +1501,14 @@ fn repair_next_from_session(project_root: &str, session: &Value) -> LoomMcpActio
             )
         }
     };
-    let subject_ref = session
-        .get("subjectRef")
-        .and_then(Value::as_str)
-        .filter(|reference| !reference.is_empty());
-    let Some(subject_ref) = subject_ref else {
-        return failed(
-            project_root,
-            "VSEFM_RESUME_CONTEXT_MISSING",
-            "V-SEFM repair session is missing subjectRef.",
-        );
-    };
-    let subject_path =
-        match state::paths::from_project_relative(Path::new(project_root), subject_ref) {
-            Ok(path) => path,
-            Err(error) => {
-                return failed(
-                    project_root,
-                    "VSEFM_RESUME_CONTEXT_MISSING",
-                    error.to_string(),
-                )
-            }
-        };
-    let subject = match state::store::read_json_value(&subject_path) {
-        Ok(subject) => subject,
-        Err(error) => {
-            return failed(
-                project_root,
-                "VSEFM_RESUME_CONTEXT_MISSING",
-                error.to_string(),
-            )
-        }
-    };
-    let allowed_paths = subject
-        .get("changedFiles")
+    let scope_hints = session
+        .get("repairScopeHints")
+        .and_then(Value::as_array)
         .cloned()
-        .and_then(|files| files.as_array().cloned())
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
-        .collect();
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
     LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
         project_root.to_string(),
         delivery_core::LoomMcpNextAction::RunVsefmRepair(delivery_core::VsefmRepairNext {
@@ -1543,11 +1522,11 @@ fn repair_next_from_session(project_root: &str, session: &Value) -> LoomMcpActio
                 .to_string(),
             read_groups: inspected.read_groups,
             submit_tool: "loom.vsefmRepairAcceptFile".to_string(),
-            allowed_paths,
-            protected_paths: vec![
-                ".loom".to_string(),
-                "plugins/shared/loom/references/verification/sefm-verify.md".to_string(),
-            ],
+            scope_hints,
+            protected_paths: VSEFM_REPAIR_PROTECTED_PATHS
+                .iter()
+                .map(|path| (*path).to_string())
+                .collect(),
         }),
     ))
 }
@@ -1996,9 +1975,10 @@ fn verification_request(
     })
 }
 
-pub fn accept_vsefm_verification_file(
+pub fn accept_vsefm_verification_file<D: DomainDispatcher>(
     input: &FileSubmitInput,
     authorized: &state::AuthorizedWriteSet,
+    dispatcher: D,
 ) -> LoomMcpActionResult {
     let Some(target) = authorized
         .targets
@@ -2110,7 +2090,18 @@ pub fn accept_vsefm_verification_file(
                     return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
                 }
             };
-            return vsefm_result_repair_with_issues(input, authorized, vec![issue], repeated);
+            if repeated {
+                return finalize_vsefm_contract_fault(
+                    &input.project_root,
+                    &session_path,
+                    &session,
+                    &raw,
+                    std::slice::from_ref(&issue),
+                    "verification_result",
+                    dispatcher,
+                );
+            }
+            return vsefm_result_repair_with_issues(input, authorized, vec![issue]);
         }
     };
     let issues = validate_vsefm_candidate(&candidate, &check_plan);
@@ -2128,7 +2119,18 @@ pub fn accept_vsefm_verification_file(
                 return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
             }
         };
-        return vsefm_result_repair_with_issues(input, authorized, issues, repeated);
+        if repeated {
+            return finalize_vsefm_contract_fault(
+                &input.project_root,
+                &session_path,
+                &session,
+                &raw,
+                &issues,
+                "verification_result",
+                dispatcher,
+            );
+        }
+        return vsefm_result_repair_with_issues(input, authorized, issues);
     }
     if let Err(error) = record_vsefm_submit_attempt(root, &session_path, &session, &raw, &[], true)
     {
@@ -2321,11 +2323,10 @@ fn vsefm_result_repair_with_issues(
     input: &FileSubmitInput,
     authorized: &state::AuthorizedWriteSet,
     issues: Vec<delivery_core::RepairIssue>,
-    repeated: bool,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
-        stop_allowed: repeated,
+        stop_allowed: false,
         target_file: authorized
             .targets
             .iter()
@@ -2342,13 +2343,48 @@ fn vsefm_result_repair_with_issues(
         resubmit_tool: "loom.vsefmVerificationAcceptFile".to_string(),
         fix_scope: Some("Edit only the Agent-owned V-SEFM result candidate.".to_string()),
         read_groups: authorized.read_groups.clone(),
-        agent_instruction: if repeated {
-            "The same V-SEFM candidate and contract error were submitted more than once. Stop automatic retries, preserve the candidate and issues, and surface this contract failure to the user. Do not rerun verification or edit product files."
-                .to_string()
-        } else {
-            delivery_core::repairable_error_agent_instruction("loom.vsefmVerificationAcceptFile")
-        },
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.vsefmVerificationAcceptFile",
+        ),
     })
+}
+
+fn finalize_vsefm_contract_fault<D: DomainDispatcher>(
+    project_root: &str,
+    session_path: &Path,
+    session: &Value,
+    raw: &Value,
+    issues: &[delivery_core::RepairIssue],
+    stage: &str,
+    dispatcher: D,
+) -> LoomMcpActionResult {
+    let candidate_hash = Sha256::digest(serde_json::to_vec(raw).unwrap_or_default());
+    let mut updated =
+        state::store::read_json_value(session_path).unwrap_or_else(|_| session.clone());
+    if let Some(object) = updated.as_object_mut() {
+        object.insert("status".to_string(), json!("verification_unavailable"));
+        object.insert(
+            "contractFault".to_string(),
+            json!({
+                "stage": stage,
+                "code": "VSEFM_CONTRACT_FAULT",
+                "candidateSha256": format!("{candidate_hash:x}"),
+                "issues": issues,
+                "recordedAt": state::store::now_string()
+            }),
+        );
+        object.insert("updatedAt".to_string(), json!(state::store::now_string()));
+    }
+    if let Err(error) = state::store::write_json_atomic(session_path, &updated) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
+    }
+    if let Err(error) = sync_vsefm_record(project_root, &updated, "verification_unavailable", None)
+    {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
+    resume_after_vsefm(project_root, &updated, "verification_unavailable", dispatcher).with_warnings(vec![
+        "V-SEFM could not consume the same result after the contract error repeated. The raw result and contract fault were preserved; delivery resumed without treating the verification as passed or blocked.".to_string(),
+    ])
 }
 
 fn deserialize_vsefm_repair_candidate(
@@ -2469,11 +2505,10 @@ fn vsefm_repair_result_repair(
     input: &FileSubmitInput,
     authorized: &state::AuthorizedWriteSet,
     issues: Vec<delivery_core::RepairIssue>,
-    repeated: bool,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
-        stop_allowed: repeated,
+        stop_allowed: false,
         target_file: authorized
             .targets
             .iter()
@@ -2490,11 +2525,9 @@ fn vsefm_repair_result_repair(
         resubmit_tool: "loom.vsefmRepairAcceptFile".to_string(),
         fix_scope: Some("Edit only the Agent-owned V-SEFM repair result candidate.".to_string()),
         read_groups: authorized.read_groups.clone(),
-        agent_instruction: if repeated {
-            "The same V-SEFM repair candidate and contract error were submitted more than once. Stop automatic retries, preserve the candidate and issues, and surface this contract failure to the user. Do not rerun verification or edit product files.".to_string()
-        } else {
-            delivery_core::repairable_error_agent_instruction("loom.vsefmRepairAcceptFile")
-        },
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.vsefmRepairAcceptFile",
+        ),
     })
 }
 
@@ -2524,6 +2557,21 @@ where
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if status == "repair_incomplete" {
+        return match input.decision {
+            VsefmVerificationResolution::RetryRepair => {
+                materialize_vsefm_repair(&input.project_root, &session)
+            }
+            VsefmVerificationResolution::ManualReview => {
+                finish_vsefm_session(&input.project_root, &session, "manual_review", dispatcher)
+            }
+            _ => failed(
+                &input.project_root,
+                "VSEFM_RESOLUTION_INVALID",
+                "An incomplete Agent repair requires retry_repair or manual_review.",
+            ),
+        };
+    }
     if status == "manual_review" {
         return match input.decision {
             VsefmVerificationResolution::ApproveOverride => finish_vsefm_session(
@@ -2576,7 +2624,8 @@ where
             finish_vsefm_session(&input.project_root, &session, "manual_review", dispatcher)
         }
         VsefmVerificationResolution::ApproveOverride
-        | VsefmVerificationResolution::RequestChanges => failed(
+        | VsefmVerificationResolution::RequestChanges
+        | VsefmVerificationResolution::RetryRepair => failed(
             &input.project_root,
             "VSEFM_RESOLUTION_INVALID",
             "The selected manual review resolution is not valid for this verification result.",
@@ -2949,9 +2998,9 @@ fn vsefm_manual_review_gate(project_root: &str, session: &Value) -> LoomMcpActio
         LoomMcpUserGateResult::new(
             project_root.to_string(),
             format!(
-                "V-SEFM verification requires manual review. Choose approve_override or request_changes.\nResult: {result_ref}"
+                "V-SEFM 验证需要人工审查，请选择后续处理方式：\n1. 确认放行\n2. 返回自动修复\n结果文件：{result_ref}"
             ),
-            vec!["approve_override".to_string(), "request_changes".to_string()],
+            vec!["1".to_string(), "2".to_string()],
             None,
             session
                 .get("deliveryId")
@@ -2964,11 +3013,15 @@ fn vsefm_manual_review_gate(project_root: &str, session: &Value) -> LoomMcpActio
             Some(json!({
                 "kind": "vsefm_manual_review",
                 "verificationId": verification_id,
-                "resultRef": result_ref
+                "resultRef": result_ref,
+                "options": [
+                    {"value": "1", "label": "确认放行", "decision": "approve_override"},
+                    {"value": "2", "label": "返回自动修复", "decision": "request_changes"}
+                ]
             })),
         )
         .with_agent_instruction(
-            "Present the V-SEFM findings and wait for the manual review decision. Then call loom.vsefmVerificationResolve with decision=approve_override or decision=request_changes. Do not call loom.continue or knowledge tools before the user chooses.",
+            "展示 V-SEFM 阻断项并等待用户选择。用户选择 1 时调用 loom.vsefmVerificationResolve，decision=approve_override；选择 2 时使用 decision=request_changes。不要在用户选择前调用 loom.continue 或知识工具。",
         ),
     );
     if let Err(error) = sync_vsefm_record(project_root, session, "manual_review", None) {
@@ -2985,6 +3038,59 @@ fn vsefm_manual_review_gate(project_root: &str, session: &Value) -> LoomMcpActio
             verification_id,
             result_ref,
         ) {
+            return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
+        }
+    }
+    gate
+}
+
+fn vsefm_repair_incomplete_gate(project_root: &str, session: &Value) -> LoomMcpActionResult {
+    let verification_id = session
+        .get("verificationId")
+        .and_then(Value::as_str)
+        .unwrap_or("verification");
+    let result_ref = session
+        .get("repairResultFile")
+        .and_then(Value::as_str)
+        .unwrap_or(".loom/agent-writable/vsefm-repair-result.json");
+    let gate = LoomMcpActionResult::UserGate(
+        LoomMcpUserGateResult::new(
+            project_root.to_string(),
+            format!(
+                "Agent 未能完成 V-SEFM 修复，请选择后续处理方式：\n1. 重新让 Agent 修复\n2. 转人工审查\n修复结果：{result_ref}"
+            ),
+            vec!["1".to_string(), "2".to_string()],
+            None,
+            session
+                .get("deliveryId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            session
+                .get("phaseId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            Some(json!({
+                "kind": "vsefm_repair_incomplete",
+                "verificationId": verification_id,
+                "resultRef": result_ref,
+                "options": [
+                    {"value": "1", "label": "重新让 Agent 修复", "decision": "retry_repair"},
+                    {"value": "2", "label": "转人工审查", "decision": "manual_review"}
+                ]
+            })),
+        )
+        .with_agent_instruction(
+            "展示修复未完成的结果并等待用户选择。用户选择 1 时调用 loom.vsefmVerificationResolve，decision=retry_repair；选择 2 时使用 decision=manual_review。不要调用 loom.continue 或知识工具。",
+        ),
+    );
+    if let Err(error) = sync_vsefm_record(project_root, session, "repair_incomplete", None) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
+    if let (Some(delivery_id), Some(phase_id)) = (
+        session.get("deliveryId").and_then(Value::as_str),
+        session.get("phaseId").and_then(Value::as_str),
+    ) {
+        if let Err(error) = persist_vsefm_gate(project_root, delivery_id, phase_id, &gate) {
             return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
         }
     }
@@ -3100,20 +3206,228 @@ fn vsefm_result_gate(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("inconclusive");
-    let choices = if status == "pass" {
-        vec!["accept".to_string(), "manual_review".to_string()]
+    let choices = vec!["1".to_string(), "2".to_string()];
+    let options = if status == "pass" {
+        json!([
+            {"value": "1", "label": "接受验证结果", "decision": "accept"},
+            {"value": "2", "label": "转人工审查", "decision": "manual_review"}
+        ])
     } else {
-        vec!["repair".to_string(), "manual_review".to_string()]
+        json!([
+            {"value": "1", "label": "让 Agent 自动修复", "decision": "repair"},
+            {"value": "2", "label": "转人工审查", "decision": "manual_review"}
+        ])
     };
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
         project_root.to_string(),
-        format!("V-SEFM 本地验证结果：{status}。请查看结果并选择后续处理方式。\n结果文件：{result_ref}"),
+        format!("V-SEFM 本地验证结果：{status}。请选择后续处理方式：\n结果文件：{result_ref}"),
         choices,
         None,
         delivery_id.map(str::to_string),
         phase_id.map(str::to_string),
-        Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([]))})),
-    ).with_agent_instruction("展示 V-SEFM 验证结果摘要并等待用户选择。选择后调用 loom.vsefmVerificationResolve；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
+        Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])), "options": options})),
+    ).with_agent_instruction("展示 V-SEFM 验证结果摘要和选项。用户选择 1 或 2 后，将序号映射为 gate.options 中的 decision，再调用 loom.vsefmVerificationResolve；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
+}
+
+const VSEFM_REPAIR_PROTECTED_PATHS: &[&str] = &[
+    ".loom",
+    ".git",
+    "plugins/shared/loom/references/verification/sefm-verify.md",
+    "plugins/shared/loom/references/verification/v-sefm.json",
+];
+
+fn repair_snapshot_file(root: &Path, path: &Path) -> Option<Value> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let relative = path
+        .strip_prefix(root)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let digest = Sha256::digest(&bytes);
+    Some(json!({
+        "sha256": format!("{digest:x}"),
+        "bytes": bytes.len(),
+        "path": relative
+    }))
+}
+
+fn collect_repair_snapshot(
+    root: &Path,
+    current: &Path,
+    include_control_tree: bool,
+    files: &mut BTreeMap<String, Value>,
+) {
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .ok()
+            .map(|value| value.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        if relative.is_empty() {
+            continue;
+        }
+        if path.is_dir() {
+            if relative == ".git"
+                || relative == "node_modules"
+                || relative == "target"
+                || relative == "dist"
+                || relative == "build"
+                || relative == ".venv"
+                || relative == "__pycache__"
+                || (!include_control_tree && relative == ".loom")
+            {
+                continue;
+            }
+            collect_repair_snapshot(root, &path, include_control_tree, files);
+        } else if let Some(snapshot) = repair_snapshot_file(root, &path) {
+            files.insert(relative, snapshot);
+        }
+    }
+}
+
+fn build_repair_snapshot(root: &Path, include_control_tree: bool) -> Value {
+    let mut files = BTreeMap::new();
+    let snapshot_root = if include_control_tree {
+        root.join(".loom")
+    } else {
+        root.to_path_buf()
+    };
+    if snapshot_root.is_dir() {
+        collect_repair_snapshot(root, &snapshot_root, include_control_tree, &mut files);
+    }
+    let files = Value::Object(files.into_iter().collect());
+    let digest = Sha256::digest(serde_json::to_vec(&files).unwrap_or_default());
+    json!({
+        "schemaVersion": 1,
+        "files": files,
+        "sha256": format!("{digest:x}")
+    })
+}
+
+fn snapshot_file_map(snapshot: &Value) -> BTreeMap<String, Value> {
+    snapshot
+        .get("files")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+fn changed_snapshot_paths(before: &Value, after: &Value) -> Vec<String> {
+    let before = snapshot_file_map(before);
+    let after = snapshot_file_map(after);
+    before
+        .keys()
+        .chain(after.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(|path| path.to_string())
+        .collect()
+}
+
+fn repair_baseline_path(root: &Path, verification_id: &str, repair_id: &str) -> PathBuf {
+    root.join(".loom/verification/sessions")
+        .join(verification_id)
+        .join(format!("{repair_id}-baseline.json"))
+}
+
+fn protected_path_changed(path: &str, changed_paths: &[String]) -> bool {
+    changed_paths.iter().any(|changed| {
+        changed == path
+            || changed.starts_with(&format!("{path}/"))
+            || path == ".loom" && (changed == ".loom" || changed.starts_with(".loom/"))
+    })
+}
+
+fn repair_boundary_error(root: &Path, session: &Value, result_file: &str) -> Result<(), String> {
+    let baseline_ref = session
+        .get("repairBaselineRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "V-SEFM repair session is missing repairBaselineRef".to_string())?;
+    let baseline_path = state::paths::from_project_relative(root, baseline_ref)
+        .map_err(|error| error.to_string())?;
+    let baseline =
+        state::store::read_json_value(&baseline_path).map_err(|error| error.to_string())?;
+    let current_source = build_repair_snapshot(root, false);
+    let source_changes = changed_snapshot_paths(
+        baseline.get("sourceSnapshot").unwrap_or(&Value::Null),
+        &current_source,
+    );
+    let current_control = build_repair_snapshot(root, true);
+    let control_changes = changed_snapshot_paths(
+        baseline.get("controlSnapshot").unwrap_or(&Value::Null),
+        &current_control,
+    );
+    let allowed_control = [baseline_ref, result_file]
+        .into_iter()
+        .map(|path| path.trim_start_matches('/').to_string())
+        .collect::<BTreeSet<_>>();
+    let verification_id = session
+        .get("verificationId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let allowed_control_prefix = format!(".loom/verification/sessions/{verification_id}/");
+    let unauthorized_control = control_changes
+        .into_iter()
+        .filter(|path| {
+            !allowed_control.contains(path)
+                && path != ".loom/metrics/field-read-audit.jsonl"
+                && !path.starts_with(".loom/metrics/")
+                && *path != format!("{allowed_control_prefix}state.json")
+                && *path != format!("{allowed_control_prefix}repair-submit-attempts.jsonl")
+        })
+        .collect::<Vec<_>>();
+    if !unauthorized_control.is_empty() {
+        return Err(format!(
+            "protected Loom files changed during V-SEFM repair: {}",
+            unauthorized_control.join(", ")
+        ));
+    }
+    let protected_changes = source_changes
+        .iter()
+        .filter(|path| {
+            VSEFM_REPAIR_PROTECTED_PATHS
+                .iter()
+                .any(|protected| protected_path_changed(protected, std::slice::from_ref(path)))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !protected_changes.is_empty() {
+        return Err(format!(
+            "protected V-SEFM files changed during repair: {}",
+            protected_changes.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn repair_changed_files(root: &Path, session: &Value) -> Vec<String> {
+    let Some(baseline_ref) = session.get("repairBaselineRef").and_then(Value::as_str) else {
+        return vec![];
+    };
+    let Ok(baseline_path) = state::paths::from_project_relative(root, baseline_ref) else {
+        return vec![];
+    };
+    let Ok(baseline) = state::store::read_json_value(&baseline_path) else {
+        return vec![];
+    };
+    changed_snapshot_paths(
+        baseline.get("sourceSnapshot").unwrap_or(&Value::Null),
+        &build_repair_snapshot(root, false),
+    )
+    .into_iter()
+    .filter(|path| !path.starts_with(".loom/") && !path.starts_with(".git/"))
+    .collect()
 }
 
 fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActionResult {
@@ -3150,7 +3464,7 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
         Ok(subject) => subject,
         Err(error) => return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error.to_string()),
     };
-    let allowed_paths = subject
+    let scope_hints = subject
         .get("changedFiles")
         .and_then(Value::as_array)
         .into_iter()
@@ -3160,6 +3474,8 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
         .collect::<Vec<_>>();
     let result_file = format!(".loom/agent-writable/{repair_id}/vsefm-repair-result.json");
     let request_file = format!(".loom/verification/sessions/{verification_id}/repair-request.json");
+    let baseline_ref =
+        format!(".loom/verification/sessions/{verification_id}/{repair_id}-baseline.json");
     let request = json!({
         "schemaVersion": "1.0",
         "requestType": "vsefm_repair",
@@ -3172,23 +3488,26 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             "phaseId": session.get("phaseId")
         },
         "agentInstruction": {
-            "objective": "Fix only the blocking V-SEFM findings in the declared changed files.",
+            "objective": "Fix the blocking V-SEFM findings in the project and prepare it for re-verification.",
             "findings": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])),
             "steps": [
                 "Read repair_core and repair_result_contract.",
-                "Read each blocking finding and the allowed source file.",
-                "Modify only allowedPaths.",
-                "Run bounded verification commands for the repaired findings.",
+                "Read each blocking finding and inspect the project files needed to find its root cause.",
+                "Modify any ordinary project source, configuration, test, migration, build, or deployment file needed for the repair.",
+                "Run bounded verification for the repaired findings; the command list is not part of the result contract.",
                 "Write repair result and submit it with loom.vsefmRepairAcceptFile."
             ],
             "boundaryRules": [
                 "Do not edit .loom canonical artifacts.",
-                "Do not edit files outside allowedPaths.",
-                "Do not claim a finding is resolved without verification evidence."
+                "Do not edit .git or V-SEFM verification rules and configuration.",
+                "Do not claim a finding is ready without completing the implementation work."
             ]
         },
-        "allowedPaths": allowed_paths,
-        "protectedPaths": [".loom", "plugins/shared/loom/references/verification/sefm-verify.md"],
+        "repairWriteBoundary": {
+            "root": ".",
+            "scopeHints": scope_hints.clone(),
+            "protectedPaths": VSEFM_REPAIR_PROTECTED_PATHS
+        },
         "outputContract": {
             "artifactKind": "vsefm_repair_result",
             "writeMode": "single_json",
@@ -3197,18 +3516,15 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             "agentOwnedFields": [
                 "status",
                 "summary",
-                "resolved_failure_refs",
-                "changed_files",
-                "verification_commands",
-                "remaining_findings"
+                "details"
             ],
             "resultSchema": serde_json::to_value(schemars::schema_for!(VsefmRepairCandidate))
                 .unwrap_or_else(|_| json!({"type": "object"})),
-            "writeTargets": [{"targetId": "result", "path": result_file, "required": true, "description": "Write the V-SEFM repair result."}],
-            "resultTemplate": {"status": "ready", "summary": "", "resolved_failure_refs": [], "changed_files": [], "verification_commands": [], "remaining_findings": []}
+            "writeTargets": [{"targetId": "result", "path": result_file, "required": true, "description": "Write the minimal Agent-owned V-SEFM repair result."}],
+            "resultTemplate": {"status": "ready", "summary": "", "details": {}}
         },
         "requestReadPlan": {"groups": [
-            delivery_core::ReadGroupRef::new("repair_core", 1, vec!["agentInstruction", "source", "allowedPaths", "protectedPaths"].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/repair")),
+            delivery_core::ReadGroupRef::new("repair_core", 1, vec!["agentInstruction", "source", "repairWriteBoundary"].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/repair")),
             delivery_core::ReadGroupRef::new("repair_result_contract", 2, vec!["outputContract"].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/repair-result"))
         ]}
     });
@@ -3248,6 +3564,12 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             json!(stored.request_ref.clone()),
         );
         object.insert("repairResultFile".to_string(), json!(result_file));
+        object.insert("repairBaselineRef".to_string(), json!(baseline_ref));
+        object.insert("repairScopeHints".to_string(), json!(scope_hints.clone()));
+        object.insert(
+            "repairProtectedPaths".to_string(),
+            json!(VSEFM_REPAIR_PROTECTED_PATHS),
+        );
         object.insert("updatedAt".to_string(), json!(state::store::now_string()));
     }
     let state_path = session_dir.join("state.json");
@@ -3272,6 +3594,18 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
         }
     }
+    let baseline_path = repair_baseline_path(Path::new(project_root), &verification_id, &repair_id);
+    let baseline = json!({
+        "schemaVersion": 1,
+        "sourceSnapshot": build_repair_snapshot(Path::new(project_root), false),
+        "controlSnapshot": build_repair_snapshot(Path::new(project_root), true),
+        "scopeHints": scope_hints.clone(),
+        "protectedPaths": VSEFM_REPAIR_PROTECTED_PATHS,
+        "createdAt": state::store::now_string()
+    });
+    if let Err(error) = state::store::write_json_atomic(&baseline_path, &baseline) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
+    }
     let inspected = match state::inspect_request(delivery_core::InspectRequestInput {
         project_root: project_root.to_string(),
         request_ref: stored.request_ref.clone(),
@@ -3294,18 +3628,19 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             result_file,
             read_groups: inspected.read_groups,
             submit_tool: "loom.vsefmRepairAcceptFile".to_string(),
-            allowed_paths,
-            protected_paths: vec![
-                ".loom".to_string(),
-                "plugins/shared/loom/references/verification/sefm-verify.md".to_string(),
-            ],
+            scope_hints,
+            protected_paths: VSEFM_REPAIR_PROTECTED_PATHS
+                .iter()
+                .map(|path| (*path).to_string())
+                .collect(),
         }),
     ))
 }
 
-pub fn accept_vsefm_repair_file(
+pub fn accept_vsefm_repair_file<D: DomainDispatcher>(
     input: &FileSubmitInput,
     authorized: &state::AuthorizedWriteSet,
+    dispatcher: D,
 ) -> LoomMcpActionResult {
     let Some(target) = authorized
         .targets
@@ -3356,6 +3691,9 @@ pub fn accept_vsefm_repair_file(
         .join(".loom/verification/sessions")
         .join(&verification_id)
         .join("state.json");
+    if let Err(error) = repair_boundary_error(root, &session, &target.path) {
+        return failed(&input.project_root, "VSEFM_REPAIR_PROTECTED_CHANGE", error);
+    }
     let candidate = match deserialize_vsefm_repair_candidate(raw.clone()) {
         Ok(candidate) => candidate,
         Err(issue) => {
@@ -3372,17 +3710,21 @@ pub fn accept_vsefm_repair_file(
                     return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error)
                 }
             };
-            return vsefm_repair_result_repair(input, authorized, vec![issue], repeated);
+            if repeated {
+                return finalize_vsefm_contract_fault(
+                    &input.project_root,
+                    &session_path,
+                    &session,
+                    &raw,
+                    std::slice::from_ref(&issue),
+                    "repair_result",
+                    dispatcher,
+                );
+            }
+            return vsefm_repair_result_repair(input, authorized, vec![issue]);
         }
     };
     let mut issues = Vec::new();
-    if candidate.status != VsefmRepairStatus::Ready {
-        issues.push(vsefm_issue(
-            "VSEFM_REPAIR_STATUS_INVALID",
-            "status",
-            "V-SEFM repair must have status=ready before it can be accepted.",
-        ));
-    }
     if candidate.summary.trim().is_empty() {
         issues.push(vsefm_issue(
             "VSEFM_REPAIR_SUMMARY_REQUIRED",
@@ -3402,20 +3744,37 @@ pub fn accept_vsefm_repair_file(
             Ok(repeated) => repeated,
             Err(error) => return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error),
         };
-        return vsefm_repair_result_repair(input, authorized, issues, repeated);
+        if repeated {
+            return finalize_vsefm_contract_fault(
+                &input.project_root,
+                &session_path,
+                &session,
+                &raw,
+                &issues,
+                "repair_result",
+                dispatcher,
+            );
+        }
+        return vsefm_repair_result_repair(input, authorized, issues);
     }
     if let Err(error) =
         record_vsefm_repair_submit_attempt(root, &session_path, &session, &raw, &[], true)
     {
         return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
     }
+    let changed_files = repair_changed_files(root, &session);
     let mut updated = session.clone();
     if let Some(object) = updated.as_object_mut() {
-        object.insert("status".to_string(), json!("reverification_started"));
         object.insert(
-            "repairResult".to_string(),
-            serde_json::to_value(&candidate).unwrap_or_else(|_| json!({})),
+            "status".to_string(),
+            json!(if candidate.status == VsefmRepairStatus::Blocked {
+                "repair_incomplete"
+            } else {
+                "reverification_started"
+            }),
         );
+        object.insert("repairResult".to_string(), raw.clone());
+        object.insert("repairChangedFiles".to_string(), json!(changed_files));
         object.insert("updatedAt".to_string(), json!(state::store::now_string()));
     }
     if let Err(error) = state::store::write_json_atomic(&session_path, &updated) {
@@ -3424,6 +3783,9 @@ pub fn accept_vsefm_repair_file(
             "VSEFM_STATE_WRITE_FAILED",
             error.to_string(),
         );
+    }
+    if candidate.status == VsefmRepairStatus::Blocked {
+        return vsefm_repair_incomplete_gate(&input.project_root, &updated);
     }
     let config = match load_config() {
         Ok(config) => config,
@@ -3623,15 +3985,18 @@ fn persist_vsefm_manual_review_gate(
         source: "vsefm_verification".to_string(),
         reason: "V-SEFM verification requires manual review.".to_string(),
         prompt: Some(
-            "V-SEFM verification requires manual review. Choose approve_override or request_changes."
-                .to_string(),
+            "V-SEFM 验证需要人工审查，请选择 1 确认放行，或选择 2 返回自动修复。".to_string(),
         ),
-        accepted_responses: vec!["approve_override".to_string(), "request_changes".to_string()],
+        accepted_responses: vec!["1".to_string(), "2".to_string()],
         request_ref: None,
         details: Some(json!({
             "kind": "vsefm_manual_review",
             "verificationId": verification_id,
-            "resultRef": result_ref
+            "resultRef": result_ref,
+            "options": [
+                {"value": "1", "label": "确认放行", "decision": "approve_override"},
+                {"value": "2", "label": "返回自动修复", "decision": "request_changes"}
+            ]
         })),
         target_phase_id: None,
     });

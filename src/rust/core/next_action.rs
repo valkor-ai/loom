@@ -292,7 +292,7 @@ pub struct VsefmRepairNext {
     pub result_file: String,
     pub read_groups: Vec<ReadGroupRef>,
     pub submit_tool: String,
-    pub allowed_paths: Vec<String>,
+    pub scope_hints: Vec<String>,
     pub protected_paths: Vec<String>,
 }
 

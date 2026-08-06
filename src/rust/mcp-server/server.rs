@@ -734,14 +734,22 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                execution::accept_vsefm_verification_file(&normalized_input, &authorized),
+                execution::accept_vsefm_verification_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         "vsefmRepairAcceptFile" => {
             return persist_repairable_result(
                 &normalized_input,
                 &authorized,
-                execution::accept_vsefm_repair_file(&normalized_input, &authorized),
+                execution::accept_vsefm_repair_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
             );
         }
         _ => {}

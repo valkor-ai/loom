@@ -115,8 +115,8 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
             "Do not modify product files or Loom canonical artifacts. If a check cannot be established, record unknown or inconclusive evidence instead of inventing pass. Do not stop until the submit succeeds or Loom returns user_gate, done, blocked, or failed."
         ),
         LoomMcpNextAction::RunVsefmRepair(_) => concat!(
-            "This is a required V-SEFM repair task. Continue immediately: inspect requestRef, read every repair request group, modify only the declared allowed paths, run bounded verification commands, write the repair result, and submit it with loom.vsefmRepairAcceptFile before reporting progress. ",
-            "Do not modify Loom canonical artifacts or expand the repair scope. Do not stop until the repair submit succeeds or Loom returns user_gate, done, blocked, or failed."
+            "This is a required V-SEFM repair task. Continue immediately: inspect requestRef, read every repair request group, modify the necessary ordinary project files, run bounded verification, write the repair result, and submit it with loom.vsefmRepairAcceptFile before reporting progress. ",
+            "The request scope hints are not a write allowlist: modify any ordinary project source, configuration, test, migration, build, or deployment file needed to fix the findings. Do not modify protected Loom or V-SEFM files. Do not stop until the repair submit succeeds or Loom returns user_gate, done, blocked, or failed."
         ),
         LoomMcpNextAction::RunLoomTool(_) => {
             concat!(
