@@ -98,6 +98,29 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     assert_eq!(record["appKeyPresent"], true);
     assert_eq!(record["urlOpened"], false);
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    let request = request_json(&fixture, request_ref);
+    assert_eq!(
+        request["requestType"], "vsefm_local_verification",
+        "{request:#}"
+    );
+    assert!(request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("agent steps")
+        .iter()
+        .any(|step| step.as_str().is_some_and(|step| step.contains("checkPlan"))));
+    assert_eq!(
+        request["subject"]["acceptedArtifacts"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(
+        request["subject"]["checkPlan"]
+            .as_array()
+            .expect("generated check plan")
+            .len(),
+        16
+    );
     let inspected = server
         .invoke_tool(
             "loom.inspectRequest",
@@ -128,6 +151,43 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
             )
             .expect("verification request group");
     }
+    let contract = read_request_group(
+        &server,
+        &fixture,
+        request_ref,
+        "verification_result_contract",
+    );
+    assert_eq!(
+        contract["fields"]["outputContract"]["agentOwnedFields"],
+        json!([
+            "status",
+            "checks",
+            "blocking_failures",
+            "warnings",
+            "unknown_checks",
+            "recommended_actions"
+        ])
+    );
+    assert_eq!(
+        contract["fields"]["outputContract"]["mcpOwnedFields"],
+        json!([
+            "artifact_id",
+            "verification_id",
+            "scope",
+            "source",
+            "check_plan",
+            "statistics",
+            "attempts"
+        ])
+    );
+    assert_eq!(
+        contract["fields"]["outputContract"]["resultSchema"]["type"],
+        "object"
+    );
+    assert_eq!(
+        contract["fields"]["outputContract"]["resultSchema"]["additionalProperties"],
+        false
+    );
     let result_file = fixture
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
@@ -217,6 +277,30 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         )
         .expect("verification accept");
     assert_eq!(structured(accepted)["state"], "done");
+    let verification_id = started["next"]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let canonical_path = fixture
+        .root
+        .join(format!(".loom/verification/results/{verification_id}.json"));
+    let canonical: Value = serde_json::from_str(
+        &std::fs::read_to_string(&canonical_path).expect("canonical V-SEFM result"),
+    )
+    .expect("canonical result json");
+    assert_eq!(canonical["verification_id"], verification_id);
+    assert_eq!(canonical["check_plan"].as_array().map(Vec::len), Some(16));
+    assert_eq!(canonical["attempts"], 1);
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/verification/v-sefm.json"))
+            .expect("completed V-SEFM record"),
+    )
+    .expect("completed record json");
+    assert_eq!(record["status"], "completed");
+    assert_eq!(record["verificationId"], verification_id);
+    assert_eq!(
+        record["resultRef"],
+        format!(".loom/verification/results/{verification_id}.json")
+    );
 }
 
 #[test]
@@ -261,11 +345,69 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
         .as_str()
         .expect("repair request ref");
     read_request_groups(&server, &fixture, repair_request_ref);
+    let repair_request = read_request_group(
+        &server,
+        &fixture,
+        repair_request_ref,
+        "repair_result_contract",
+    );
+    assert_eq!(
+        repair_request["fields"]["outputContract"]["resultSchema"]["type"], "object",
+        "{repair_request:#}"
+    );
+    assert_eq!(
+        repair_request["fields"]["outputContract"]["resultSchema"]["additionalProperties"], false,
+        "{repair_request:#}"
+    );
     let repair_file = fixture.root.join(
         repair["next"]["resultFile"]
             .as_str()
             .expect("repair result file"),
     );
+    let invalid_repair = json!({
+        "status": "ready",
+        "summary": "The blocking authorization check was repaired and verified.",
+        "resolved_failure_refs": ["AUTH-HORIZONTAL"],
+        "changed_files": [],
+        "verification_commands": ["cargo test --quiet"],
+        "remaining_findings": [],
+        "unexpected": true
+    });
+    write_json(&repair_file, invalid_repair);
+    let first_repair = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmRepairAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": repair_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("first invalid repair submit"),
+    );
+    assert_eq!(
+        first_repair["state"], "repairable_error",
+        "{first_repair:#}"
+    );
+    assert_eq!(first_repair["stopAllowed"], false, "{first_repair:#}");
+    let second_repair = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmRepairAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": repair_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("repeated invalid repair submit"),
+    );
+    assert_eq!(
+        second_repair["state"], "repairable_error",
+        "{second_repair:#}"
+    );
+    assert_eq!(second_repair["stopAllowed"], true, "{second_repair:#}");
     write_json(
         &repair_file,
         json!({
@@ -291,6 +433,19 @@ fn blocked_vsefm_result_can_enter_repair_and_reverification() {
     );
     assert_eq!(reverified["state"], "auto_runnable", "{reverified:#}");
     assert_eq!(reverified["next"]["kind"], "run_vsefm_verification");
+    let verification_id = started["next"]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let repair_audit = fixture.root.join(format!(
+        ".loom/verification/sessions/{verification_id}/repair-submit-attempts.jsonl"
+    ));
+    assert_eq!(
+        std::fs::read_to_string(repair_audit)
+            .expect("repair submit audit")
+            .lines()
+            .count(),
+        3
+    );
 }
 
 #[test]
@@ -360,6 +515,112 @@ fn blocked_vsefm_result_can_be_resolved_by_manual_review() {
     assert_eq!(resolved["state"], "done", "{resolved:#}");
 }
 
+#[test]
+fn repeated_invalid_vsefm_result_reports_path_and_stops_retries() {
+    let (fixture, server, started) = prepare_local_verification("repeated-invalid");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    let mut invalid = passing_candidate();
+    invalid["unexpected"] = json!(true);
+    write_json(&result_file, invalid.clone());
+
+    let first = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("first invalid result submit"),
+    );
+    assert_eq!(first["state"], "repairable_error", "{first:#}");
+    assert_eq!(first["stopAllowed"], false, "{first:#}");
+    assert!(first["issues"][0]["fieldPath"].is_string(), "{first:#}");
+
+    let second = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("repeated invalid result submit"),
+    );
+    assert_eq!(second["state"], "repairable_error", "{second:#}");
+    assert_eq!(second["stopAllowed"], true, "{second:#}");
+    assert!(second["agentInstruction"]
+        .as_str()
+        .expect("stop instruction")
+        .contains("Stop automatic retries"));
+
+    let verification_id = started["next"]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let audit = fixture.root.join(format!(
+        ".loom/verification/sessions/{verification_id}/submit-attempts.jsonl"
+    ));
+    assert_eq!(
+        std::fs::read_to_string(audit)
+            .expect("submit audit")
+            .lines()
+            .count(),
+        2
+    );
+}
+
+fn passing_candidate() -> Value {
+    let checks = [
+        "BUSINESS-INTENT",
+        "AUTH-HORIZONTAL",
+        "AUTH-VERTICAL",
+        "TENANT-ISOLATION",
+        "STATE-MACHINE",
+        "IDEMPOTENCY",
+        "CONCURRENCY",
+        "TRANSACTION",
+        "DATA-INTEGRITY",
+        "API-COMPATIBILITY",
+        "ERROR-RECOVERY",
+        "SECURITY-BOUNDARY",
+        "RETRY-TIMEOUT-RATE-LIMIT",
+        "OBSERVABILITY-EVIDENCE",
+        "REGRESSION-COMPATIBILITY",
+        "PERFORMANCE-CAPACITY",
+    ]
+    .iter()
+    .map(|check_id| {
+        json!({
+            "check_id": check_id,
+            "category": "QUALITY",
+            "rule": check_id,
+            "status": "pass",
+            "input": "local verification fixture",
+            "expected": "no defect",
+            "observed": "no defect",
+            "evidence": format!("evidence-{check_id}"),
+            "timestamp": "2026-08-05T00:00:00Z"
+        })
+    })
+    .collect::<Vec<_>>();
+    json!({
+        "status": "pass",
+        "checks": checks,
+        "blocking_failures": [],
+        "warnings": [],
+        "unknown_checks": [],
+        "recommended_actions": []
+    })
+}
+
 fn prepare_local_verification(name: &str) -> (Fixture, LoomMcpServer, Value) {
     let fixture = Fixture::new(name);
     let server = LoomMcpServer::default();
@@ -418,6 +679,44 @@ fn read_request_groups(server: &LoomMcpServer, fixture: &Fixture, request_ref: &
     }
 }
 
+fn read_request_group(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    group_id: &str,
+) -> Value {
+    structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "groupId": group_id
+                }))),
+            )
+            .expect("request group"),
+    )
+}
+
+fn request_json(fixture: &Fixture, request_ref: &str) -> Value {
+    let index: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/requests/index.json"))
+            .expect("request index"),
+    )
+    .expect("request index json");
+    let relative = index["requests"]
+        .as_array()
+        .expect("request index requests")
+        .iter()
+        .find(|entry| entry["requestRef"] == request_ref)
+        .and_then(|entry| entry["requestFile"].as_str())
+        .expect("request file ref");
+    let path = fixture.root.join(relative);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("request file"))
+        .expect("request json")
+}
+
 fn blocked_candidate() -> Value {
     let checks = [
         "BUSINESS-INTENT",
@@ -456,13 +755,11 @@ fn blocked_candidate() -> Value {
         "status": "blocked",
         "checks": checks,
         "blocking_failures": [{
-            "category": "AUTHORIZATION",
-            "rule": "AUTH-HORIZONTAL",
+            "finding_id": "finding-auth-horizontal-001",
+            "check_id": "AUTH-HORIZONTAL",
             "severity": "critical",
-            "evidence": "User B data was returned.",
-            "reproduction": "GET /api/resources/user-b",
-            "expected": "403 or 404",
-            "observed": "200"
+            "summary": "User B data was returned to User A.",
+            "remediation": "Bind resource lookup and authorization to the authenticated owner."
         }],
         "warnings": [],
         "unknown_checks": [],

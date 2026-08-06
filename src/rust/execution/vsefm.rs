@@ -44,23 +44,18 @@ pub enum VsefmVerificationResolution {
     RequestChanges,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmVerificationCandidate {
     pub status: VsefmVerificationStatus,
-    #[serde(default)]
     pub checks: Vec<VsefmCheckResult>,
-    #[serde(default)]
     pub blocking_failures: Vec<VsefmBlockingFailure>,
-    #[serde(default)]
     pub warnings: Vec<String>,
-    #[serde(default)]
     pub unknown_checks: Vec<VsefmUnknownCheck>,
-    #[serde(default)]
     pub recommended_actions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VsefmVerificationStatus {
     Pass,
@@ -68,8 +63,8 @@ pub enum VsefmVerificationStatus {
     Inconclusive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmCheckResult {
     pub check_id: String,
     pub category: String,
@@ -82,50 +77,60 @@ pub struct VsefmCheckResult {
     pub timestamp: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VsefmCheckStatus {
     Pass,
     Fail,
     Unknown,
-    NotApplicable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmBlockingFailure {
-    pub category: String,
-    pub rule: String,
+    pub finding_id: String,
+    pub check_id: String,
     pub severity: String,
-    pub evidence: String,
-    pub reproduction: String,
-    pub expected: String,
-    pub observed: String,
+    pub summary: String,
+    pub remediation: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmUnknownCheck {
     pub check_id: String,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct VsefmCheckPlanEntry {
+    check_id: String,
+    applicability: VsefmCheckApplicability,
+    reason: String,
+    hard_blocking: bool,
+    required_evidence: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+enum VsefmCheckApplicability {
+    Required,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmRepairCandidate {
     pub status: VsefmRepairStatus,
     pub summary: String,
-    #[serde(default)]
     pub resolved_failure_refs: Vec<String>,
-    #[serde(default)]
     pub changed_files: Vec<String>,
-    #[serde(default)]
     pub verification_commands: Vec<String>,
-    #[serde(default)]
     pub remaining_findings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VsefmRepairStatus {
     Ready,
@@ -164,6 +169,12 @@ struct VsefmRecord {
     url_opened: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verification_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attempt: Option<u64>,
     created_at: String,
     updated_at: String,
 }
@@ -369,6 +380,9 @@ fn persist_pending_gate(
         app_key_present: false,
         url_opened: false,
         warning: None,
+        verification_id: None,
+        result_ref: None,
+        attempt: None,
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
     };
@@ -497,6 +511,9 @@ where
         app_key_present: app_key.as_ref().is_some_and(|state| state.present),
         url_opened,
         warning: warnings.first().cloned(),
+        verification_id: None,
+        result_ref: None,
+        attempt: None,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -587,6 +604,36 @@ fn write_record(project_root: &str, record: &VsefmRecord) -> Result<(), String> 
     state::store::write_json_atomic(&path, record).map_err(|error| error.to_string())
 }
 
+fn sync_vsefm_record(
+    project_root: &str,
+    session: &Value,
+    status: &str,
+    result_ref: Option<&str>,
+) -> Result<(), String> {
+    let path = Path::new(project_root)
+        .join(".loom")
+        .join("verification")
+        .join(RECORD_FILE_NAME);
+    let mut record = state::store::read_json_value(&path).map_err(|error| error.to_string())?;
+    let Some(object) = record.as_object_mut() else {
+        return Err("V-SEFM record must be a JSON object".to_string());
+    };
+    object.insert("status".to_string(), json!(status));
+    if let Some(value) = session.get("verificationId") {
+        object.insert("verificationId".to_string(), value.clone());
+    }
+    if let Some(result_ref) = result_ref {
+        object.insert("resultRef".to_string(), json!(result_ref));
+    } else if let Some(value) = session.get("resultRef") {
+        object.insert("resultRef".to_string(), value.clone());
+    }
+    if let Some(value) = session.get("attempt") {
+        object.insert("attempt".to_string(), value.clone());
+    }
+    object.insert("updatedAt".to_string(), json!(state::store::now_string()));
+    state::store::write_json_atomic(&path, &record).map_err(|error| error.to_string())
+}
+
 const VSEFM_CHECK_IDS: &[&str] = &[
     "BUSINESS-INTENT",
     "AUTH-HORIZONTAL",
@@ -605,6 +652,358 @@ const VSEFM_CHECK_IDS: &[&str] = &[
     "REGRESSION-COMPATIBILITY",
     "PERFORMANCE-CAPACITY",
 ];
+
+const VSEFM_HARD_BLOCKERS: &[&str] = &[
+    "AUTH-HORIZONTAL",
+    "AUTH-VERTICAL",
+    "TENANT-ISOLATION",
+    "IDEMPOTENCY",
+    "STATE-MACHINE",
+    "TRANSACTION",
+];
+
+fn collect_json_key_values<'a>(value: &'a Value, key: &str, output: &mut Vec<&'a Value>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(value) = object.get(key) {
+                output.push(value);
+            }
+            for value in object.values() {
+                collect_json_key_values(value, key, output);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_json_key_values(value, key, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn json_key_has_non_empty_array(values: &[&Value]) -> bool {
+    values
+        .iter()
+        .any(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+}
+
+fn json_key_has_string(values: &[&Value], expected: &str) -> bool {
+    values
+        .iter()
+        .any(|value| value.as_str().is_some_and(|actual| actual == expected))
+}
+
+fn json_key_has_object_field(values: &[&Value], field: &str, expected: &str) -> bool {
+    values.iter().any(|value| {
+        value
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|actual| actual == expected)
+    })
+}
+
+fn json_key_has_any_object_field(values: &[&Value], fields: &[&str]) -> bool {
+    values.iter().any(|value| {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        fields.iter().any(|field| object.contains_key(*field))
+    })
+}
+
+fn check_plan_entry(
+    check_id: &str,
+    applicable: bool,
+    reason: &str,
+    required_evidence: &str,
+) -> Value {
+    json!({
+        "check_id": check_id,
+        "applicability": if applicable { "required" } else { "not_applicable" },
+        "reason": reason,
+        "hard_blocking": VSEFM_HARD_BLOCKERS.contains(&check_id),
+        "required_evidence": required_evidence
+    })
+}
+
+fn derive_check_plan(accepted_artifacts: &[Value], changed_files: bool) -> Vec<Value> {
+    if accepted_artifacts.is_empty() {
+        return VSEFM_CHECK_IDS
+            .iter()
+            .map(|check_id| {
+                check_plan_entry(
+                    check_id,
+                    true,
+                    "No delivery facts are available; retain the full verifier catalog.",
+                    "Read-only source and test evidence.",
+                )
+            })
+            .collect();
+    }
+
+    let mut interfaces = Vec::new();
+    let mut auth_policies = Vec::new();
+    let mut operation_kinds = Vec::new();
+    let mut methods = Vec::new();
+    let mut state_machines = Vec::new();
+    let mut data_models = Vec::new();
+    let mut runtime_dependencies = Vec::new();
+    let mut external_services = Vec::new();
+    let mut runtime_deliveries = Vec::new();
+    let mut pagination_policies = Vec::new();
+    for artifact in accepted_artifacts {
+        collect_json_key_values(artifact, "interfaces", &mut interfaces);
+        collect_json_key_values(artifact, "authPolicy", &mut auth_policies);
+        collect_json_key_values(artifact, "operationKind", &mut operation_kinds);
+        collect_json_key_values(artifact, "method", &mut methods);
+        collect_json_key_values(artifact, "stateMachines", &mut state_machines);
+        collect_json_key_values(artifact, "dataModel", &mut data_models);
+        collect_json_key_values(artifact, "runtimeDependencies", &mut runtime_dependencies);
+        collect_json_key_values(artifact, "externalServices", &mut external_services);
+        collect_json_key_values(artifact, "runtimeDelivery", &mut runtime_deliveries);
+        collect_json_key_values(artifact, "paginationPolicy", &mut pagination_policies);
+    }
+    let mut dependency_kinds = Vec::new();
+    for dependency in &runtime_dependencies {
+        let mut kinds = Vec::new();
+        collect_json_key_values(dependency, "kind", &mut kinds);
+        dependency_kinds.extend(kinds.into_iter().filter_map(Value::as_str));
+    }
+
+    let has_api = json_key_has_non_empty_array(&interfaces);
+    let has_auth = json_key_has_object_field(&auth_policies, "required", "required")
+        || json_key_has_any_object_field(&auth_policies, &["actorRefs", "permissionRefs"]);
+    let has_write = json_key_has_string(&operation_kinds, "create")
+        || json_key_has_string(&operation_kinds, "update")
+        || json_key_has_string(&operation_kinds, "transition")
+        || json_key_has_string(&methods, "POST")
+        || json_key_has_string(&methods, "PATCH")
+        || json_key_has_string(&methods, "PUT")
+        || json_key_has_string(&methods, "DELETE");
+    let has_create =
+        json_key_has_string(&operation_kinds, "create") || json_key_has_string(&methods, "POST");
+    let has_state = json_key_has_non_empty_array(&state_machines)
+        || json_key_has_string(&operation_kinds, "transition");
+    let has_persistence = json_key_has_non_empty_array(&data_models)
+        || dependency_kinds.iter().any(|kind| {
+            matches!(
+                kind.to_ascii_lowercase().as_str(),
+                "storage" | "database" | "persistence"
+            )
+        });
+    let has_external = external_services.iter().any(|value| {
+        value
+            .get("selection")
+            .and_then(Value::as_str)
+            .is_some_and(|selection| {
+                !matches!(
+                    selection.to_ascii_lowercase().as_str(),
+                    "none" | "not_needed" | "不需要"
+                )
+            })
+    }) || dependency_kinds.iter().any(|kind| {
+        !matches!(
+            kind.to_ascii_lowercase().as_str(),
+            "storage" | "database" | "persistence"
+        )
+    });
+    let has_runtime = json_key_has_non_empty_array(&runtime_deliveries)
+        || accepted_artifacts.iter().any(|artifact| {
+            artifact.get("runtimeDelivery").is_some() || artifact.get("runtimeSurfaces").is_some()
+        });
+    let has_list = json_key_has_string(&operation_kinds, "list")
+        || json_key_has_string(&operation_kinds, "query")
+        || pagination_policies.iter().any(|value| {
+            value
+                .get("strategy")
+                .and_then(Value::as_str)
+                .is_some_and(|strategy| strategy != "not_applicable")
+        });
+    let has_tenant = accepted_artifacts.iter().any(|artifact| {
+        ["tenantId", "tenant_id", "workspaceId", "workspace_id"]
+            .iter()
+            .any(|key| {
+                let mut values = Vec::new();
+                collect_json_key_values(artifact, key, &mut values);
+                !values.is_empty()
+            })
+    });
+    let unknown_applicability = !has_api && !has_persistence && !has_runtime;
+
+    VSEFM_CHECK_IDS
+        .iter()
+        .map(|check_id| match *check_id {
+            "BUSINESS-INTENT" => check_plan_entry(
+                check_id,
+                true,
+                "Every delivery has a declared business subject.",
+                "Accepted requirement and acceptance evidence.",
+            ),
+            "AUTH-HORIZONTAL" => check_plan_entry(
+                check_id,
+                has_auth,
+                if has_auth {
+                    "The accepted architecture declares an authentication policy."
+                } else {
+                    "No structured authentication policy is declared."
+                },
+                "Identity and object ownership evidence.",
+            ),
+            "AUTH-VERTICAL" => check_plan_entry(
+                check_id,
+                has_auth && has_write,
+                if has_auth && has_write {
+                    "Authenticated write interfaces are declared."
+                } else {
+                    "No authenticated write interface is declared."
+                },
+                "Server-side authorization evidence for write operations.",
+            ),
+            "TENANT-ISOLATION" => check_plan_entry(
+                check_id,
+                has_tenant,
+                if has_tenant {
+                    "Tenant or workspace fields are present in accepted contracts."
+                } else {
+                    "No tenant or workspace boundary is present in accepted contracts."
+                },
+                "Cross-tenant access evidence.",
+            ),
+            "STATE-MACHINE" => check_plan_entry(
+                check_id,
+                has_state,
+                if has_state {
+                    "State-machine or transition behavior is declared."
+                } else {
+                    "No state-machine or transition behavior is declared."
+                },
+                "Legal and illegal transition evidence.",
+            ),
+            "IDEMPOTENCY" => check_plan_entry(
+                check_id,
+                has_create,
+                if has_create {
+                    "A create interface is declared and replay behavior must be evaluated."
+                } else {
+                    "No create interface is declared."
+                },
+                "Replay or idempotency-key evidence.",
+            ),
+            "CONCURRENCY" => check_plan_entry(
+                check_id,
+                has_persistence && has_write,
+                if has_persistence && has_write {
+                    "Persistent write behavior is declared."
+                } else {
+                    "No persistent write behavior is declared."
+                },
+                "Concurrent request evidence.",
+            ),
+            "TRANSACTION" => check_plan_entry(
+                check_id,
+                has_persistence && has_write,
+                if has_persistence && has_write {
+                    "Persistent mutations are declared."
+                } else {
+                    "No persistent mutation is declared."
+                },
+                "Commit, rollback, and atomicity evidence.",
+            ),
+            "DATA-INTEGRITY" => check_plan_entry(
+                check_id,
+                has_persistence,
+                if has_persistence {
+                    "A persistence model is declared."
+                } else {
+                    "No persistence model is declared."
+                },
+                "Schema and persistence evidence.",
+            ),
+            "API-COMPATIBILITY" => check_plan_entry(
+                check_id,
+                has_api,
+                if has_api {
+                    "HTTP interfaces are declared."
+                } else {
+                    "No HTTP interface is declared."
+                },
+                "Accepted API contract and observed responses.",
+            ),
+            "ERROR-RECOVERY" => check_plan_entry(
+                check_id,
+                has_api || has_runtime,
+                if has_api || has_runtime {
+                    "A runtime or HTTP surface is declared."
+                } else {
+                    "No runtime surface is declared."
+                },
+                "Actionable failure and recovery evidence.",
+            ),
+            "SECURITY-BOUNDARY" => check_plan_entry(
+                check_id,
+                has_api || has_runtime,
+                if has_api || has_runtime {
+                    "A callable runtime surface is declared."
+                } else {
+                    "No callable runtime surface is declared."
+                },
+                "Input, secret, and write-boundary evidence.",
+            ),
+            "RETRY-TIMEOUT-RATE-LIMIT" => check_plan_entry(
+                check_id,
+                has_external,
+                if has_external {
+                    "External or asynchronous dependencies are declared."
+                } else {
+                    "No external or asynchronous dependency is declared."
+                },
+                "Bounded timeout, retry, and rate-limit evidence.",
+            ),
+            "OBSERVABILITY-EVIDENCE" => check_plan_entry(
+                check_id,
+                has_api || has_runtime,
+                if has_api || has_runtime {
+                    "A runtime surface requires traceable evidence."
+                } else {
+                    "No runtime surface is declared."
+                },
+                "Request, mutation, and response trace evidence.",
+            ),
+            "REGRESSION-COMPATIBILITY" => check_plan_entry(
+                check_id,
+                changed_files,
+                if changed_files {
+                    "The subject contains changed files."
+                } else {
+                    "No changed files are declared."
+                },
+                "Existing test and compatibility evidence.",
+            ),
+            "PERFORMANCE-CAPACITY" => check_plan_entry(
+                check_id,
+                has_api && (has_list || has_persistence),
+                if has_api && (has_list || has_persistence) {
+                    "A query or persistent API surface is declared."
+                } else {
+                    "No scalable query or persistent API surface is declared."
+                },
+                "Bounded load or capacity evidence.",
+            ),
+            _ if unknown_applicability => check_plan_entry(
+                check_id,
+                true,
+                "No structured delivery facts are available; retain the full verifier catalog.",
+                "Read-only source and test evidence.",
+            ),
+            _ => check_plan_entry(
+                check_id,
+                false,
+                "The accepted delivery facts do not declare this capability.",
+                "No evidence required for a non-applicable check.",
+            ),
+        })
+        .collect()
+}
 
 fn start_local_verification(
     project_root: &str,
@@ -709,7 +1108,8 @@ fn start_local_verification(
         "resumeAction": action.details.as_ref().and_then(|details| details.get("resumeAction")).cloned(),
         "status": "awaiting_agent",
         "attempt": 1,
-        "createdAt": state::store::now_string()
+        "createdAt": state::store::now_string(),
+        "updatedAt": state::store::now_string()
     });
     if let Err(error) = state::store::write_json_atomic(&session_dir.join("state.json"), &session) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
@@ -728,6 +1128,9 @@ fn start_local_verification(
             app_key_present: true,
             url_opened: false,
             warning: warnings.first().cloned(),
+            verification_id: Some(verification_id.clone()),
+            result_ref: None,
+            attempt: Some(1),
             created_at: now.clone(),
             updated_at: now,
         },
@@ -916,7 +1319,10 @@ fn resume_vsefm_session_state(
                 .get("verificationId")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let result = read_vsefm_result(Path::new(project_root), session);
+            let result = match read_vsefm_result(Path::new(project_root), session) {
+                Ok(result) => result,
+                Err(error) => return failed(project_root, "VSEFM_RESULT_READ_FAILED", error),
+            };
             let result_ref = session
                 .get("resultRef")
                 .and_then(Value::as_str)
@@ -974,14 +1380,36 @@ fn verification_next_from_session(project_root: &str, session: &Value) -> LoomMc
             )
         }
     };
-    let subject = session
+    let subject_ref = session
         .get("subjectRef")
         .and_then(Value::as_str)
-        .and_then(|reference| {
-            state::paths::from_project_relative(Path::new(project_root), reference).ok()
-        })
-        .and_then(|path| state::store::read_json_value(&path).ok())
-        .unwrap_or_else(|| json!({}));
+        .filter(|reference| !reference.is_empty())
+        .ok_or_else(|| "V-SEFM verification session is missing subjectRef.".to_string());
+    let subject_ref = match subject_ref {
+        Ok(subject_ref) => subject_ref,
+        Err(error) => return failed(project_root, "VSEFM_RESUME_CONTEXT_MISSING", error),
+    };
+    let subject_path =
+        match state::paths::from_project_relative(Path::new(project_root), subject_ref) {
+            Ok(path) => path,
+            Err(error) => {
+                return failed(
+                    project_root,
+                    "VSEFM_RESUME_CONTEXT_MISSING",
+                    error.to_string(),
+                )
+            }
+        };
+    let subject = match state::store::read_json_value(&subject_path) {
+        Ok(subject) => subject,
+        Err(error) => {
+            return failed(
+                project_root,
+                "VSEFM_RESUME_CONTEXT_MISSING",
+                error.to_string(),
+            )
+        }
+    };
     LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
         project_root.to_string(),
         delivery_core::LoomMcpNextAction::RunVsefmVerification(VsefmVerificationNext {
@@ -1062,14 +1490,41 @@ fn repair_next_from_session(project_root: &str, session: &Value) -> LoomMcpActio
             )
         }
     };
-    let allowed_paths = session
+    let subject_ref = session
         .get("subjectRef")
         .and_then(Value::as_str)
-        .and_then(|reference| {
-            state::paths::from_project_relative(Path::new(project_root), reference).ok()
-        })
-        .and_then(|path| state::store::read_json_value(&path).ok())
-        .and_then(|subject| subject.get("changedFiles").cloned())
+        .filter(|reference| !reference.is_empty());
+    let Some(subject_ref) = subject_ref else {
+        return failed(
+            project_root,
+            "VSEFM_RESUME_CONTEXT_MISSING",
+            "V-SEFM repair session is missing subjectRef.",
+        );
+    };
+    let subject_path =
+        match state::paths::from_project_relative(Path::new(project_root), subject_ref) {
+            Ok(path) => path,
+            Err(error) => {
+                return failed(
+                    project_root,
+                    "VSEFM_RESUME_CONTEXT_MISSING",
+                    error.to_string(),
+                )
+            }
+        };
+    let subject = match state::store::read_json_value(&subject_path) {
+        Ok(subject) => subject,
+        Err(error) => {
+            return failed(
+                project_root,
+                "VSEFM_RESUME_CONTEXT_MISSING",
+                error.to_string(),
+            )
+        }
+    };
+    let allowed_paths = subject
+        .get("changedFiles")
+        .cloned()
         .and_then(|files| files.as_array().cloned())
         .unwrap_or_default()
         .into_iter()
@@ -1107,10 +1562,38 @@ fn build_verification_subject(
     let mut phases = Vec::new();
     let mut changed_files = BTreeSet::new();
     let mut source_refs = Vec::new();
+    let mut accepted_artifacts = Vec::new();
+    let mut accepted_artifact_values = Vec::new();
+    let mut accepted_paths = BTreeSet::new();
     if let Some(delivery_id) = delivery_id {
         let delivery = FileTransitionStore
             .load_delivery_index(project_root, delivery_id)
             .map_err(|error| error.to_string())?;
+        for (reference, role) in [
+            (
+                format!(".loom/deliveries/{delivery_id}/requirements/context.json"),
+                "requirement",
+            ),
+            (
+                format!(".loom/deliveries/{delivery_id}/contracts/technical-baseline.json"),
+                "technical_baseline",
+            ),
+            (
+                format!(".loom/deliveries/{delivery_id}/contracts/api/current.json"),
+                "api_contract",
+            ),
+        ] {
+            add_accepted_artifact(
+                root,
+                &reference,
+                role,
+                None,
+                &mut accepted_paths,
+                &mut source_refs,
+                &mut accepted_artifacts,
+                &mut accepted_artifact_values,
+            );
+        }
         let selected = if scope == "current_phase" {
             phase_id
                 .map(|phase| vec![phase.to_string()])
@@ -1147,24 +1630,55 @@ fn build_verification_subject(
         };
         for phase in selected {
             phases.push(phase.clone());
-            let phase_root = root
-                .join(".loom")
-                .join("deliveries")
-                .join(delivery_id)
-                .join("tasks")
-                .join(&phase)
-                .join("results");
-            collect_changed_files(&phase_root, root, &mut changed_files);
-            for reference in [
-                format!(".loom/deliveries/{delivery_id}/contracts/planning/{phase}/pgc.json"),
-                format!(".loom/deliveries/{delivery_id}/contracts/architecture/{phase}/aac.json"),
+            for (reference, role) in [
+                (
+                    format!(".loom/deliveries/{delivery_id}/contracts/planning/{phase}/pgc.json"),
+                    "planning_contract",
+                ),
+                (
+                    format!(
+                        ".loom/deliveries/{delivery_id}/contracts/architecture/{phase}/aac.json"
+                    ),
+                    "architecture_contract",
+                ),
+                (
+                    format!(".loom/deliveries/{delivery_id}/tasks/{phase}/taskplans/latest.json"),
+                    "task_plan",
+                ),
             ] {
-                if root.join(&reference).is_file() {
-                    source_refs.push(reference);
-                }
+                add_accepted_artifact(
+                    root,
+                    &reference,
+                    role,
+                    Some(&phase),
+                    &mut accepted_paths,
+                    &mut source_refs,
+                    &mut accepted_artifacts,
+                    &mut accepted_artifact_values,
+                );
             }
+            add_latest_review_artifact(
+                root,
+                delivery_id,
+                &phase,
+                &mut accepted_paths,
+                &mut source_refs,
+                &mut accepted_artifacts,
+                &mut accepted_artifact_values,
+            );
+            add_latest_task_result_artifacts(
+                root,
+                delivery_id,
+                &phase,
+                &mut accepted_paths,
+                &mut source_refs,
+                &mut accepted_artifacts,
+                &mut accepted_artifact_values,
+                &mut changed_files,
+            );
         }
     }
+    let has_changed_files = !changed_files.is_empty();
     let files = changed_files
         .into_iter()
         .filter_map(|path| {
@@ -1185,33 +1699,161 @@ fn build_verification_subject(
         "deliveryId": delivery_id,
         "phaseIds": phases,
         "requirementRefs": source_refs,
+        "acceptedArtifacts": accepted_artifacts,
         "changedFiles": files,
         "checkIds": VSEFM_CHECK_IDS,
+        "checkPlan": derive_check_plan(&accepted_artifact_values, has_changed_files),
         "generatedAt": state::store::now_string()
     }))
 }
 
-fn collect_changed_files(dir: &Path, root: &Path, output: &mut BTreeSet<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn add_accepted_artifact(
+    root: &Path,
+    reference: &str,
+    role: &str,
+    phase_id: Option<&str>,
+    accepted_paths: &mut BTreeSet<String>,
+    source_refs: &mut Vec<String>,
+    accepted_artifacts: &mut Vec<Value>,
+    accepted_artifact_values: &mut Vec<Value>,
+) {
+    if !accepted_paths.insert(reference.to_string()) {
+        return;
+    }
+    let path = root.join(reference);
+    let Ok(bytes) = std::fs::read(&path) else {
+        accepted_paths.remove(reference);
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_changed_files(&path, root, output);
-            continue;
-        }
-        let Ok(value) = state::store::read_json_value(&path) else {
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        accepted_paths.remove(reference);
+        return;
+    };
+    let hash = Sha256::digest(&bytes);
+    source_refs.push(reference.to_string());
+    accepted_artifacts.push(json!({
+        "path": reference,
+        "role": role,
+        "phase_id": phase_id,
+        "sha256": format!("{hash:x}"),
+        "bytes": bytes.len()
+    }));
+    accepted_artifact_values.push(value);
+}
+
+fn add_latest_review_artifact(
+    root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+    accepted_paths: &mut BTreeSet<String>,
+    source_refs: &mut Vec<String>,
+    accepted_artifacts: &mut Vec<Value>,
+    accepted_artifact_values: &mut Vec<Value>,
+) {
+    let latest = root.join(format!(
+        ".loom/deliveries/{delivery_id}/reviews/{phase_id}/latest.json"
+    ));
+    let Ok(value) = state::store::read_json_value(&latest) else {
+        return;
+    };
+    let Some(reference) = value.get("reviewResultRef").and_then(Value::as_str) else {
+        return;
+    };
+    add_accepted_artifact(
+        root,
+        reference,
+        "review_result",
+        Some(phase_id),
+        accepted_paths,
+        source_refs,
+        accepted_artifacts,
+        accepted_artifact_values,
+    );
+}
+
+fn add_latest_task_result_artifacts(
+    root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+    accepted_paths: &mut BTreeSet<String>,
+    source_refs: &mut Vec<String>,
+    accepted_artifacts: &mut Vec<Value>,
+    accepted_artifact_values: &mut Vec<Value>,
+    changed_files: &mut BTreeSet<String>,
+) {
+    let latest_run = root.join(format!(
+        ".loom/deliveries/{delivery_id}/tasks/{phase_id}/runs/latest.json"
+    ));
+    let Ok(latest_run_value) = state::store::read_json_value(&latest_run) else {
+        return;
+    };
+    let Some(run_reference) = latest_run_value.get("runRef").and_then(Value::as_str) else {
+        return;
+    };
+    let run_path = root.join(run_reference);
+    let Ok(run) = state::store::read_json_value(&run_path) else {
+        return;
+    };
+    let Some(task_states) = run.get("taskStates").and_then(Value::as_array) else {
+        return;
+    };
+    let results_root = root.join(format!(
+        ".loom/deliveries/{delivery_id}/tasks/{phase_id}/results"
+    ));
+    for result_id in task_states
+        .iter()
+        .filter_map(|task| task.get("resultId").and_then(Value::as_str))
+    {
+        let Some(result_path) = find_named_file(&results_root, result_id) else {
             continue;
         };
-        if let Some(files) = value.get("changedFiles").and_then(Value::as_array) {
+        let Ok(result) = state::store::read_json_value(&result_path) else {
+            continue;
+        };
+        if let Some(files) = result.get("changedFiles").and_then(Value::as_array) {
             for file in files.iter().filter_map(Value::as_str) {
                 if is_safe_verification_path(file) && root.join(file).is_file() {
-                    output.insert(file.to_string());
+                    changed_files.insert(file.to_string());
                 }
             }
         }
+        let Ok(reference) = result_path.strip_prefix(root) else {
+            continue;
+        };
+        let reference = reference
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .to_string();
+        add_accepted_artifact(
+            root,
+            &reference,
+            "task_result",
+            Some(phase_id),
+            accepted_paths,
+            source_refs,
+            accepted_artifacts,
+            accepted_artifact_values,
+        );
     }
+}
+
+fn find_named_file(root: &Path, name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_named_file(&path, name) {
+                return Some(found);
+            }
+        } else if path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem == name)
+        {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn is_safe_verification_path(path: &str) -> bool {
@@ -1237,18 +1879,35 @@ fn verification_request(
     result_file: &str,
     subject: &Value,
 ) -> Value {
+    let check_plan = subject
+        .get("checkPlan")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let required_check_ids = check_plan
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("applicability").and_then(Value::as_str) == Some("required"))
+        .filter_map(|entry| entry.get("check_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let result_schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
+        .unwrap_or_else(|_| json!({"type": "object"}));
     let instruction = json!({
         "role": "software_delivery_verifier",
         "objective": "Verify the declared delivery subject against sefm-verify.md without modifying product or Loom files.",
         "steps": [
             "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.",
             "Read sefm-verify.md from promptRef.",
-            "Read only subject.changedFiles and the declared accepted artifact references.",
-            "Evaluate every requested checkId and record concrete input, expected, observed, evidence, and timestamp.",
+            "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.",
+            "Evaluate only checkPlan entries whose applicability is required. Do not emit checks for not_applicable entries.",
+            "Record concrete input, expected, observed, evidence, and timestamp for every required check.",
+            "Use unknown when a required check cannot be established; include its reason in unknown_checks.",
+            "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.",
             "Write the result candidate and submit it with loom.vsefmVerificationAcceptFile."
         ],
         "hardBlockingRules": [
-            "AUTH-HORIZONTAL, AUTH-VERTICAL, TENANT-ISOLATION, IDEMPOTENCY, STATE-MACHINE, and TRANSACTION failures require status=blocked.",
+            "A failed checkPlan entry with hard_blocking=true requires status=blocked and a blocking_failure reference.",
             "Never claim pass without reproducible evidence.",
             "Use unknown when the subject or environment does not establish a conclusion."
         ],
@@ -1276,7 +1935,8 @@ fn verification_request(
         "agentInstruction": instruction,
         "prompt": {
             "ref": prompt_ref,
-            "requiredCheckIds": VSEFM_CHECK_IDS
+            "requiredCheckIds": required_check_ids,
+            "checkPlan": check_plan
         },
         "subject": subject,
         "outputContract": {
@@ -1290,6 +1950,24 @@ fn verification_request(
                 "required": true,
                 "description": "Write the Agent-owned V-SEFM verification result candidate."
             }],
+            "agentOwnedFields": [
+                "status",
+                "checks",
+                "blocking_failures",
+                "warnings",
+                "unknown_checks",
+                "recommended_actions"
+            ],
+            "mcpOwnedFields": [
+                "artifact_id",
+                "verification_id",
+                "scope",
+                "source",
+                "check_plan",
+                "statistics",
+                "attempts"
+            ],
+            "resultSchema": result_schema,
             "resultTemplate": {
                 "status": "inconclusive",
                 "checks": [],
@@ -1305,10 +1983,10 @@ fn verification_request(
                     "agentInstruction", "source", "completionBarrier", "boundaryRules"
                 ].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/execution")),
                 delivery_core::ReadGroupRef::new("verification_prompt", 2, vec![
-                    "prompt", "prompt.ref", "prompt.requiredCheckIds"
+                    "prompt", "prompt.ref", "prompt.requiredCheckIds", "prompt.checkPlan"
                 ].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/prompt")),
                 delivery_core::ReadGroupRef::new("verification_subject", 3, vec![
-                    "subject", "subject.scope", "subject.phaseIds", "subject.requirementRefs", "subject.changedFiles"
+                    "subject", "subject.scope", "subject.phaseIds", "subject.requirementRefs", "subject.acceptedArtifacts", "subject.changedFiles", "subject.checkPlan"
                 ].into_iter().map(str::to_string).collect(), subject_ref),
                 delivery_core::ReadGroupRef::new("verification_result_contract", 4, vec![
                     "outputContract"
@@ -1354,32 +2032,6 @@ pub fn accept_vsefm_verification_file(
             )
         }
     };
-    let candidate: VsefmVerificationCandidate = match serde_json::from_value(raw) {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            return vsefm_result_repair(
-                input,
-                authorized,
-                format!("V-SEFM result does not match sefm-verify.md: {error}"),
-            )
-        }
-    };
-    let issues = validate_vsefm_candidate(&candidate);
-    if !issues.is_empty() {
-        return LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
-            project_root: input.project_root.clone(),
-            stop_allowed: false,
-            target_file: target.path.clone(),
-            target_ids: vec![target.target_id.clone()],
-            issues,
-            resubmit_tool: "loom.vsefmVerificationAcceptFile".to_string(),
-            fix_scope: Some("Edit only the Agent-owned V-SEFM result candidate.".to_string()),
-            read_groups: authorized.read_groups.clone(),
-            agent_instruction: delivery_core::repairable_error_agent_instruction(
-                "loom.vsefmVerificationAcceptFile",
-            ),
-        });
-    }
     let verification_id = authorized.request_id.clone();
     let session_path = root
         .join(".loom/verification/sessions")
@@ -1402,7 +2054,92 @@ pub fn accept_vsefm_verification_file(
             "V-SEFM verification result is not awaiting an Agent result.",
         );
     }
-    let result = canonical_vsefm_result(&verification_id, &candidate, &session);
+    let subject_ref = match session.get("subjectRef").and_then(Value::as_str) {
+        Some(reference) => reference,
+        None => {
+            return failed(
+                &input.project_root,
+                "VSEFM_SCOPE_BUILD_FAILED",
+                "V-SEFM session is missing subjectRef.",
+            )
+        }
+    };
+    let subject_path = match state::paths::from_project_relative(root, subject_ref) {
+        Ok(path) => path,
+        Err(error) => {
+            return failed(
+                &input.project_root,
+                "VSEFM_SCOPE_BUILD_FAILED",
+                error.to_string(),
+            )
+        }
+    };
+    let subject = match state::store::read_json_value(&subject_path) {
+        Ok(subject) => subject,
+        Err(error) => {
+            return failed(
+                &input.project_root,
+                "VSEFM_SCOPE_BUILD_FAILED",
+                error.to_string(),
+            )
+        }
+    };
+    let check_plan = match subject.get("checkPlan").cloned() {
+        Some(check_plan) => check_plan,
+        None => {
+            return failed(
+                &input.project_root,
+                "VSEFM_SCOPE_BUILD_FAILED",
+                "V-SEFM subject is missing generated checkPlan.",
+            )
+        }
+    };
+    let candidate: VsefmVerificationCandidate = match deserialize_vsefm_candidate(raw.clone()) {
+        Ok(candidate) => candidate,
+        Err(issue) => {
+            let repeated = match record_vsefm_submit_attempt(
+                root,
+                &session_path,
+                &session,
+                &raw,
+                std::slice::from_ref(&issue),
+                false,
+            ) {
+                Ok(repeated) => repeated,
+                Err(error) => {
+                    return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
+                }
+            };
+            return vsefm_result_repair_with_issues(input, authorized, vec![issue], repeated);
+        }
+    };
+    let issues = validate_vsefm_candidate(&candidate, &check_plan);
+    if !issues.is_empty() {
+        let repeated = match record_vsefm_submit_attempt(
+            root,
+            &session_path,
+            &session,
+            &raw,
+            &issues,
+            false,
+        ) {
+            Ok(repeated) => repeated,
+            Err(error) => {
+                return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
+            }
+        };
+        return vsefm_result_repair_with_issues(input, authorized, issues, repeated);
+    }
+    if let Err(error) = record_vsefm_submit_attempt(root, &session_path, &session, &raw, &[], true)
+    {
+        return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
+    let result = match canonical_vsefm_result(root, &verification_id, &candidate, &session) {
+        Ok(result) => result,
+        Err(error) => {
+            return failed(&input.project_root, "VSEFM_CANONICAL_RESULT_FAILED", error);
+        }
+    };
     let result_path = root
         .join(".loom/verification/results")
         .join(format!("{verification_id}.json"));
@@ -1438,6 +2175,16 @@ pub fn accept_vsefm_verification_file(
             error.to_string(),
         );
     }
+    if let Err(error) = sync_vsefm_record(
+        &input.project_root,
+        &updated_session,
+        "awaiting_user_resolution",
+        Some(&format!(
+            ".loom/verification/results/{verification_id}.json"
+        )),
+    ) {
+        return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
     let result_ref = format!(".loom/verification/results/{verification_id}.json");
     let delivery_id = session
         .get("deliveryId")
@@ -1464,14 +2211,121 @@ pub fn accept_vsefm_verification_file(
     gate
 }
 
-fn vsefm_result_repair(
+fn deserialize_vsefm_candidate(
+    raw: Value,
+) -> Result<VsefmVerificationCandidate, delivery_core::RepairIssue> {
+    let text = serde_json::to_string(&raw).map_err(|error| {
+        vsefm_issue(
+            "VSEFM_RESULT_SCHEMA_INVALID",
+            "$",
+            &format!("V-SEFM result could not be prepared for schema validation: {error}"),
+        )
+    })?;
+    let mut deserializer = serde_json::Deserializer::from_str(&text);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        let field_path = if path == "." || path.is_empty() {
+            "$".to_string()
+        } else {
+            path.trim_start_matches('.').to_string()
+        };
+        vsefm_issue(
+            "VSEFM_RESULT_SCHEMA_INVALID",
+            &field_path,
+            &format!("V-SEFM result field does not match the generated resultSchema: {error}"),
+        )
+    })
+}
+
+fn record_vsefm_submit_attempt(
+    root: &Path,
+    session_path: &Path,
+    session: &Value,
+    raw: &Value,
+    issues: &[delivery_core::RepairIssue],
+    accepted: bool,
+) -> Result<bool, String> {
+    let verification_id = session
+        .get("verificationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "V-SEFM session is missing verificationId".to_string())?;
+    let attempt = session.get("attempt").and_then(Value::as_u64).unwrap_or(1);
+    let candidate_hash = Sha256::digest(
+        serde_json::to_vec(raw).map_err(|error| format!("cannot hash V-SEFM result: {error}"))?,
+    );
+    let candidate_hash = format!("{candidate_hash:x}");
+    let issue_fingerprint = Sha256::digest(
+        serde_json::to_vec(issues)
+            .map_err(|error| format!("cannot hash V-SEFM issues: {error}"))?,
+    );
+    let issue_fingerprint = format!("{issue_fingerprint:x}");
+    let audit_path = root
+        .join(".loom/verification/sessions")
+        .join(verification_id)
+        .join("submit-attempts.jsonl");
+    let previous_same = std::fs::read_to_string(&audit_path)
+        .ok()
+        .into_iter()
+        .flat_map(|content| {
+            content
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect::<Vec<_>>()
+        })
+        .any(|entry| {
+            entry.get("candidateSha256").and_then(Value::as_str) == Some(candidate_hash.as_str())
+                && entry.get("issueFingerprint").and_then(Value::as_str)
+                    == Some(issue_fingerprint.as_str())
+                && entry.get("accepted").and_then(Value::as_bool) == Some(false)
+        });
+    if let Some(parent) = audit_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let entry = json!({
+        "verificationId": verification_id,
+        "attempt": attempt,
+        "candidateSha256": candidate_hash,
+        "issueFingerprint": issue_fingerprint,
+        "issues": issues,
+        "accepted": accepted,
+        "submittedAt": state::store::now_string()
+    });
+    use std::io::Write;
+    let mut handle = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .map_err(|error| error.to_string())?;
+    writeln!(
+        handle,
+        "{}",
+        serde_json::to_string(&entry).map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut updated_session = session.clone();
+    if let Some(object) = updated_session.as_object_mut() {
+        if !accepted {
+            object.insert("attempt".to_string(), json!(attempt.saturating_add(1)));
+        }
+        object.insert("lastSubmitSha256".to_string(), json!(candidate_hash));
+        object.insert("lastSubmitIssues".to_string(), json!(issues));
+        object.insert("updatedAt".to_string(), json!(state::store::now_string()));
+    }
+    state::store::write_json_atomic(session_path, &updated_session)
+        .map_err(|error| error.to_string())?;
+    Ok(previous_same)
+}
+
+fn vsefm_result_repair_with_issues(
     input: &FileSubmitInput,
     authorized: &state::AuthorizedWriteSet,
-    message: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    repeated: bool,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
-        stop_allowed: false,
+        stop_allowed: repeated,
         target_file: authorized
             .targets
             .iter()
@@ -1484,13 +2338,163 @@ fn vsefm_result_repair(
             .filter(|target| target.target_id == "result")
             .map(|target| target.target_id.clone())
             .collect(),
-        issues: vec![vsefm_issue("VSEFM_RESULT_SCHEMA_INVALID", "$", &message)],
+        issues,
         resubmit_tool: "loom.vsefmVerificationAcceptFile".to_string(),
         fix_scope: Some("Edit only the Agent-owned V-SEFM result candidate.".to_string()),
         read_groups: authorized.read_groups.clone(),
-        agent_instruction: delivery_core::repairable_error_agent_instruction(
-            "loom.vsefmVerificationAcceptFile",
-        ),
+        agent_instruction: if repeated {
+            "The same V-SEFM candidate and contract error were submitted more than once. Stop automatic retries, preserve the candidate and issues, and surface this contract failure to the user. Do not rerun verification or edit product files."
+                .to_string()
+        } else {
+            delivery_core::repairable_error_agent_instruction("loom.vsefmVerificationAcceptFile")
+        },
+    })
+}
+
+fn deserialize_vsefm_repair_candidate(
+    raw: Value,
+) -> Result<VsefmRepairCandidate, delivery_core::RepairIssue> {
+    let text = serde_json::to_string(&raw).map_err(|error| {
+        vsefm_issue(
+            "VSEFM_REPAIR_SCHEMA_INVALID",
+            "$",
+            &format!("V-SEFM repair result could not be prepared for schema validation: {error}"),
+        )
+    })?;
+    let mut deserializer = serde_json::Deserializer::from_str(&text);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        let field_path = if path == "." || path.is_empty() {
+            "$".to_string()
+        } else {
+            path.trim_start_matches('.').to_string()
+        };
+        vsefm_issue(
+            "VSEFM_REPAIR_SCHEMA_INVALID",
+            &field_path,
+            &format!("V-SEFM repair field does not match the generated resultSchema: {error}"),
+        )
+    })
+}
+
+fn record_vsefm_repair_submit_attempt(
+    root: &Path,
+    session_path: &Path,
+    session: &Value,
+    raw: &Value,
+    issues: &[delivery_core::RepairIssue],
+    accepted: bool,
+) -> Result<bool, String> {
+    let verification_id = session
+        .get("verificationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "V-SEFM session is missing verificationId".to_string())?;
+    let attempt = session
+        .get("repairAttempt")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let candidate_hash = Sha256::digest(
+        serde_json::to_vec(raw)
+            .map_err(|error| format!("cannot hash V-SEFM repair result: {error}"))?,
+    );
+    let candidate_hash = format!("{candidate_hash:x}");
+    let issue_fingerprint = Sha256::digest(
+        serde_json::to_vec(issues)
+            .map_err(|error| format!("cannot hash V-SEFM repair issues: {error}"))?,
+    );
+    let issue_fingerprint = format!("{issue_fingerprint:x}");
+    let audit_path = root
+        .join(".loom/verification/sessions")
+        .join(verification_id)
+        .join("repair-submit-attempts.jsonl");
+    let previous_same = std::fs::read_to_string(&audit_path)
+        .ok()
+        .into_iter()
+        .flat_map(|content| {
+            content
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect::<Vec<_>>()
+        })
+        .any(|entry| {
+            entry.get("candidateSha256").and_then(Value::as_str) == Some(candidate_hash.as_str())
+                && entry.get("issueFingerprint").and_then(Value::as_str)
+                    == Some(issue_fingerprint.as_str())
+                && entry.get("accepted").and_then(Value::as_bool) == Some(false)
+        });
+    if let Some(parent) = audit_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let entry = json!({
+        "verificationId": verification_id,
+        "repairId": session.get("repairId"),
+        "attempt": attempt,
+        "candidateSha256": candidate_hash,
+        "issueFingerprint": issue_fingerprint,
+        "issues": issues,
+        "accepted": accepted,
+        "submittedAt": state::store::now_string()
+    });
+    use std::io::Write;
+    let mut handle = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .map_err(|error| error.to_string())?;
+    writeln!(
+        handle,
+        "{}",
+        serde_json::to_string(&entry).map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut updated_session = session.clone();
+    if let Some(object) = updated_session.as_object_mut() {
+        if !accepted {
+            object.insert(
+                "repairAttempt".to_string(),
+                json!(attempt.saturating_add(1)),
+            );
+        }
+        object.insert("lastRepairSubmitSha256".to_string(), json!(candidate_hash));
+        object.insert("lastRepairSubmitIssues".to_string(), json!(issues));
+        object.insert("updatedAt".to_string(), json!(state::store::now_string()));
+    }
+    state::store::write_json_atomic(session_path, &updated_session)
+        .map_err(|error| error.to_string())?;
+    Ok(previous_same)
+}
+
+fn vsefm_repair_result_repair(
+    input: &FileSubmitInput,
+    authorized: &state::AuthorizedWriteSet,
+    issues: Vec<delivery_core::RepairIssue>,
+    repeated: bool,
+) -> LoomMcpActionResult {
+    LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+        project_root: input.project_root.clone(),
+        stop_allowed: repeated,
+        target_file: authorized
+            .targets
+            .iter()
+            .find(|target| target.target_id == "result")
+            .map(|target| target.path.clone())
+            .unwrap_or_default(),
+        target_ids: authorized
+            .targets
+            .iter()
+            .filter(|target| target.target_id == "result")
+            .map(|target| target.target_id.clone())
+            .collect(),
+        issues,
+        resubmit_tool: "loom.vsefmRepairAcceptFile".to_string(),
+        fix_scope: Some("Edit only the Agent-owned V-SEFM repair result candidate.".to_string()),
+        read_groups: authorized.read_groups.clone(),
+        agent_instruction: if repeated {
+            "The same V-SEFM repair candidate and contract error were submitted more than once. Stop automatic retries, preserve the candidate and issues, and surface this contract failure to the user. Do not rerun verification or edit product files.".to_string()
+        } else {
+            delivery_core::repairable_error_agent_instruction("loom.vsefmRepairAcceptFile")
+        },
     })
 }
 
@@ -1547,7 +2551,12 @@ where
     }
     match input.decision {
         VsefmVerificationResolution::Accept => {
-            let result = read_vsefm_result(root, &session);
+            let result = match read_vsefm_result(root, &session) {
+                Ok(result) => result,
+                Err(error) => {
+                    return failed(&input.project_root, "VSEFM_RESULT_READ_FAILED", error)
+                }
+            };
             if result.get("status").and_then(Value::as_str) != Some("pass") {
                 return failed(
                     &input.project_root,
@@ -1577,52 +2586,78 @@ where
 
 fn validate_vsefm_candidate(
     candidate: &VsefmVerificationCandidate,
+    check_plan: &Value,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
     let mut check_statuses = std::collections::BTreeMap::new();
-    let hard_blockers = [
-        "AUTH-HORIZONTAL",
-        "AUTH-VERTICAL",
-        "TENANT-ISOLATION",
-        "IDEMPOTENCY",
-        "STATE-MACHINE",
-        "TRANSACTION",
-    ];
-    for check in &candidate.checks {
-        if !VSEFM_CHECK_IDS.contains(&check.check_id.as_str()) {
+    let plan = match serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone()) {
+        Ok(plan) => plan,
+        Err(error) => {
+            issues.push(vsefm_issue(
+                "VSEFM_CHECK_PLAN_INVALID",
+                "checkPlan",
+                &format!("The MCP-generated check plan is invalid: {error}"),
+            ));
+            return issues;
+        }
+    };
+    let plan_by_id = plan
+        .iter()
+        .map(|entry| (entry.check_id.as_str(), entry))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (index, check) in candidate.checks.iter().enumerate() {
+        let field_prefix = format!("checks[{index}]");
+        let Some(plan_entry) = plan_by_id.get(check.check_id.as_str()) else {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_ID_INVALID",
-                "checks[].check_id",
-                "Check id is not in the canonical V-SEFM catalog.",
+                &format!("{field_prefix}.check_id"),
+                "Check id is not in the generated check plan.",
+            ));
+            continue;
+        };
+        if plan_entry.applicability != VsefmCheckApplicability::Required {
+            issues.push(vsefm_issue(
+                "VSEFM_CHECK_NOT_APPLICABLE",
+                &format!("{field_prefix}.check_id"),
+                "Do not emit a check whose generated applicability is not_applicable.",
             ));
         }
         if !seen.insert(check.check_id.clone()) {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_DUPLICATE",
-                "checks[].check_id",
+                &format!("{field_prefix}.check_id"),
                 "Each canonical check id must appear once.",
             ));
         }
         check_statuses.insert(check.check_id.clone(), check.status);
-        if check.input.trim().is_empty()
+        if check.category.trim().is_empty()
+            || check.rule.trim().is_empty()
+            || check.input.trim().is_empty()
             || check.expected.trim().is_empty()
             || check.observed.trim().is_empty()
         {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_CONTEXT_REQUIRED",
-                "checks[]",
+                &field_prefix,
                 "Each check requires non-empty input, expected, and observed values.",
             ));
         }
         if check.evidence.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_EVIDENCE_REQUIRED",
-                "checks[].evidence",
+                &format!("{field_prefix}.evidence"),
                 "Every check requires evidence.",
             ));
         }
-        if hard_blockers.contains(&check.check_id.as_str())
+        if check.timestamp.trim().is_empty() {
+            issues.push(vsefm_issue(
+                "VSEFM_TIMESTAMP_REQUIRED",
+                &format!("{field_prefix}.timestamp"),
+                "Every check requires a non-empty evidence timestamp.",
+            ));
+        }
+        if plan_entry.hard_blocking
             && check.status == VsefmCheckStatus::Fail
             && candidate.status != VsefmVerificationStatus::Blocked
         {
@@ -1633,16 +2668,19 @@ fn validate_vsefm_candidate(
             ));
         }
     }
-    let missing = VSEFM_CHECK_IDS
+    let missing = plan
         .iter()
-        .filter(|check_id| !seen.contains(**check_id))
-        .copied()
+        .filter(|entry| {
+            entry.applicability == VsefmCheckApplicability::Required
+                && !seen.contains(&entry.check_id)
+        })
+        .map(|entry| entry.check_id.as_str())
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         issues.push(vsefm_issue(
             "VSEFM_CHECK_COVERAGE_INCOMPLETE",
             "checks",
-            &format!("Missing canonical checks: {}", missing.join(", ")),
+            &format!("Missing generated required checks: {}", missing.join(", ")),
         ));
     }
     if candidate.status == VsefmVerificationStatus::Blocked
@@ -1654,26 +2692,54 @@ fn validate_vsefm_candidate(
             "Blocked verification requires a blocking failure.",
         ));
     }
+    for check in &candidate.checks {
+        let Some(plan_entry) = plan_by_id.get(check.check_id.as_str()) else {
+            continue;
+        };
+        let has_finding = candidate
+            .blocking_failures
+            .iter()
+            .any(|failure| failure.check_id == check.check_id);
+        if plan_entry.hard_blocking && check.status == VsefmCheckStatus::Fail && !has_finding {
+            issues.push(vsefm_issue(
+                "VSEFM_BLOCKING_FAILURE_MISSING",
+                "blocking_failures",
+                &format!(
+                    "Hard-blocking failed check {} requires a blocking failure reference.",
+                    check.check_id
+                ),
+            ));
+        }
+    }
     let mut unknown_ids = BTreeSet::new();
-    for unknown in &candidate.unknown_checks {
-        if !VSEFM_CHECK_IDS.contains(&unknown.check_id.as_str()) {
+    for (index, unknown) in candidate.unknown_checks.iter().enumerate() {
+        let field_prefix = format!("unknown_checks[{index}]");
+        if !plan_by_id.contains_key(unknown.check_id.as_str()) {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_ID_INVALID",
-                "unknown_checks[].check_id",
-                "Unknown check id is not in the canonical V-SEFM catalog.",
+                &format!("{field_prefix}.check_id"),
+                "Unknown check id is not in the generated check plan.",
+            ));
+        } else if plan_by_id[unknown.check_id.as_str()].applicability
+            != VsefmCheckApplicability::Required
+        {
+            issues.push(vsefm_issue(
+                "VSEFM_UNKNOWN_CHECK_NOT_APPLICABLE",
+                &format!("{field_prefix}.check_id"),
+                "Unknown checks may only reference a generated required check.",
             ));
         }
         if !unknown_ids.insert(unknown.check_id.clone()) || unknown.reason.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_INVALID",
-                "unknown_checks[]",
+                &field_prefix,
                 "Each unknown check must be unique and explain why it could not be established.",
             ));
         }
         if check_statuses.get(&unknown.check_id) != Some(&VsefmCheckStatus::Unknown) {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_STATUS_INVALID",
-                "unknown_checks[].check_id",
+                &format!("{field_prefix}.check_id"),
                 "unknown_checks must reference a check whose status is unknown.",
             ));
         }
@@ -1687,18 +2753,41 @@ fn validate_vsefm_candidate(
             ));
         }
     }
-    for failure in &candidate.blocking_failures {
-        if !VSEFM_CHECK_IDS.contains(&failure.rule.as_str()) {
+    let mut finding_ids = BTreeSet::new();
+    for (index, failure) in candidate.blocking_failures.iter().enumerate() {
+        let field_prefix = format!("blocking_failures[{index}]");
+        let Some(plan_entry) = plan_by_id.get(failure.check_id.as_str()) else {
             issues.push(vsefm_issue(
-                "VSEFM_BLOCKING_RULE_INVALID",
-                "blocking_failures[].rule",
-                "Blocking failure rule must reference a canonical check id.",
+                "VSEFM_BLOCKING_CHECK_INVALID",
+                &format!("{field_prefix}.check_id"),
+                "Blocking failure must reference a generated check plan entry.",
             ));
-        } else if check_statuses.get(&failure.rule) != Some(&VsefmCheckStatus::Fail) {
+            continue;
+        };
+        if check_statuses.get(&failure.check_id) != Some(&VsefmCheckStatus::Fail) {
             issues.push(vsefm_issue(
-                "VSEFM_BLOCKING_RULE_UNSUPPORTED",
-                "blocking_failures[].rule",
-                "Blocking failure rule must reference a failed check.",
+                "VSEFM_BLOCKING_CHECK_UNSUPPORTED",
+                &format!("{field_prefix}.check_id"),
+                "Blocking failure must reference a failed check.",
+            ));
+        }
+        if !finding_ids.insert(failure.finding_id.clone())
+            || failure.finding_id.trim().is_empty()
+            || failure.severity.trim().is_empty()
+            || failure.summary.trim().is_empty()
+            || failure.remediation.trim().is_empty()
+        {
+            issues.push(vsefm_issue(
+                "VSEFM_FINDING_INVALID",
+                &field_prefix,
+                "Each finding requires a unique finding_id, severity, summary, and remediation.",
+            ));
+        }
+        if plan_entry.hard_blocking && candidate.status != VsefmVerificationStatus::Blocked {
+            issues.push(vsefm_issue(
+                "VSEFM_HARD_BLOCKER_STATUS_INVALID",
+                "status",
+                "A hard-blocking finding requires status=blocked.",
             ));
         }
     }
@@ -1716,6 +2805,14 @@ fn validate_vsefm_candidate(
             "A pass result cannot contain failed or unknown checks.",
         ));
     }
+    if candidate.status == VsefmVerificationStatus::Pass && !candidate.blocking_failures.is_empty()
+    {
+        issues.push(vsefm_issue(
+            "VSEFM_STATUS_INCONSISTENT",
+            "status",
+            "A pass result cannot contain blocking failures.",
+        ));
+    }
     issues
 }
 
@@ -1729,16 +2826,33 @@ fn vsefm_issue(code: &str, field_path: &str, message: &str) -> delivery_core::Re
 }
 
 fn canonical_vsefm_result(
+    root: &Path,
     verification_id: &str,
     candidate: &VsefmVerificationCandidate,
     session: &Value,
-) -> Value {
+) -> Result<Value, String> {
+    let subject_ref = session
+        .get("subjectRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "V-SEFM session is missing subjectRef".to_string())?;
+    let subject_path = state::paths::from_project_relative(root, subject_ref)
+        .map_err(|error| error.to_string())?;
+    let subject_bytes = std::fs::read(&subject_path).map_err(|error| error.to_string())?;
+    let subject_hash = Sha256::digest(&subject_bytes);
+    let subject =
+        state::store::read_json_value(&subject_path).map_err(|error| error.to_string())?;
+    let check_plan = subject
+        .get("checkPlan")
+        .cloned()
+        .ok_or_else(|| "V-SEFM subject is missing generated checkPlan".to_string())?;
+    serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone())
+        .map_err(|error| format!("V-SEFM subject checkPlan is invalid: {error}"))?;
     let passed_checks = candidate
         .checks
         .iter()
         .filter(|check| check.status == VsefmCheckStatus::Pass)
         .count();
-    json!({
+    Ok(json!({
         "schema_version": "1.0",
         "artifact_id": verification_id,
         "verification_id": verification_id,
@@ -1748,27 +2862,36 @@ fn canonical_vsefm_result(
         "warnings": candidate.warnings,
         "unknown_checks": candidate.unknown_checks,
         "recommended_actions": candidate.recommended_actions,
+        "check_plan": check_plan,
         "passed_checks": passed_checks,
+        "failed_checks": candidate
+            .checks
+            .iter()
+            .filter(|check| check.status == VsefmCheckStatus::Fail)
+            .count(),
         "warning_count": candidate.warnings.len(),
         "unknown_count": candidate.unknown_checks.len(),
+        "attempts": session.get("attempt").cloned().unwrap_or_else(|| json!(1)),
         "source": {
             "delivery_id": session.get("deliveryId"),
             "phase_id": session.get("phaseId"),
             "scope": session.get("scope"),
             "subject_ref": session.get("subjectRef"),
-            "prompt_ref": session.get("promptRef")
+            "prompt_ref": session.get("promptRef"),
+            "subject_sha256": format!("{subject_hash:x}")
         },
         "created_at": state::store::now_string()
-    })
+    }))
 }
 
-fn read_vsefm_result(root: &Path, session: &Value) -> Value {
-    session
+fn read_vsefm_result(root: &Path, session: &Value) -> Result<Value, String> {
+    let reference = session
         .get("resultRef")
         .and_then(Value::as_str)
-        .and_then(|reference| state::paths::from_project_relative(root, reference).ok())
-        .and_then(|path| state::store::read_json_value(&path).ok())
-        .unwrap_or_else(|| json!({}))
+        .ok_or_else(|| "V-SEFM session is missing resultRef".to_string())?;
+    let path =
+        state::paths::from_project_relative(root, reference).map_err(|error| error.to_string())?;
+    state::store::read_json_value(&path).map_err(|error| error.to_string())
 }
 
 fn finish_vsefm_session<D>(
@@ -1795,6 +2918,9 @@ where
     }
     if let Err(error) = state::store::write_json_atomic(&path, &updated) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
+    }
+    if let Err(error) = sync_vsefm_record(project_root, &updated, status, None) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
     }
     match status {
         "repair_requested" => materialize_vsefm_repair(project_root, session),
@@ -1845,6 +2971,9 @@ fn vsefm_manual_review_gate(project_root: &str, session: &Value) -> LoomMcpActio
             "Present the V-SEFM findings and wait for the manual review decision. Then call loom.vsefmVerificationResolve with decision=approve_override or decision=request_changes. Do not call loom.continue or knowledge tools before the user chooses.",
         ),
     );
+    if let Err(error) = sync_vsefm_record(project_root, session, "manual_review", None) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
     if let (Some(delivery_id), Some(phase_id)) = (
         session.get("deliveryId").and_then(Value::as_str),
         session.get("phaseId").and_then(Value::as_str),
@@ -1997,22 +3126,30 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
     let session_dir = Path::new(project_root)
         .join(".loom/verification/sessions")
         .join(&verification_id);
-    let result = session
-        .get("resultRef")
-        .and_then(Value::as_str)
-        .and_then(|reference| {
-            state::paths::from_project_relative(Path::new(project_root), reference).ok()
-        })
-        .and_then(|path| state::store::read_json_value(&path).ok())
-        .unwrap_or_else(|| json!({}));
+    let result = match read_vsefm_result(Path::new(project_root), session) {
+        Ok(result) => result,
+        Err(error) => return failed(project_root, "VSEFM_RESULT_READ_FAILED", error),
+    };
     let subject_ref = session
         .get("subjectRef")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    let subject = state::paths::from_project_relative(Path::new(project_root), subject_ref)
-        .ok()
-        .and_then(|path| state::store::read_json_value(&path).ok())
-        .unwrap_or_else(|| json!({}));
+        .filter(|reference| !reference.is_empty())
+        .ok_or_else(|| "V-SEFM session is missing subjectRef".to_string());
+    let subject_ref = match subject_ref {
+        Ok(subject_ref) => subject_ref,
+        Err(error) => return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error),
+    };
+    let subject_path =
+        match state::paths::from_project_relative(Path::new(project_root), subject_ref) {
+            Ok(path) => path,
+            Err(error) => {
+                return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error.to_string())
+            }
+        };
+    let subject = match state::store::read_json_value(&subject_path) {
+        Ok(subject) => subject,
+        Err(error) => return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error.to_string()),
+    };
     let allowed_paths = subject
         .get("changedFiles")
         .and_then(Value::as_array)
@@ -2057,6 +3194,16 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             "writeMode": "single_json",
             "submitTool": "loom.vsefmRepairAcceptFile",
             "resultFile": result_file,
+            "agentOwnedFields": [
+                "status",
+                "summary",
+                "resolved_failure_refs",
+                "changed_files",
+                "verification_commands",
+                "remaining_findings"
+            ],
+            "resultSchema": serde_json::to_value(schemars::schema_for!(VsefmRepairCandidate))
+                .unwrap_or_else(|_| json!({"type": "object"})),
             "writeTargets": [{"targetId": "result", "path": result_file, "required": true, "description": "Write the V-SEFM repair result."}],
             "resultTemplate": {"status": "ready", "summary": "", "resolved_failure_refs": [], "changed_files": [], "verification_commands": [], "remaining_findings": []}
         },
@@ -2095,6 +3242,7 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
     if let Some(object) = updated.as_object_mut() {
         object.insert("status".to_string(), json!("repairing"));
         object.insert("repairId".to_string(), json!(repair_id));
+        object.insert("repairAttempt".to_string(), json!(1));
         object.insert(
             "repairRequestRef".to_string(),
             json!(stored.request_ref.clone()),
@@ -2105,6 +3253,9 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
     let state_path = session_dir.join("state.json");
     if let Err(error) = state::store::write_json_atomic(&state_path, &updated) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
+    }
+    if let Err(error) = sync_vsefm_record(project_root, &updated, "repairing", None) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
     }
     if let (Some(delivery_id), Some(phase_id)) = (
         session.get("deliveryId").and_then(Value::as_str),
@@ -2188,23 +3339,6 @@ pub fn accept_vsefm_repair_file(
             )
         }
     };
-    let candidate: VsefmRepairCandidate = match serde_json::from_value(raw) {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            return vsefm_result_repair(
-                input,
-                authorized,
-                format!("V-SEFM repair result is invalid: {error}"),
-            )
-        }
-    };
-    if candidate.status != VsefmRepairStatus::Ready || candidate.summary.trim().is_empty() {
-        return vsefm_result_repair(
-            input,
-            authorized,
-            "V-SEFM repair must be ready and include a summary.".to_string(),
-        );
-    }
     let (verification_id, session) = match find_vsefm_repair_session(root, &authorized.request_id) {
         Ok(session) => session,
         Err(error) => return failed(&input.project_root, "VSEFM_SESSION_NOT_FOUND", error),
@@ -2222,9 +3356,62 @@ pub fn accept_vsefm_repair_file(
         .join(".loom/verification/sessions")
         .join(&verification_id)
         .join("state.json");
+    let candidate = match deserialize_vsefm_repair_candidate(raw.clone()) {
+        Ok(candidate) => candidate,
+        Err(issue) => {
+            let repeated = match record_vsefm_repair_submit_attempt(
+                root,
+                &session_path,
+                &session,
+                &raw,
+                std::slice::from_ref(&issue),
+                false,
+            ) {
+                Ok(repeated) => repeated,
+                Err(error) => {
+                    return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error)
+                }
+            };
+            return vsefm_repair_result_repair(input, authorized, vec![issue], repeated);
+        }
+    };
+    let mut issues = Vec::new();
+    if candidate.status != VsefmRepairStatus::Ready {
+        issues.push(vsefm_issue(
+            "VSEFM_REPAIR_STATUS_INVALID",
+            "status",
+            "V-SEFM repair must have status=ready before it can be accepted.",
+        ));
+    }
+    if candidate.summary.trim().is_empty() {
+        issues.push(vsefm_issue(
+            "VSEFM_REPAIR_SUMMARY_REQUIRED",
+            "summary",
+            "V-SEFM repair must include a non-empty summary.",
+        ));
+    }
+    if !issues.is_empty() {
+        let repeated = match record_vsefm_repair_submit_attempt(
+            root,
+            &session_path,
+            &session,
+            &raw,
+            &issues,
+            false,
+        ) {
+            Ok(repeated) => repeated,
+            Err(error) => return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error),
+        };
+        return vsefm_repair_result_repair(input, authorized, issues, repeated);
+    }
+    if let Err(error) =
+        record_vsefm_repair_submit_attempt(root, &session_path, &session, &raw, &[], true)
+    {
+        return failed(&input.project_root, "VSEFM_STATE_WRITE_FAILED", error);
+    }
     let mut updated = session.clone();
     if let Some(object) = updated.as_object_mut() {
-        object.insert("status".to_string(), json!("awaiting_reverification"));
+        object.insert("status".to_string(), json!("reverification_started"));
         object.insert(
             "repairResult".to_string(),
             serde_json::to_value(&candidate).unwrap_or_else(|_| json!({})),
@@ -2706,6 +3893,35 @@ mod tests {
             pending_onboarding_context(Some(&onboarding)).expect("review onboarding context");
         assert_eq!(captured, Some(resume));
         assert_eq!(trigger, "review");
+    }
+
+    #[test]
+    fn check_plan_uses_structured_delivery_facts() {
+        let artifacts = vec![json!({
+            "authPolicy": {"required": "required"},
+            "interfaces": [{"method": "POST", "path": "/items"}],
+            "dataModel": [{"name": "item"}],
+            "runtimeDependencies": [{"kind": "cache", "provider": "redis"}],
+            "tenantId": "workspace_id"
+        })];
+        let plan = derive_check_plan(&artifacts, true);
+        let entry = |check_id: &str| {
+            plan.iter()
+                .find(|entry| entry["check_id"] == check_id)
+                .expect("check plan entry")
+        };
+        assert_eq!(entry("AUTH-HORIZONTAL")["applicability"], "required");
+        assert_eq!(entry("AUTH-VERTICAL")["applicability"], "required");
+        assert_eq!(entry("TENANT-ISOLATION")["applicability"], "required");
+        assert_eq!(entry("DATA-INTEGRITY")["applicability"], "required");
+        assert_eq!(
+            entry("RETRY-TIMEOUT-RATE-LIMIT")["applicability"],
+            "required"
+        );
+        assert_eq!(entry("STATE-MACHINE")["applicability"], "not_applicable");
+        assert!(plan
+            .iter()
+            .all(|entry| entry.get("reason").and_then(Value::as_str).is_some()));
     }
 
     fn env_lock() -> MutexGuard<'static, ()> {

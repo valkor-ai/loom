@@ -305,7 +305,9 @@ Agent 是否能执行危险命令？
 
 ## Loom 本地验证输出合同
 
-Code Agent 只写入以下 Agent-owned 字段；`artifact_id`、`verification_id`、范围、来源引用和统计数量由 Loom 根据验证请求补充，Agent 不得自行创建或修改：
+Loom 会在验证请求中生成唯一的 `checkPlan`。Code Agent 只能填写其中 `applicability=required` 的检查项；`not_applicable` 项由 Loom 根据已接受的结构化交付事实确定，Agent 不得自行补充或覆盖。
+
+Code Agent 只写入以下字段；`artifact_id`、`verification_id`、范围、来源引用、checkPlan 和统计数量由 Loom 根据验证请求补充，Agent 不得自行创建或修改：
 
 ```json
 {
@@ -315,7 +317,7 @@ Code Agent 只写入以下 Agent-owned 字段；`artifact_id`、`verification_id
       "check_id": "AUTH-HORIZONTAL",
       "category": "AUTHORIZATION",
       "rule": "HORIZONTAL_PRIVILEGE",
-      "status": "pass | fail | unknown | not_applicable",
+      "status": "pass | fail | unknown",
       "input": "User A requests User B resource",
       "expected": "403 or 404",
       "observed": "403",
@@ -323,7 +325,15 @@ Code Agent 只写入以下 Agent-owned 字段；`artifact_id`、`verification_id
       "timestamp": "2026-08-05T00:00:00Z"
     }
   ],
-  "blocking_failures": [],
+  "blocking_failures": [
+    {
+      "finding_id": "finding-auth-001",
+      "check_id": "AUTH-VERTICAL",
+      "severity": "critical",
+      "summary": "Write permission is controlled by client input.",
+      "remediation": "Derive write permission from authenticated server-side identity and role data."
+    }
+  ],
   "warnings": [],
   "unknown_checks": [],
   "recommended_actions": []
@@ -332,7 +342,9 @@ Code Agent 只写入以下 Agent-owned 字段；`artifact_id`、`verification_id
 
 `status` 是验证结果状态；单条检查的 `status` 是检查状态。`artifact_status` 不作为独立字段使用。水平越权、垂直越权、租户隔离、幂等性、状态机和事务边界任一硬约束失败时，外层 `status` 必须为 `blocked`。没有可复核证据时不得填写 `pass`，无法判断时填写 `unknown` 并说明原因。
 
-每条 `checks` 必须覆盖 Loom 请求中声明的检查项。`not_applicable` 必须说明适用性原因。`blocking_failures` 只引用已有检查或证据，不重复粘贴完整证据内容。
+每条 `checks` 必须覆盖 Loom `checkPlan` 中声明为 `required` 的检查项，不要输出 `not_applicable` 检查。`unknown_checks` 只能引用状态为 `unknown` 的检查，并说明无法判断的原因。`blocking_failures` 只能引用已有失败检查，每个独立根因使用唯一 `finding_id`，不得重复粘贴检查中的证据、期望值和观察值。
+
+结果必须严格匹配请求中的 `resultSchema`：不得增加未声明字段，不得使用 `null` 替代必填字符串，也不得修改 MCP-owned 字段。提交合同错误时只修正返回的字段路径，不重新执行已经完成的验证。
 
 必须能够追踪：
 
@@ -451,13 +463,11 @@ QUALITY
   "status": "blocked",
   "blocking_failures": [
     {
-      "category": "AUTHORIZATION",
-      "rule": "TENANT_ISOLATION",
+      "finding_id": "finding-tenant-001",
+      "check_id": "TENANT-ISOLATION",
       "severity": "critical",
-      "evidence": "tenant-b-data-visible-to-tenant-a",
-      "reproduction": "GET /api/projects/p_889",
-      "expected": "404",
-      "observed": "200"
+      "summary": "Tenant B data is visible to tenant A.",
+      "remediation": "Add tenant identity predicates to resource lookup and verify cross-tenant access."
     }
   ],
   "passed_checks": 42,
