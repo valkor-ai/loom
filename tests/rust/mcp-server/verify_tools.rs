@@ -137,6 +137,15 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         .any(|step| step
             .as_str()
             .is_some_and(|step| step.contains("missing dedicated test alone"))));
+    assert!(request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("agent steps")
+        .iter()
+        .any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("client-provided identity"))));
+    assert!(request["runtimeProvenance"]["runtimeFingerprint"].is_string());
+    assert!(request["runtimeProvenance"]["verificationRulesSha256"].is_string());
     assert!(request["agentInstruction"]["hardBlockingRules"]
         .as_array()
         .expect("hard blocking rules")
@@ -368,6 +377,96 @@ fn valid_check_results_normalize_agent_outer_status_without_repair() {
     .expect("canonical result json");
     assert_eq!(canonical["status"], "blocked");
     assert_eq!(canonical["attempts"], 1);
+}
+
+#[test]
+fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
+    let (fixture, server, started) = prepare_local_verification("supplemental-verification");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    let mut candidate = passing_candidate();
+    candidate["status"] = json!("inconclusive");
+    candidate["checks"]
+        .as_array_mut()
+        .expect("checks")
+        .iter_mut()
+        .find(|check| check["check_id"] == "CONCURRENCY")
+        .expect("concurrency check")["status"] = json!("unknown");
+    candidate["unknown_checks"] = json!([{
+        "check_id": "CONCURRENCY",
+        "reason": "The available local evidence does not establish concurrent behavior."
+    }]);
+    write_json(&result_file, candidate);
+
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("inconclusive verification result submit"),
+    );
+    assert_eq!(gated["state"], "user_gate", "{gated:#}");
+    assert_eq!(
+        gated["gate"]["options"][0]["decision"],
+        "supplemental_verification"
+    );
+
+    let supplemental = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "verificationId": started["next"]["verificationId"],
+                    "decision": "supplemental_verification"
+                }))),
+            )
+            .expect("supplemental verification decision"),
+    );
+    assert_eq!(supplemental["state"], "auto_runnable", "{supplemental:#}");
+    assert_eq!(
+        supplemental["next"]["kind"], "run_vsefm_verification",
+        "{supplemental:#}"
+    );
+    assert_ne!(
+        supplemental["next"]["verificationId"],
+        started["next"]["verificationId"]
+    );
+    let supplemental_request_ref = supplemental["next"]["requestRef"]
+        .as_str()
+        .expect("supplemental request ref");
+    let supplemental_request = request_json(&fixture, supplemental_request_ref);
+    assert_eq!(
+        supplemental_request["requestType"],
+        "vsefm_local_verification"
+    );
+    assert_eq!(
+        supplemental_request["subject"]["checkPlan"],
+        request_json(&fixture, request_ref)["subject"]["checkPlan"]
+    );
+    assert_ne!(
+        supplemental_request["requestType"], "vsefm_repair",
+        "{supplemental_request:#}"
+    );
+    let state: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(format!(
+            ".loom/verification/sessions/{}/state.json",
+            started["next"]["verificationId"]
+                .as_str()
+                .expect("verification id")
+        )))
+        .expect("original verification state"),
+    )
+    .expect("original verification state json");
+    assert_eq!(state["status"], "supplemental_started");
 }
 
 #[test]

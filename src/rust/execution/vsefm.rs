@@ -40,6 +40,7 @@ pub enum VsefmVerificationResolution {
     Accept,
     Repair,
     ManualReview,
+    SupplementalVerification,
     RetryRepair,
     ApproveOverride,
     RequestChanges,
@@ -480,6 +481,7 @@ where
             action,
             config,
             warnings,
+            None,
         );
     }
 
@@ -846,7 +848,7 @@ fn derive_check_plan(accepted_artifacts: &[Value], changed_files: bool) -> Vec<V
                 } else {
                     "No structured authentication policy is declared."
                 },
-                "Identity and object ownership evidence.",
+                "Server-verified session, token, or identity-provider context plus object ownership evidence; client-supplied identity values are not authentication evidence.",
             ),
             "AUTH-VERTICAL" => check_plan_entry(
                 check_id,
@@ -856,7 +858,7 @@ fn derive_check_plan(accepted_artifacts: &[Value], changed_files: bool) -> Vec<V
                 } else {
                     "No authenticated write interface is declared."
                 },
-                "Server-side authorization evidence for write operations.",
+                "Server-side authentication and authorization evidence for write operations; client-supplied roles or owner ids are not evidence.",
             ),
             "TENANT-ISOLATION" => check_plan_entry(
                 check_id,
@@ -1011,6 +1013,7 @@ fn start_local_verification(
     action: &RouteAction,
     config: &VsefmConfig,
     warnings: Vec<String>,
+    subject_override: Option<Value>,
 ) -> LoomMcpActionResult {
     let store = FileTransitionStore;
     let status = match store.load_status(project_root) {
@@ -1036,19 +1039,27 @@ fn start_local_verification(
     if let Err(error) = std::fs::create_dir_all(&session_dir) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
     }
-    let scope = if trigger == "review" {
-        "current_phase"
-    } else {
-        "completed_phases"
-    };
-    let subject = match build_verification_subject(
-        project_root,
-        effective_delivery_id.as_deref(),
-        phase_id,
-        scope,
-    ) {
-        Ok(subject) => subject,
-        Err(error) => return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error),
+    let scope = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("scope"))
+        .and_then(Value::as_str)
+        .unwrap_or(if trigger == "review" {
+            "current_phase"
+        } else {
+            "completed_phases"
+        });
+    let subject = match subject_override {
+        Some(subject) => subject,
+        None => match build_verification_subject(
+            project_root,
+            effective_delivery_id.as_deref(),
+            phase_id,
+            scope,
+        ) {
+            Ok(subject) => subject,
+            Err(error) => return failed(project_root, "VSEFM_SCOPE_BUILD_FAILED", error),
+        },
     };
     let subject_path = session_dir.join("subject.json");
     if let Err(error) = state::store::write_json_atomic(&subject_path, &subject) {
@@ -1058,6 +1069,7 @@ fn start_local_verification(
         Ok(path) => path,
         Err(error) => return failed(project_root, "VSEFM_PROMPT_UNAVAILABLE", error),
     };
+    let runtime_provenance = verification_runtime_provenance(&prompt_ref);
     let result_file = format!(".loom/agent-writable/{verification_id}/verification-result.json");
     let request_file = format!(".loom/verification/sessions/{verification_id}/request.json");
     let subject_ref = format!(".loom/verification/sessions/{verification_id}/subject.json");
@@ -1072,6 +1084,7 @@ fn start_local_verification(
         &subject_ref,
         &result_file,
         &subject,
+        &runtime_provenance,
     );
     let stored = match state::write_native_request(
         project_root,
@@ -1104,6 +1117,7 @@ fn start_local_verification(
         "promptRef": prompt_ref,
         "requestRef": stored.request_ref,
         "resultFile": result_file,
+        "runtimeProvenance": runtime_provenance,
         "resumeAction": action.details.as_ref().and_then(|details| details.get("resumeAction")).cloned(),
         "status": "awaiting_agent",
         "attempt": 1,
@@ -1185,6 +1199,68 @@ fn start_local_verification(
         delivery_core::LoomMcpNextAction::RunVsefmVerification(next),
     ))
     .with_warnings(warnings)
+}
+
+fn verification_runtime_provenance(prompt_ref: &str) -> Value {
+    let verification_rules_sha256 = std::fs::read(prompt_ref)
+        .ok()
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .unwrap_or_else(|| "unavailable".to_string());
+    let runtime_manifest_sha256 = loom_runtime_home()
+        .ok()
+        .map(|home| home.join("manifest.json"))
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .unwrap_or_else(|| "unavailable".to_string());
+    let mcp_binary_sha256 = std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .unwrap_or_else(|| "unavailable".to_string());
+    let build_fingerprint = std::env::var("LOOM_BUILD_FINGERPRINT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unavailable".to_string());
+    let fingerprint_input = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        delivery_core::VERSION,
+        verification_rules_sha256,
+        runtime_manifest_sha256,
+        mcp_binary_sha256,
+        build_fingerprint
+    );
+    let runtime_fingerprint = format!("{:x}", Sha256::digest(fingerprint_input.as_bytes()));
+    json!({
+        "loomVersion": delivery_core::VERSION,
+        "verificationRulesSha256": verification_rules_sha256,
+        "runtimeManifestSha256": runtime_manifest_sha256,
+        "mcpBinarySha256": mcp_binary_sha256,
+        "buildFingerprint": build_fingerprint,
+        "runtimeFingerprint": runtime_fingerprint
+    })
+}
+
+fn runtime_provenance_warning(session: &Value) -> Option<String> {
+    let prompt_ref = session.get("promptRef").and_then(Value::as_str)?;
+    let Some(recorded) = session
+        .get("runtimeProvenance")
+        .and_then(|value| value.get("runtimeFingerprint"))
+        .and_then(Value::as_str)
+    else {
+        return Some(
+            "V-SEFM request has no runtime provenance because it was generated before provenance tracking; the request remains immutable and this run is continuing with an explicit provenance warning."
+                .to_string(),
+        );
+    };
+    let current = verification_runtime_provenance(prompt_ref);
+    let current_fingerprint = current.get("runtimeFingerprint").and_then(Value::as_str)?;
+    if recorded == current_fingerprint {
+        None
+    } else {
+        Some(format!(
+            "V-SEFM request was generated by a different Loom runtime (recorded fingerprint {recorded}, current fingerprint {current_fingerprint}); the request remains immutable and this run is continuing with an explicit provenance warning."
+        ))
+    }
 }
 
 fn verification_prompt_path() -> Result<String, String> {
@@ -1421,6 +1497,9 @@ fn verification_next_from_session(project_root: &str, session: &Value) -> LoomMc
             )
         }
     };
+    let warnings = runtime_provenance_warning(session)
+        .into_iter()
+        .collect::<Vec<_>>();
     LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
         project_root.to_string(),
         delivery_core::LoomMcpNextAction::RunVsefmVerification(VsefmVerificationNext {
@@ -1466,6 +1545,7 @@ fn verification_next_from_session(project_root: &str, session: &Value) -> LoomMc
             ],
         }),
     ))
+    .with_warnings(warnings)
 }
 
 fn repair_next_from_session(project_root: &str, session: &Value) -> LoomMcpActionResult {
@@ -1857,6 +1937,7 @@ fn verification_request(
     subject_ref: &str,
     result_file: &str,
     subject: &Value,
+    runtime_provenance: &Value,
 ) -> Value {
     let result_schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
         .unwrap_or_else(|_| json!({"type": "object"}));
@@ -1869,6 +1950,7 @@ fn verification_request(
             "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.",
             "Use subject.checkPlan as the only canonical verification plan. Evaluate only entries whose applicability is required; do not emit checks for not_applicable entries.",
             "Keep each check within its generated scope: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability.",
+            "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.",
             "Record concrete input, expected, observed, evidence, and timestamp for every required check.",
             "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.",
             "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.",
@@ -1907,6 +1989,7 @@ fn verification_request(
         "prompt": {
             "ref": prompt_ref
         },
+        "runtimeProvenance": runtime_provenance,
         "subject": subject,
         "outputContract": {
             "artifactKind": "vsefm_verification_result",
@@ -2587,6 +2670,99 @@ where
             "V-SEFM result is not awaiting user resolution.",
         );
     }
+    if input.decision == VsefmVerificationResolution::SupplementalVerification {
+        let result = match read_vsefm_result(root, &session) {
+            Ok(result) => result,
+            Err(error) => return failed(&input.project_root, "VSEFM_RESULT_READ_FAILED", error),
+        };
+        let status = result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let has_blocking_failures = result
+            .get("blocking_failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| !failures.is_empty());
+        if status != "inconclusive" || has_blocking_failures {
+            return failed(
+                &input.project_root,
+                "VSEFM_RESOLUTION_INVALID",
+                "Supplemental verification is only valid for an inconclusive result without blocking findings.",
+            );
+        }
+        let subject_ref = session
+            .get("subjectRef")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "V-SEFM session is missing subjectRef".to_string());
+        let subject_ref = match subject_ref {
+            Ok(subject_ref) => subject_ref,
+            Err(error) => return failed(&input.project_root, "VSEFM_SCOPE_BUILD_FAILED", error),
+        };
+        let subject_path = match state::paths::from_project_relative(root, subject_ref) {
+            Ok(path) => path,
+            Err(error) => {
+                return failed(
+                    &input.project_root,
+                    "VSEFM_SCOPE_BUILD_FAILED",
+                    error.to_string(),
+                )
+            }
+        };
+        let subject = match state::store::read_json_value(&subject_path) {
+            Ok(subject) => subject,
+            Err(error) => {
+                return failed(
+                    &input.project_root,
+                    "VSEFM_SCOPE_BUILD_FAILED",
+                    error.to_string(),
+                )
+            }
+        };
+        let mut superseded = session.clone();
+        if let Some(object) = superseded.as_object_mut() {
+            object.insert("status".to_string(), json!("supplemental_started"));
+            object.insert(
+                "supplementalReason".to_string(),
+                json!("The result is inconclusive without blocking findings; run the same canonical check plan with supplemental evidence."),
+            );
+            object.insert("updatedAt".to_string(), json!(state::store::now_string()));
+        }
+        if let Err(error) = state::store::write_json_atomic(&session_path, &superseded) {
+            return failed(
+                &input.project_root,
+                "VSEFM_STATE_WRITE_FAILED",
+                error.to_string(),
+            );
+        }
+        let config = match load_config() {
+            Ok(config) => config,
+            Err(error) => return failed(&input.project_root, "VSEFM_CONFIG_INVALID", error),
+        };
+        let action = RouteAction {
+            kind: RouteActionKind::VsefmVerification,
+            source: "vsefm_supplemental".to_string(),
+            reason: "Collect supplemental V-SEFM evidence using the accepted canonical check plan."
+                .to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: Some(json!({
+                "trigger": "supplemental",
+                "scope": session.get("scope").cloned().unwrap_or_else(|| json!("completed_phases")),
+                "resumeAction": session.get("resumeAction").cloned().unwrap_or(Value::Null)
+            })),
+            target_phase_id: None,
+        };
+        return start_local_verification(
+            &input.project_root,
+            session.get("deliveryId").and_then(Value::as_str),
+            session.get("phaseId").and_then(Value::as_str),
+            &action,
+            &config,
+            vec![],
+            Some(subject),
+        );
+    }
     match input.decision {
         VsefmVerificationResolution::Accept => {
             let result = match read_vsefm_result(root, &session) {
@@ -2619,6 +2795,11 @@ where
             &input.project_root,
             "VSEFM_RESOLUTION_INVALID",
             "The selected manual review resolution is not valid for this verification result.",
+        ),
+        VsefmVerificationResolution::SupplementalVerification => failed(
+            &input.project_root,
+            "VSEFM_RESOLUTION_INVALID",
+            "Supplemental verification was not handled for the current result state.",
         ),
     }
 }
@@ -2839,6 +3020,24 @@ fn canonical_vsefm_result(
     let check_plan_entries = serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone())
         .map_err(|error| format!("V-SEFM subject checkPlan is invalid: {error}"))?;
     let status = canonical_vsefm_status(candidate, &check_plan_entries);
+    let runtime_provenance = session
+        .get("runtimeProvenance")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let current_runtime_provenance = session
+        .get("promptRef")
+        .and_then(Value::as_str)
+        .map(verification_runtime_provenance)
+        .unwrap_or_else(|| json!({}));
+    let runtime_fingerprint_matches = runtime_provenance
+        .get("runtimeFingerprint")
+        .and_then(Value::as_str)
+        .zip(
+            current_runtime_provenance
+                .get("runtimeFingerprint")
+                .and_then(Value::as_str),
+        )
+        .is_some_and(|(recorded, current)| recorded == current);
     let passed_checks = candidate
         .checks
         .iter()
@@ -2870,7 +3069,12 @@ fn canonical_vsefm_result(
             "scope": session.get("scope"),
             "subject_ref": session.get("subjectRef"),
             "prompt_ref": session.get("promptRef"),
-            "subject_sha256": format!("{subject_hash:x}")
+            "subject_sha256": format!("{subject_hash:x}"),
+            "runtime_provenance": runtime_provenance
+        },
+        "runtime_provenance_check": {
+            "matches_current_runtime": runtime_fingerprint_matches,
+            "current_runtime": current_runtime_provenance
         },
         "created_at": state::store::now_string()
     }))
@@ -3175,10 +3379,19 @@ fn vsefm_result_gate(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("inconclusive");
+    let has_blocking_failures = result
+        .get("blocking_failures")
+        .and_then(Value::as_array)
+        .is_some_and(|failures| !failures.is_empty());
     let choices = vec!["1".to_string(), "2".to_string()];
     let options = if status == "pass" {
         json!([
             {"value": "1", "label": "接受验证结果", "decision": "accept"},
+            {"value": "2", "label": "转人工审查", "decision": "manual_review"}
+        ])
+    } else if status == "inconclusive" && !has_blocking_failures {
+        json!([
+            {"value": "1", "label": "补充验证", "decision": "supplemental_verification"},
             {"value": "2", "label": "转人工审查", "decision": "manual_review"}
         ])
     } else {
@@ -3186,6 +3399,18 @@ fn vsefm_result_gate(
             {"value": "1", "label": "让 Agent 自动修复", "decision": "repair"},
             {"value": "2", "label": "转人工审查", "decision": "manual_review"}
         ])
+    };
+    let warnings = if result
+        .pointer("/runtime_provenance_check/matches_current_runtime")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        vec![
+            "V-SEFM result was produced under a different Loom runtime fingerprint; the result was preserved and is not being rejected solely for this provenance mismatch."
+                .to_string(),
+        ]
+    } else {
+        vec![]
     };
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
         project_root.to_string(),
@@ -3195,7 +3420,8 @@ fn vsefm_result_gate(
         delivery_id.map(str::to_string),
         phase_id.map(str::to_string),
         Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])), "options": options})),
-    ).with_agent_instruction("展示 V-SEFM 验证结果摘要和选项。用户选择 1 或 2 后，将序号映射为 gate.options 中的 decision，再调用 loom.vsefmVerificationResolve；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
+    ).with_agent_instruction("展示 V-SEFM 验证结果摘要和选项。用户选择 1 或 2 后，将序号映射为 gate.options 中的 decision，再调用 loom.vsefmVerificationResolve；inconclusive 且没有 blocking_failures 时，选项 1 只创建补充验证请求，不创建代码修复请求；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
+    .with_warnings(warnings)
 }
 
 const VSEFM_REPAIR_PROTECTED_PATHS: &[&str] = &[
@@ -3205,7 +3431,42 @@ const VSEFM_REPAIR_PROTECTED_PATHS: &[&str] = &[
     "plugins/shared/loom/references/verification/v-sefm.json",
 ];
 
-fn repair_snapshot_file(root: &Path, path: &Path) -> Option<Value> {
+const REPAIR_RUNTIME_ARTIFACT_COMPONENTS: &[&str] = &[
+    "node_modules",
+    "__pycache__",
+    ".vite",
+    ".pytest_cache",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+];
+
+fn is_repair_runtime_artifact_path(path: &str) -> bool {
+    let components = path.split('/').filter(|component| !component.is_empty());
+    if components
+        .clone()
+        .any(|component| REPAIR_RUNTIME_ARTIFACT_COMPONENTS.contains(&component))
+    {
+        return true;
+    }
+    let Some(file_name) = path.rsplit('/').next() else {
+        return false;
+    };
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".pyc")
+        || lower.ends_with(".pyo")
+        || lower.ends_with(".sqlite")
+        || lower.ends_with(".sqlite3")
+        || lower.ends_with(".db")
+        || lower.ends_with(".db-journal")
+        || lower.ends_with(".db-shm")
+        || lower.ends_with(".db-wal")
+        || lower.ends_with(".log")
+        || lower.ends_with(".tmp")
+}
+
+fn repair_snapshot_file(root: &Path, path: &Path, include_control_tree: bool) -> Option<Value> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.is_file() {
         return None;
@@ -3217,10 +3478,16 @@ fn repair_snapshot_file(root: &Path, path: &Path) -> Option<Value> {
         .to_string_lossy()
         .replace('\\', "/");
     let digest = Sha256::digest(&bytes);
+    let kind = if !include_control_tree && is_repair_runtime_artifact_path(&relative) {
+        "runtime_artifact"
+    } else {
+        "source"
+    };
     Some(json!({
         "sha256": format!("{digest:x}"),
         "bytes": bytes.len(),
-        "path": relative
+        "path": relative,
+        "kind": kind
     }))
 }
 
@@ -3244,19 +3511,22 @@ fn collect_repair_snapshot(
             continue;
         }
         if path.is_dir() {
-            if relative == ".git"
-                || relative == "node_modules"
-                || relative == "target"
-                || relative == "dist"
-                || relative == "build"
-                || relative == ".venv"
-                || relative == "__pycache__"
-                || (!include_control_tree && relative == ".loom")
+            let control_tree_path = relative == ".loom"
+                || relative.starts_with(".loom/")
+                || relative.split('/').any(|component| component == ".loom");
+            if relative.split('/').any(|component| component == ".git")
+                || (!include_control_tree && control_tree_path)
+                || (!include_control_tree && is_repair_runtime_artifact_path(&relative))
             {
                 continue;
             }
             collect_repair_snapshot(root, &path, include_control_tree, files);
-        } else if let Some(snapshot) = repair_snapshot_file(root, &path) {
+        } else if !include_control_tree && is_repair_runtime_artifact_path(&relative) {
+            let Some(snapshot) = repair_snapshot_file(root, &path, include_control_tree) else {
+                continue;
+            };
+            files.insert(relative, snapshot);
+        } else if let Some(snapshot) = repair_snapshot_file(root, &path, include_control_tree) {
             files.insert(relative, snapshot);
         }
     }
@@ -3304,6 +3574,20 @@ fn changed_snapshot_paths(before: &Value, after: &Value) -> Vec<String> {
         .collect()
 }
 
+fn changed_source_snapshot_paths(before: &Value, after: &Value) -> Vec<String> {
+    let before_map = snapshot_file_map(before);
+    let after_map = snapshot_file_map(after);
+    changed_snapshot_paths(before, after)
+        .into_iter()
+        .filter(|path| {
+            [before_map.get(path), after_map.get(path)]
+                .into_iter()
+                .flatten()
+                .any(|entry| entry.get("kind").and_then(Value::as_str) != Some("runtime_artifact"))
+        })
+        .collect()
+}
+
 fn repair_baseline_path(root: &Path, verification_id: &str, repair_id: &str) -> PathBuf {
     root.join(".loom/verification/sessions")
         .join(verification_id)
@@ -3328,7 +3612,7 @@ fn repair_boundary_error(root: &Path, session: &Value, result_file: &str) -> Res
     let baseline =
         state::store::read_json_value(&baseline_path).map_err(|error| error.to_string())?;
     let current_source = build_repair_snapshot(root, false);
-    let source_changes = changed_snapshot_paths(
+    let source_changes = changed_source_snapshot_paths(
         baseline.get("sourceSnapshot").unwrap_or(&Value::Null),
         &current_source,
     );
@@ -3390,7 +3674,7 @@ fn repair_changed_files(root: &Path, session: &Value) -> Vec<String> {
     let Ok(baseline) = state::store::read_json_value(&baseline_path) else {
         return vec![];
     };
-    changed_snapshot_paths(
+    changed_source_snapshot_paths(
         baseline.get("sourceSnapshot").unwrap_or(&Value::Null),
         &build_repair_snapshot(root, false),
     )
@@ -3780,6 +4064,7 @@ pub fn accept_vsefm_repair_file<D: DomainDispatcher>(
         &action,
         &config,
         vec![],
+        None,
     )
 }
 
@@ -4260,6 +4545,36 @@ mod tests {
         assert!(plan
             .iter()
             .all(|entry| entry.get("reason").and_then(Value::as_str).is_some()));
+    }
+
+    #[test]
+    fn repair_snapshot_excludes_nested_runtime_directories_and_classifies_runtime_files() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-vsefm-snapshot-{}-{}",
+            std::process::id(),
+            state::store::now_millis()
+        ));
+        std::fs::create_dir_all(root.join("api/app/__pycache__")).expect("cache directory");
+        std::fs::create_dir_all(root.join("web/node_modules/.vite")).expect("node cache");
+        std::fs::create_dir_all(root.join("src")).expect("source directory");
+        std::fs::write(root.join("api/app/__pycache__/service.pyc"), "cache")
+            .expect("python cache");
+        std::fs::write(root.join("web/node_modules/.vite/deps.js"), "cache").expect("vite cache");
+        std::fs::write(root.join("api/test_ticket_system.db"), "runtime database")
+            .expect("runtime database");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").expect("source file");
+
+        let snapshot = build_repair_snapshot(&root, false);
+        let files = snapshot["files"].as_object().expect("snapshot files");
+        assert!(!files.contains_key("api/app/__pycache__/service.pyc"));
+        assert!(!files.contains_key("web/node_modules/.vite/deps.js"));
+        assert_eq!(
+            files["api/test_ticket_system.db"]["kind"],
+            "runtime_artifact"
+        );
+        assert_eq!(files["src/main.rs"]["kind"], "source");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn env_lock() -> MutexGuard<'static, ()> {
