@@ -7,8 +7,6 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">Technical Report</a>
     ·
-    <a href="./docs/godot.md">Godot</a>
-    ·
     <a href="./docs/use-cases.md">Use Cases</a>
     ·
     <a href="#quick-start">Quick Start</a>
