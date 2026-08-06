@@ -18,6 +18,9 @@
     <a href="#context-routing">Context Routing</a>
     ·
     <a href="#faq">FAQ</a>
+        ·
+    <a href="https://www.valkorai.com/">Team</a>
+    
   </p>
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
