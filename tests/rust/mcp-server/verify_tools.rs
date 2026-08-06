@@ -130,6 +130,20 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         .any(|step| step
             .as_str()
             .is_some_and(|step| step.contains("subject.checkPlan as the only canonical"))));
+    assert!(request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("agent steps")
+        .iter()
+        .any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("missing dedicated test alone"))));
+    assert!(request["agentInstruction"]["hardBlockingRules"]
+        .as_array()
+        .expect("hard blocking rules")
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .is_some_and(|rule| rule.contains("Loom derives the outer status"))));
     let inspected = server
         .invoke_tool(
             "loom.inspectRequest",
@@ -310,6 +324,50 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         record["resultRef"],
         format!(".loom/verification/results/{verification_id}.json")
     );
+}
+
+#[test]
+fn valid_check_results_normalize_agent_outer_status_without_repair() {
+    let (fixture, server, started) = prepare_local_verification("status-normalization");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    let mut candidate = blocked_candidate();
+    candidate["status"] = json!("pass");
+    write_json(&result_file, candidate);
+
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("verification result submit"),
+    );
+    assert_eq!(gated["state"], "user_gate", "{gated:#}");
+    assert_eq!(gated["gate"]["kind"], "vsefm_result");
+    assert!(gated.get("issues").is_none() || gated["issues"].is_null());
+
+    let verification_id = started["next"]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let canonical: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(format!(".loom/verification/results/{verification_id}.json")),
+        )
+        .expect("canonical result"),
+    )
+    .expect("canonical result json");
+    assert_eq!(canonical["status"], "blocked");
+    assert_eq!(canonical["attempts"], 1);
 }
 
 #[test]

@@ -946,7 +946,7 @@ fn derive_check_plan(accepted_artifacts: &[Value], changed_files: bool) -> Vec<V
                 } else {
                     "No callable runtime surface is declared."
                 },
-                "Input, secret, and write-boundary evidence.",
+                "Input, secret, path, command, and network-boundary evidence; authentication and authorization belong to AUTH checks.",
             ),
             "RETRY-TIMEOUT-RATE-LIMIT" => check_plan_entry(
                 check_id,
@@ -1868,15 +1868,19 @@ fn verification_request(
             "Read sefm-verify.md from promptRef.",
             "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.",
             "Use subject.checkPlan as the only canonical verification plan. Evaluate only entries whose applicability is required; do not emit checks for not_applicable entries.",
+            "Keep each check within its generated scope: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability.",
             "Record concrete input, expected, observed, evidence, and timestamp for every required check.",
-            "Use unknown when a required check cannot be established; include its reason in unknown_checks.",
+            "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.",
+            "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.",
+            "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.",
             "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.",
             "Write the result candidate and submit it with loom.vsefmVerificationAcceptFile."
         ],
         "hardBlockingRules": [
-            "A failed checkPlan entry with hard_blocking=true requires status=blocked and a blocking_failure reference.",
+            "A failed checkPlan entry with hard_blocking=true requires a blocking_failure reference; Loom derives the outer status after acceptance.",
             "Never claim pass without reproducible evidence.",
-            "Use unknown when the subject or environment does not establish a conclusion."
+            "Use unknown when the subject or environment does not establish a conclusion; do not use it to hide an established defect.",
+            "Do not add fields, duplicate check plans, or use natural-language keywords as a substitute for the generated check scope."
         ],
         "completionBarrier": {
             "resultFile": result_file,
@@ -2692,16 +2696,6 @@ fn validate_vsefm_candidate(
                 "Every check requires a non-empty evidence timestamp.",
             ));
         }
-        if plan_entry.hard_blocking
-            && check.status == VsefmCheckStatus::Fail
-            && candidate.status != VsefmVerificationStatus::Blocked
-        {
-            issues.push(vsefm_issue(
-                "VSEFM_HARD_BLOCKER_STATUS_INVALID",
-                "status",
-                "A hard-blocking check failure requires status=blocked.",
-            ));
-        }
     }
     let missing = plan
         .iter()
@@ -2716,15 +2710,6 @@ fn validate_vsefm_candidate(
             "VSEFM_CHECK_COVERAGE_INCOMPLETE",
             "checks",
             &format!("Missing generated required checks: {}", missing.join(", ")),
-        ));
-    }
-    if candidate.status == VsefmVerificationStatus::Blocked
-        && candidate.blocking_failures.is_empty()
-    {
-        issues.push(vsefm_issue(
-            "VSEFM_BLOCKING_FAILURE_REQUIRED",
-            "blocking_failures",
-            "Blocked verification requires a blocking failure.",
         ));
     }
     for check in &candidate.checks {
@@ -2791,7 +2776,7 @@ fn validate_vsefm_candidate(
     let mut finding_ids = BTreeSet::new();
     for (index, failure) in candidate.blocking_failures.iter().enumerate() {
         let field_prefix = format!("blocking_failures[{index}]");
-        let Some(plan_entry) = plan_by_id.get(failure.check_id.as_str()) else {
+        let Some(_plan_entry) = plan_by_id.get(failure.check_id.as_str()) else {
             issues.push(vsefm_issue(
                 "VSEFM_BLOCKING_CHECK_INVALID",
                 &format!("{field_prefix}.check_id"),
@@ -2818,35 +2803,6 @@ fn validate_vsefm_candidate(
                 "Each finding requires a unique finding_id, severity, summary, and remediation.",
             ));
         }
-        if plan_entry.hard_blocking && candidate.status != VsefmVerificationStatus::Blocked {
-            issues.push(vsefm_issue(
-                "VSEFM_HARD_BLOCKER_STATUS_INVALID",
-                "status",
-                "A hard-blocking finding requires status=blocked.",
-            ));
-        }
-    }
-    if candidate.status == VsefmVerificationStatus::Pass
-        && candidate.checks.iter().any(|check| {
-            matches!(
-                check.status,
-                VsefmCheckStatus::Fail | VsefmCheckStatus::Unknown
-            )
-        })
-    {
-        issues.push(vsefm_issue(
-            "VSEFM_STATUS_INCONSISTENT",
-            "status",
-            "A pass result cannot contain failed or unknown checks.",
-        ));
-    }
-    if candidate.status == VsefmVerificationStatus::Pass && !candidate.blocking_failures.is_empty()
-    {
-        issues.push(vsefm_issue(
-            "VSEFM_STATUS_INCONSISTENT",
-            "status",
-            "A pass result cannot contain blocking failures.",
-        ));
     }
     issues
 }
@@ -2880,8 +2836,9 @@ fn canonical_vsefm_result(
         .get("checkPlan")
         .cloned()
         .ok_or_else(|| "V-SEFM subject is missing generated checkPlan".to_string())?;
-    serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone())
+    let check_plan_entries = serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone())
         .map_err(|error| format!("V-SEFM subject checkPlan is invalid: {error}"))?;
+    let status = canonical_vsefm_status(candidate, &check_plan_entries);
     let passed_checks = candidate
         .checks
         .iter()
@@ -2891,7 +2848,7 @@ fn canonical_vsefm_result(
         "schema_version": "1.0",
         "artifact_id": verification_id,
         "verification_id": verification_id,
-        "status": candidate.status,
+        "status": status,
         "checks": candidate.checks,
         "blocking_failures": candidate.blocking_failures,
         "warnings": candidate.warnings,
@@ -2917,6 +2874,32 @@ fn canonical_vsefm_result(
         },
         "created_at": state::store::now_string()
     }))
+}
+
+fn canonical_vsefm_status(
+    candidate: &VsefmVerificationCandidate,
+    check_plan: &[VsefmCheckPlanEntry],
+) -> VsefmVerificationStatus {
+    let hard_blocking_ids = check_plan
+        .iter()
+        .filter(|entry| entry.hard_blocking)
+        .map(|entry| entry.check_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if candidate.checks.iter().any(|check| {
+        check.status == VsefmCheckStatus::Fail
+            && hard_blocking_ids.contains(check.check_id.as_str())
+    }) {
+        VsefmVerificationStatus::Blocked
+    } else if candidate.checks.iter().any(|check| {
+        matches!(
+            check.status,
+            VsefmCheckStatus::Fail | VsefmCheckStatus::Unknown
+        )
+    }) {
+        VsefmVerificationStatus::Inconclusive
+    } else {
+        VsefmVerificationStatus::Pass
+    }
 }
 
 fn read_vsefm_result(root: &Path, session: &Value) -> Result<Value, String> {
@@ -4265,6 +4248,10 @@ mod tests {
         assert_eq!(entry("AUTH-VERTICAL")["applicability"], "required");
         assert_eq!(entry("TENANT-ISOLATION")["applicability"], "required");
         assert_eq!(entry("DATA-INTEGRITY")["applicability"], "required");
+        assert_eq!(
+            entry("SECURITY-BOUNDARY")["required_evidence"],
+            "Input, secret, path, command, and network-boundary evidence; authentication and authorization belong to AUTH checks."
+        );
         assert_eq!(
             entry("RETRY-TIMEOUT-RATE-LIMIT")["applicability"],
             "required"

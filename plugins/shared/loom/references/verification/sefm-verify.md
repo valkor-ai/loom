@@ -307,6 +307,18 @@ Agent 是否能执行危险命令？
 
 Loom 会在验证请求的 `subject.checkPlan` 中生成唯一的 `checkPlan`。Code Agent 只能填写其中 `applicability=required` 的检查项；`not_applicable` 项由 Loom 根据已接受的结构化交付事实确定，Agent 不得自行补充或覆盖。`prompt` 只提供本验证规则文档的引用，不包含第二份检查计划。
 
+### 检查范围与结论判定
+
+每个检查项只能报告自己在 `subject.checkPlan` 中声明的范围：
+
+- `AUTH-HORIZONTAL`、`AUTH-VERTICAL` 负责身份、对象所有权和服务端权限。
+- `SECURITY-BOUNDARY` 负责输入、密钥、路径、命令和网络访问边界，不重复报告认证授权结论。
+- `OBSERVABILITY-EVIDENCE` 负责请求、写操作和响应的追踪证据。
+
+`unknown` 只表示当前证据无法判断通过或失败。没有专项测试不等于缺陷不存在；如果源代码或运行结果已经确认违反规则，必须填写 `fail`。不要把已确认的失败放入 `unknown_checks`，也不要把一个检查项的发现复制到另一个检查项。
+
+Agent 提交的外层 `status` 是候选值。Loom 接受结构合法的结果后，根据 required 检查项的状态重新计算最终状态：硬阻断失败为 `blocked`，存在非阻断失败或 unknown 为 `inconclusive`，全部通过才为 `pass`。不要因为外层 status 与这些规则不一致而重复提交结果。
+
 Code Agent 只写入以下字段；`artifact_id`、`verification_id`、范围、来源引用、checkPlan 和统计数量由 Loom 根据验证请求补充，Agent 不得自行创建或修改：
 
 ```json
