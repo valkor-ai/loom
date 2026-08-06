@@ -121,6 +121,15 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
             .len(),
         16
     );
+    assert!(request["prompt"].get("checkPlan").is_none());
+    assert!(request["prompt"].get("requiredCheckIds").is_none());
+    assert!(request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("agent steps")
+        .iter()
+        .any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("subject.checkPlan as the only canonical"))));
     let inspected = server
         .invoke_tool(
             "loom.inspectRequest",

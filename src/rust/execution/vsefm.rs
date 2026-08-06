@@ -1858,18 +1858,6 @@ fn verification_request(
     result_file: &str,
     subject: &Value,
 ) -> Value {
-    let check_plan = subject
-        .get("checkPlan")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    let required_check_ids = check_plan
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|entry| entry.get("applicability").and_then(Value::as_str) == Some("required"))
-        .filter_map(|entry| entry.get("check_id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
     let result_schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
         .unwrap_or_else(|_| json!({"type": "object"}));
     let instruction = json!({
@@ -1879,7 +1867,7 @@ fn verification_request(
             "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.",
             "Read sefm-verify.md from promptRef.",
             "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.",
-            "Evaluate only checkPlan entries whose applicability is required. Do not emit checks for not_applicable entries.",
+            "Use subject.checkPlan as the only canonical verification plan. Evaluate only entries whose applicability is required; do not emit checks for not_applicable entries.",
             "Record concrete input, expected, observed, evidence, and timestamp for every required check.",
             "Use unknown when a required check cannot be established; include its reason in unknown_checks.",
             "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.",
@@ -1913,9 +1901,7 @@ fn verification_request(
         },
         "agentInstruction": instruction,
         "prompt": {
-            "ref": prompt_ref,
-            "requiredCheckIds": required_check_ids,
-            "checkPlan": check_plan
+            "ref": prompt_ref
         },
         "subject": subject,
         "outputContract": {
@@ -1962,7 +1948,7 @@ fn verification_request(
                     "agentInstruction", "source", "completionBarrier", "boundaryRules"
                 ].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/execution")),
                 delivery_core::ReadGroupRef::new("verification_prompt", 2, vec![
-                    "prompt", "prompt.ref", "prompt.requiredCheckIds", "prompt.checkPlan"
+                    "prompt", "prompt.ref"
                 ].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/prompt")),
                 delivery_core::ReadGroupRef::new("verification_subject", 3, vec![
                     "subject", "subject.scope", "subject.phaseIds", "subject.requirementRefs", "subject.acceptedArtifacts", "subject.changedFiles", "subject.checkPlan"

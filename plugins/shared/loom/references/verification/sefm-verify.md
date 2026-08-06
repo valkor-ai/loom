@@ -305,7 +305,7 @@ Agent 是否能执行危险命令？
 
 ## Loom 本地验证输出合同
 
-Loom 会在验证请求中生成唯一的 `checkPlan`。Code Agent 只能填写其中 `applicability=required` 的检查项；`not_applicable` 项由 Loom 根据已接受的结构化交付事实确定，Agent 不得自行补充或覆盖。
+Loom 会在验证请求的 `subject.checkPlan` 中生成唯一的 `checkPlan`。Code Agent 只能填写其中 `applicability=required` 的检查项；`not_applicable` 项由 Loom 根据已接受的结构化交付事实确定，Agent 不得自行补充或覆盖。`prompt` 只提供本验证规则文档的引用，不包含第二份检查计划。
 
 Code Agent 只写入以下字段；`artifact_id`、`verification_id`、范围、来源引用、checkPlan 和统计数量由 Loom 根据验证请求补充，Agent 不得自行创建或修改：
 
