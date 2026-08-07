@@ -190,7 +190,6 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     assert_eq!(
         contract["fields"]["outputContract"]["agentOwnedFields"],
         json!([
-            "status",
             "checks",
             "not_applicable_checks",
             "environment_blocked_checks",
@@ -202,6 +201,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     assert_eq!(
         contract["fields"]["outputContract"]["mcpOwnedFields"],
         json!([
+            "status",
             "artifact_id",
             "verification_id",
             "scope",
@@ -218,6 +218,11 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     assert_eq!(
         contract["fields"]["outputContract"]["resultSchema"]["additionalProperties"],
         false
+    );
+    assert!(
+        contract["fields"]["outputContract"]["resultSchema"]["properties"]
+            .get("status")
+            .is_none()
     );
     assert_eq!(
         contract["fields"]["outputContract"]["mcpOwnedPaths"],
@@ -297,7 +302,6 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     std::fs::write(
         &result_file,
         serde_json::to_vec_pretty(&json!({
-            "status": "pass",
             "checks": checks,
             "not_applicable_checks": [],
             "environment_blocked_checks": [],
@@ -379,15 +383,14 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
 }
 
 #[test]
-fn valid_check_results_normalize_agent_outer_status_without_repair() {
+fn canonical_status_is_derived_without_agent_outer_status() {
     let (fixture, server, started) = prepare_local_verification("status-normalization");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
     read_request_groups(&server, &fixture, request_ref);
     let result_file = fixture
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
-    let mut candidate = blocked_candidate();
-    candidate["status"] = json!("pass");
+    let candidate = blocked_candidate();
     write_json(&result_file, candidate);
 
     let gated = structured(
@@ -431,7 +434,6 @@ fn confirmed_failure_is_not_presented_as_environment_retry() {
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
     let mut candidate = passing_candidate();
-    candidate["status"] = json!("blocked");
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
@@ -581,7 +583,6 @@ fn environment_blocked_result_uses_environment_retry_without_repair_request() {
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
     let mut candidate = passing_candidate();
-    candidate["status"] = json!("environment_blocked");
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
@@ -708,7 +709,6 @@ fn environment_blocked_result_uses_environment_retry_without_repair_request() {
     write_json(
         &supplemental_result_file,
         json!({
-            "status": "pass",
             "checks": [{
                 "check_id": "CONCURRENCY",
                 "category": "concurrency",
@@ -1018,7 +1018,7 @@ fn repeated_contract_error_is_not_routed_to_manual_review() {
     invalid
         .as_object_mut()
         .expect("invalid result object")
-        .remove("status");
+        .remove("checks");
     write_json(&result_file, invalid.clone());
 
     let first = structured(
@@ -1189,7 +1189,6 @@ fn passing_candidate() -> Value {
     })
     .collect::<Vec<_>>();
     json!({
-        "status": "pass",
         "checks": checks,
         "blocking_failures": [],
         "warnings": [],
@@ -1330,7 +1329,6 @@ fn blocked_candidate() -> Value {
     })
     .collect::<Vec<_>>();
     json!({
-        "status": "blocked",
         "checks": checks,
         "blocking_failures": [{
             "finding_id": "finding-auth-horizontal-001",

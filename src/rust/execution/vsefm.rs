@@ -49,7 +49,6 @@ pub enum VsefmVerificationResolution {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmVerificationCandidate {
-    pub status: VsefmVerificationStatus,
     pub checks: Vec<VsefmCheckResult>,
     #[serde(default)]
     pub not_applicable_checks: Vec<VsefmNotApplicableCheck>,
@@ -1688,7 +1687,6 @@ fn verification_result_template(
     _supplemental_check_ids: &[String],
 ) -> Value {
     json!({
-        "status": "pass",
         "checks": [],
         "not_applicable_checks": [],
         "environment_blocked_checks": [],
@@ -1776,6 +1774,9 @@ fn verification_request(
         "steps": steps,
         "hardBlockingRules": [
             "A failed rule marked blocking=true in the prompt catalog requires a blocking_failure reference; Loom derives the outer status after acceptance.",
+            "Do not write a top-level status field. Loom derives the outer status from the per-rule result groups after acceptance.",
+            "In checks, status=pass means the rule applies, every requirement in its sefm-verify.md section was evaluated, and the evidence proves the requirement. status=fail means the rule applies but the requirement is violated or the evidence does not establish it.",
+            "A rule that does not apply must be written only to not_applicable_checks with a reason and evidence; it must not be written to checks with status=pass.",
             "Never claim pass without reproducible evidence.",
             "Attempt every applicable rule in the initial pass. Use environment_blocked_checks only after an actual attempt is blocked by a concrete environment or tool limitation; do not use it to defer work or hide an established defect.",
             "Do not add fields, duplicate rule plans, or use natural-language keywords as a substitute for the generated rule catalog."
@@ -1819,7 +1820,6 @@ fn verification_request(
                 "description": "Write the Agent-owned V-SEFM verification result candidate."
             }],
             "agentOwnedFields": [
-                "status",
                 "checks",
                 "not_applicable_checks",
                 "environment_blocked_checks",
@@ -1828,6 +1828,7 @@ fn verification_request(
                 "recommended_actions"
             ],
             "mcpOwnedFields": [
+                "status",
                 "artifact_id",
                 "verification_id",
                 "scope",
@@ -3068,7 +3069,6 @@ fn supplemental_rule_ids(result: &Value) -> Vec<String> {
 
 fn canonical_result_candidate(result: &Value) -> Result<VsefmVerificationCandidate, String> {
     serde_json::from_value(json!({
-        "status": result.get("status").cloned().unwrap_or_else(|| json!("pass")),
         "checks": result.get("checks").cloned().unwrap_or_else(|| json!([])),
         "not_applicable_checks": result.get("not_applicable_checks").cloned().unwrap_or_else(|| json!([])),
         "environment_blocked_checks": result.get("environment_blocked_checks").cloned().unwrap_or_else(|| json!([])),
@@ -3117,7 +3117,6 @@ fn merge_supplemental_candidate(
             merged.recommended_actions.push(action);
         }
     }
-    merged.status = VsefmVerificationStatus::EnvironmentBlocked;
     Ok(merged)
 }
 
@@ -4780,7 +4779,6 @@ mod tests {
         let prompt = repository_prompt_path();
         let catalog = read_rule_catalog(&prompt).expect("rule catalog");
         let candidate: VsefmVerificationCandidate = serde_json::from_value(json!({
-            "status": "environment_blocked",
             "checks": [],
             "not_applicable_checks": [{
                 "check_id": "TENANT-ISOLATION",
