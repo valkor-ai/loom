@@ -103,33 +103,23 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         request["requestType"], "vsefm_local_verification",
         "{request:#}"
     );
-    assert!(request["agentInstruction"]["steps"]
+    let steps = request["agentInstruction"]["steps"]
         .as_array()
-        .expect("agent steps")
-        .iter()
-        .any(|step| step.as_str().is_some_and(|step| step.contains("checkPlan"))));
+        .expect("agent steps");
+    assert!(steps.iter().any(|step| step
+        .as_str()
+        .is_some_and(|step| step.contains("prompt catalog"))));
     assert_eq!(
         request["subject"]["acceptedArtifacts"]
             .as_array()
             .map(Vec::len),
         Some(0)
     );
-    assert_eq!(
-        request["subject"]["checkPlan"]
-            .as_array()
-            .expect("generated check plan")
-            .len(),
-        16
-    );
+    assert!(request["subject"].get("checkPlan").is_none());
     assert!(request["prompt"].get("checkPlan").is_none());
     assert!(request["prompt"].get("requiredCheckIds").is_none());
-    assert!(request["agentInstruction"]["steps"]
-        .as_array()
-        .expect("agent steps")
-        .iter()
-        .any(|step| step
-            .as_str()
-            .is_some_and(|step| step.contains("subject.checkPlan as the only canonical"))));
+    assert!(request["source"].get("checkPlan").is_none());
+    assert!(request["prompt"]["ruleCatalogHash"].is_string());
     assert!(request["agentInstruction"]["steps"]
         .as_array()
         .expect("agent steps")
@@ -194,6 +184,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         json!([
             "status",
             "checks",
+            "not_applicable_checks",
             "blocking_failures",
             "warnings",
             "unknown_checks",
@@ -207,7 +198,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
             "verification_id",
             "scope",
             "source",
-            "check_plan",
+            "rule_catalog_hash",
             "statistics",
             "attempts"
         ])
@@ -239,6 +230,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         "RETRY-TIMEOUT-RATE-LIMIT",
         "OBSERVABILITY-EVIDENCE",
         "REGRESSION-COMPATIBILITY",
+        "BROWSER-QUALITY",
         "PERFORMANCE-CAPACITY",
     ];
     let checks = check_ids
@@ -320,7 +312,14 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     )
     .expect("canonical result json");
     assert_eq!(canonical["verification_id"], verification_id);
-    assert_eq!(canonical["check_plan"].as_array().map(Vec::len), Some(16));
+    assert_eq!(
+        canonical["coverage"]["checked_rule_ids"]
+            .as_array()
+            .map(Vec::len),
+        Some(17)
+    );
+    assert_eq!(canonical["coverage"]["missing_rule_ids"], json!([]));
+    assert_eq!(canonical["not_applicable_checks"], json!([]));
     assert_eq!(canonical["attempts"], 1);
     let record: Value = serde_json::from_str(
         &std::fs::read_to_string(fixture.root.join(".loom/verification/v-sefm.json"))
@@ -380,6 +379,60 @@ fn valid_check_results_normalize_agent_outer_status_without_repair() {
 }
 
 #[test]
+fn incomplete_rule_coverage_is_accepted_as_inconclusive_without_repair() {
+    let (fixture, server, started) = prepare_local_verification("incomplete-coverage");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    let mut candidate = passing_candidate();
+    candidate["checks"]
+        .as_array_mut()
+        .expect("checks")
+        .retain(|check| check["check_id"] != "CONCURRENCY");
+    write_json(&result_file, candidate);
+
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("incomplete verification result submit"),
+    );
+    assert_eq!(gated["state"], "user_gate", "{gated:#}");
+    assert!(gated.get("issues").is_none() || gated["issues"].is_null());
+    assert_eq!(
+        gated["gate"]["options"][0]["decision"],
+        "supplemental_verification"
+    );
+
+    let verification_id = started["next"]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let canonical: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(format!(".loom/verification/results/{verification_id}.json")),
+        )
+        .expect("canonical result"),
+    )
+    .expect("canonical result json");
+    assert_eq!(canonical["status"], "inconclusive");
+    assert_eq!(
+        canonical["coverage"]["missing_rule_ids"],
+        json!(["CONCURRENCY"])
+    );
+    assert_eq!(canonical["attempts"], 1);
+}
+
+#[test]
 fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     let (fixture, server, started) = prepare_local_verification("supplemental-verification");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
@@ -418,6 +471,10 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         gated["gate"]["options"][0]["decision"],
         "supplemental_verification"
     );
+    assert!(gated["gate"]["options"][0]["label"]
+        .as_str()
+        .expect("supplemental label")
+        .contains("并发一致性"));
 
     let supplemental = structured(
         server
@@ -446,12 +503,20 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     let supplemental_request = request_json(&fixture, supplemental_request_ref);
     assert_eq!(
         supplemental_request["requestType"],
-        "vsefm_local_verification"
+        "vsefm_supplemental_verification"
     );
     assert_eq!(
-        supplemental_request["subject"]["checkPlan"],
-        request_json(&fixture, request_ref)["subject"]["checkPlan"]
+        supplemental_request["source"]["supplementalRuleIds"],
+        json!(["CONCURRENCY"])
     );
+    assert!(supplemental_request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("supplemental steps")
+        .iter()
+        .any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("only these missing check ids: CONCURRENCY"))));
+    assert_eq!(supplemental_request["subject"].get("checkPlan"), None);
     assert_ne!(
         supplemental_request["requestType"], "vsefm_repair",
         "{supplemental_request:#}"
@@ -467,6 +532,60 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     )
     .expect("original verification state json");
     assert_eq!(state["status"], "supplemental_started");
+
+    read_request_groups(&server, &fixture, supplemental_request_ref);
+    let supplemental_result_file = fixture.root.join(
+        supplemental["next"]["resultFile"]
+            .as_str()
+            .expect("supplemental result file"),
+    );
+    write_json(
+        &supplemental_result_file,
+        json!({
+            "status": "pass",
+            "checks": [{
+                "check_id": "CONCURRENCY",
+                "category": "concurrency",
+                "rule": "Concurrent writes preserve unique identifiers and business invariants.",
+                "status": "pass",
+                "input": "Concurrent ticket creation and concurrent state mutations.",
+                "expected": "No duplicate sequence or lost update occurs under concurrent requests.",
+                "observed": "Concurrent requests completed without duplicate sequence or lost update.",
+                "evidence": "bounded concurrency test",
+                "timestamp": "2026-08-05T00:00:00Z"
+            }],
+            "blocking_failures": [],
+            "warnings": [],
+            "unknown_checks": [],
+            "recommended_actions": []
+        }),
+    );
+    let merged_gate = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": supplemental_request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("supplemental result submit"),
+    );
+    assert_eq!(merged_gate["state"], "user_gate", "{merged_gate:#}");
+    let supplemental_verification_id = supplemental["next"]["verificationId"]
+        .as_str()
+        .expect("supplemental verification id");
+    let merged_result: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(format!(
+            ".loom/verification/results/{supplemental_verification_id}.json"
+        )))
+        .expect("merged supplemental result"),
+    )
+    .expect("merged supplemental result json");
+    assert_eq!(merged_result["status"], "pass");
+    assert_eq!(merged_result["unknown_count"], 0);
+    assert_eq!(merged_result["checks"].as_array().map(Vec::len), Some(17));
 }
 
 #[test]
@@ -885,6 +1004,7 @@ fn passing_candidate() -> Value {
         "RETRY-TIMEOUT-RATE-LIMIT",
         "OBSERVABILITY-EVIDENCE",
         "REGRESSION-COMPATIBILITY",
+        "BROWSER-QUALITY",
         "PERFORMANCE-CAPACITY",
     ]
     .iter()
@@ -1025,6 +1145,7 @@ fn blocked_candidate() -> Value {
         "RETRY-TIMEOUT-RATE-LIMIT",
         "OBSERVABILITY-EVIDENCE",
         "REGRESSION-COMPATIBILITY",
+        "BROWSER-QUALITY",
         "PERFORMANCE-CAPACITY",
     ]
     .iter()

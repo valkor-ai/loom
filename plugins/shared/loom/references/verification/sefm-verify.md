@@ -1,3 +1,7 @@
+# V-SEFM Verification Rules
+
+本文档是 V-SEFM 本地验证的唯一规则来源。每个章节定义一个验证规则的范围和证据要求；规则目录提供对应的机器可读 `check_id` 与阻断属性。
+
 ## 1. 需求与真实意图一致性
 
 验证产物是否完成用户真正想要的事情，而不是只满足字面描述。
@@ -290,108 +294,7 @@ Agent 是否能执行危险命令？
 
 验证每个关键动作都能被追踪和复盘。
 
-每次产物验证都要记录：
-
-```json
-{
-  "check_id": "AUTH-OBJECT-001",
-  "artifact_id": "build-2026-08-03",
-  "input": "user_a requests resource_b",
-  "expected": "403",
-  "observed": "403",
-  "status": "pass",
-  "evidence": "api-test-119",
-  "timestamp": "..."
-}
-```
-
-## Loom 本地验证输出合同
-
-Loom 会在验证请求的 `subject.checkPlan` 中生成唯一的 `checkPlan`。Code Agent 只能填写其中 `applicability=required` 的检查项；`not_applicable` 项由 Loom 根据已接受的结构化交付事实确定，Agent 不得自行补充或覆盖。`prompt` 只提供本验证规则文档的引用，不包含第二份检查计划。
-
-### 检查范围与结论判定
-
-每个检查项只能报告自己在 `subject.checkPlan` 中声明的范围：
-
-- `AUTH-HORIZONTAL`、`AUTH-VERTICAL` 负责身份、对象所有权和服务端权限。
-- `SECURITY-BOUNDARY` 负责输入、密钥、路径、命令和网络访问边界，不重复报告认证授权结论。
-- `OBSERVABILITY-EVIDENCE` 负责请求、写操作和响应的追踪证据。
-
-`unknown` 只表示当前证据无法判断通过或失败。没有专项测试不等于缺陷不存在；如果源代码或运行结果已经确认违反规则，必须填写 `fail`。不要把已确认的失败放入 `unknown_checks`，也不要把一个检查项的发现复制到另一个检查项。
-
-Agent 提交的外层 `status` 是候选值。Loom 接受结构合法的结果后，根据 required 检查项的状态重新计算最终状态：硬阻断失败为 `blocked`，存在非阻断失败或 unknown 为 `inconclusive`，全部通过才为 `pass`。不要因为外层 status 与这些规则不一致而重复提交结果。
-
-Code Agent 只写入以下字段；`artifact_id`、`verification_id`、范围、来源引用、checkPlan 和统计数量由 Loom 根据验证请求补充，Agent 不得自行创建或修改：
-
-```json
-{
-  "status": "pass | blocked | inconclusive",
-  "checks": [
-    {
-      "check_id": "AUTH-HORIZONTAL",
-      "category": "AUTHORIZATION",
-      "rule": "HORIZONTAL_PRIVILEGE",
-      "status": "pass | fail | unknown",
-      "input": "User A requests User B resource",
-      "expected": "403 or 404",
-      "observed": "403",
-      "evidence": "api-test-119",
-      "timestamp": "2026-08-05T00:00:00Z"
-    }
-  ],
-  "blocking_failures": [
-    {
-      "finding_id": "finding-auth-001",
-      "check_id": "AUTH-VERTICAL",
-      "severity": "critical",
-      "summary": "Write permission is controlled by client input.",
-      "remediation": "Derive write permission from authenticated server-side identity and role data."
-    }
-  ],
-  "warnings": [],
-  "unknown_checks": [],
-  "recommended_actions": []
-}
-```
-
-`status` 是验证结果状态；单条检查的 `status` 是检查状态。`artifact_status` 不作为独立字段使用。水平越权、垂直越权、租户隔离、幂等性、状态机和事务边界任一硬约束失败时，外层 `status` 必须为 `blocked`。没有可复核证据时不得填写 `pass`，无法判断时填写 `unknown` 并说明原因。
-
-每条 `checks` 必须覆盖 Loom `checkPlan` 中声明为 `required` 的检查项，不要输出 `not_applicable` 检查。`unknown_checks` 只能引用状态为 `unknown` 的检查，并说明无法判断的原因。`blocking_failures` 只能引用已有失败检查，每个独立根因使用唯一 `finding_id`，不得重复粘贴检查中的证据、期望值和观察值。
-
-结果必须严格匹配请求中的 `resultSchema`：不得增加未声明字段，不得使用 `null` 替代必填字符串，也不得修改 MCP-owned 字段。提交合同错误时只修正返回的字段路径，不重新执行已经完成的验证。
-
-## Loom 本地验证修复输出合同
-
-Repair 是修复业务代码后重新执行 V-SEFM 的 Agent 任务，不是反复修改验证规则或 `.loom` 产物。Repair request 中的 `repairWriteBoundary` 是项目根目录范围和受保护路径说明；`subject.changedFiles` 只提供 scope hint，不是写入白名单。
-
-Code Agent 只需要提交最小结果：
-
-```json
-{
-  "status": "ready",
-  "summary": "已修复阻断项。",
-  "details": {
-    "修复说明": "这里可以提供面向用户的说明。"
-  }
-}
-```
-
-`status` 只能是 `ready` 或 `blocked`，`summary` 必须是非空字符串。`details` 是面向用户和审计的透明内容，内部可以使用任意 JSON 结构。`verification_commands`、`changed_files`、`resolved_failure_refs` 和 `remaining_findings` 不属于 Agent 合同；Loom 会从执行记录、修复前后文件快照和重新验证结果中生成对应信息。
-
-Repair Agent 可以修改项目根目录下为修复阻断项所需的普通业务代码、配置、测试、迁移、构建和部署文件，但不得修改 `.loom/**`、`.git/**`、V-SEFM 验证规则或 V-SEFM 配置。`ready` 只表示 Agent 声明修复完成，Loom 接收后必须重新执行同一验证计划，不能直接视为通过。
-
-如果相同结果在相同合同错误下重复提交，这是 Loom/MCP 合同故障，不是软件质量结论。Loom 必须保存原始结果和错误指纹，停止重复提交并记录 `verification_unavailable`，不能把该故障路由为 `manual_review`。
-
-必须能够追踪：
-
-```text
-请求
-→ 权限判断
-→ 数据查询
-→ 状态变化
-→ 外部调用
-→ 最终响应
-```
+每次产物验证都应记录可复核的输入、预期、实际结果、证据和时间。
 
 ## 15. 回归与兼容性约束
 
@@ -427,91 +330,39 @@ Repair Agent 可以修改项目根目录下为修复阻断项所需的普通业�
 - 队列积压
 - Agent token 和工具预算
 
-## 建议的验证分类
+## 17. 浏览器质量约束
 
-可以按以下类型组织：
+验证已声明的 Playwright 浏览器流程能够在项目真实运行环境中完成。
 
-```text
-BUSINESS
-- requirement coverage
-- user intent
-- state transition
+检查：
 
-AUTHORIZATION
-- horizontal privilege
-- vertical privilege
-- tenant isolation
-- object-level access
+- Playwright 配置、浏览器项目和测试入口是否存在
+- 项目声明的关键浏览器流程是否实际执行
+- 桌面和窄屏视口是否按项目声明完成验证
+- 测试结果是否包含可复核的命令、结果和失败原因
+- 浏览器依赖或系统动态库缺失时，必须记录环境阻断，不得伪造通过
 
-CONSISTENCY
-- idempotency
-- concurrency
-- transaction boundary
-- event ordering
-
-DATA
-- integrity
-- migration
-- schema compatibility
-
-RELIABILITY
-- retry
-- timeout
-- rate limit
-- recovery
-
-SECURITY
-- injection
-- secret exposure
-- path traversal
-- SSRF
-- prompt injection
-
-OPERABILITY
-- observability
-- auditability
-- rollback
-- evidence chain
-
-QUALITY
-- regression
-- performance
-- maintainability
-```
-
-
-其中越权、租户隔离、幂等、状态机和事务一致性应被视为**阻断交付的硬约束**：
-
-```text
-任意一项失败
-→ status = blocked
-→ 不允许标记为 verified
-→ 必须进入 repair 或人工审查
-```
-
-## 最终验收结果建议
-
-不要只输出 `pass / fail`，而应返回：
-
-```json
+<!-- loom-rule-catalog:start -->
 {
-  "artifact_id": "artifact_123",
-  "status": "blocked",
-  "blocking_failures": [
-    {
-      "finding_id": "finding-tenant-001",
-      "check_id": "TENANT-ISOLATION",
-      "severity": "critical",
-      "summary": "Tenant B data is visible to tenant A.",
-      "remediation": "Add tenant identity predicates to resource lookup and verify cross-tenant access."
-    }
-  ],
-  "passed_checks": 42,
-  "warning_count": 5,
-  "unknown_count": 2,
-  "recommended_actions": [
-    "Add workspace_id predicate to project lookup",
-    "Add cross-tenant authorization integration test"
+  "schemaVersion": "1.0",
+  "rules": [
+    { "id": "BUSINESS-INTENT", "section": "1", "blocking": false },
+    { "id": "AUTH-HORIZONTAL", "section": "2", "blocking": true },
+    { "id": "AUTH-VERTICAL", "section": "3", "blocking": true },
+    { "id": "TENANT-ISOLATION", "section": "4", "blocking": true },
+    { "id": "STATE-MACHINE", "section": "5", "blocking": true },
+    { "id": "IDEMPOTENCY", "section": "6", "blocking": true },
+    { "id": "CONCURRENCY", "section": "7", "blocking": false },
+    { "id": "TRANSACTION", "section": "8", "blocking": true },
+    { "id": "DATA-INTEGRITY", "section": "9", "blocking": false },
+    { "id": "API-COMPATIBILITY", "section": "10", "blocking": false },
+    { "id": "ERROR-RECOVERY", "section": "11", "blocking": false },
+    { "id": "SECURITY-BOUNDARY", "section": "12", "blocking": false },
+    { "id": "RETRY-TIMEOUT-RATE-LIMIT", "section": "13", "blocking": false },
+    { "id": "OBSERVABILITY-EVIDENCE", "section": "14", "blocking": false },
+    { "id": "REGRESSION-COMPATIBILITY", "section": "15", "blocking": false },
+    { "id": "PERFORMANCE-CAPACITY", "section": "16", "blocking": false },
+    { "id": "BROWSER-QUALITY", "section": "17", "blocking": false }
   ]
 }
-```
+<!-- loom-rule-catalog:end -->

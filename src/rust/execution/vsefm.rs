@@ -51,6 +51,8 @@ pub enum VsefmVerificationResolution {
 pub struct VsefmVerificationCandidate {
     pub status: VsefmVerificationStatus,
     pub checks: Vec<VsefmCheckResult>,
+    #[serde(default)]
+    pub not_applicable_checks: Vec<VsefmNotApplicableCheck>,
     pub blocking_failures: Vec<VsefmBlockingFailure>,
     pub warnings: Vec<String>,
     pub unknown_checks: Vec<VsefmUnknownCheck>,
@@ -106,19 +108,25 @@ pub struct VsefmUnknownCheck {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-struct VsefmCheckPlanEntry {
-    check_id: String,
-    applicability: VsefmCheckApplicability,
-    reason: String,
-    hard_blocking: bool,
-    required_evidence: String,
+pub struct VsefmNotApplicableCheck {
+    pub check_id: String,
+    pub reason: String,
+    pub evidence: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum VsefmCheckApplicability {
-    Required,
-    NotApplicable,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SefmRuleCatalog {
+    schema_version: String,
+    rules: Vec<SefmRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SefmRule {
+    id: String,
+    section: String,
+    blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -635,375 +643,46 @@ fn sync_vsefm_record(
     state::store::write_json_atomic(&path, &record).map_err(|error| error.to_string())
 }
 
-const VSEFM_CHECK_IDS: &[&str] = &[
-    "BUSINESS-INTENT",
-    "AUTH-HORIZONTAL",
-    "AUTH-VERTICAL",
-    "TENANT-ISOLATION",
-    "STATE-MACHINE",
-    "IDEMPOTENCY",
-    "CONCURRENCY",
-    "TRANSACTION",
-    "DATA-INTEGRITY",
-    "API-COMPATIBILITY",
-    "ERROR-RECOVERY",
-    "SECURITY-BOUNDARY",
-    "RETRY-TIMEOUT-RATE-LIMIT",
-    "OBSERVABILITY-EVIDENCE",
-    "REGRESSION-COMPATIBILITY",
-    "PERFORMANCE-CAPACITY",
-];
+const RULE_CATALOG_START: &str = "<!-- loom-rule-catalog:start -->";
+const RULE_CATALOG_END: &str = "<!-- loom-rule-catalog:end -->";
 
-const VSEFM_HARD_BLOCKERS: &[&str] = &[
-    "AUTH-HORIZONTAL",
-    "AUTH-VERTICAL",
-    "TENANT-ISOLATION",
-    "IDEMPOTENCY",
-    "STATE-MACHINE",
-    "TRANSACTION",
-];
-
-fn collect_json_key_values<'a>(value: &'a Value, key: &str, output: &mut Vec<&'a Value>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(value) = object.get(key) {
-                output.push(value);
-            }
-            for value in object.values() {
-                collect_json_key_values(value, key, output);
-            }
+fn read_rule_catalog(prompt_ref: &str) -> Result<SefmRuleCatalog, String> {
+    let content = std::fs::read_to_string(prompt_ref)
+        .map_err(|error| format!("cannot read V-SEFM prompt: {error}"))?;
+    let start = content
+        .find(RULE_CATALOG_START)
+        .ok_or_else(|| "V-SEFM prompt is missing the rule catalog start marker.".to_string())?
+        + RULE_CATALOG_START.len();
+    let end = content[start..]
+        .find(RULE_CATALOG_END)
+        .map(|offset| start + offset)
+        .ok_or_else(|| "V-SEFM prompt is missing the rule catalog end marker.".to_string())?;
+    let catalog: SefmRuleCatalog = serde_json::from_str(content[start..end].trim())
+        .map_err(|error| format!("V-SEFM prompt rule catalog is invalid: {error}"))?;
+    if catalog.schema_version != "1.0" || catalog.rules.is_empty() {
+        return Err(
+            "V-SEFM prompt rule catalog must use schemaVersion 1.0 and contain rules.".to_string(),
+        );
+    }
+    let mut ids = BTreeSet::new();
+    for rule in &catalog.rules {
+        if rule.id.trim().is_empty() || rule.section.trim().is_empty() || !ids.insert(&rule.id) {
+            return Err(
+                "V-SEFM prompt rule catalog contains an empty or duplicate rule id.".to_string(),
+            );
         }
-        Value::Array(values) => {
-            for value in values {
-                collect_json_key_values(value, key, output);
-            }
-        }
-        _ => {}
     }
+    Ok(catalog)
 }
 
-fn json_key_has_non_empty_array(values: &[&Value]) -> bool {
-    values
-        .iter()
-        .any(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+fn rule_catalog_hash(prompt_ref: &str) -> Result<String, String> {
+    let content =
+        std::fs::read(prompt_ref).map_err(|error| format!("cannot read V-SEFM prompt: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(content)))
 }
 
-fn json_key_has_string(values: &[&Value], expected: &str) -> bool {
-    values
-        .iter()
-        .any(|value| value.as_str().is_some_and(|actual| actual == expected))
-}
-
-fn json_key_has_object_field(values: &[&Value], field: &str, expected: &str) -> bool {
-    values.iter().any(|value| {
-        value
-            .get(field)
-            .and_then(Value::as_str)
-            .is_some_and(|actual| actual == expected)
-    })
-}
-
-fn json_key_has_any_object_field(values: &[&Value], fields: &[&str]) -> bool {
-    values.iter().any(|value| {
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-        fields.iter().any(|field| object.contains_key(*field))
-    })
-}
-
-fn check_plan_entry(
-    check_id: &str,
-    applicable: bool,
-    reason: &str,
-    required_evidence: &str,
-) -> Value {
-    json!({
-        "check_id": check_id,
-        "applicability": if applicable { "required" } else { "not_applicable" },
-        "reason": reason,
-        "hard_blocking": VSEFM_HARD_BLOCKERS.contains(&check_id),
-        "required_evidence": required_evidence
-    })
-}
-
-fn derive_check_plan(accepted_artifacts: &[Value], changed_files: bool) -> Vec<Value> {
-    if accepted_artifacts.is_empty() {
-        return VSEFM_CHECK_IDS
-            .iter()
-            .map(|check_id| {
-                check_plan_entry(
-                    check_id,
-                    true,
-                    "No delivery facts are available; retain the full verifier catalog.",
-                    "Read-only source and test evidence.",
-                )
-            })
-            .collect();
-    }
-
-    let mut interfaces = Vec::new();
-    let mut auth_policies = Vec::new();
-    let mut operation_kinds = Vec::new();
-    let mut methods = Vec::new();
-    let mut state_machines = Vec::new();
-    let mut data_models = Vec::new();
-    let mut runtime_dependencies = Vec::new();
-    let mut external_services = Vec::new();
-    let mut runtime_deliveries = Vec::new();
-    let mut pagination_policies = Vec::new();
-    for artifact in accepted_artifacts {
-        collect_json_key_values(artifact, "interfaces", &mut interfaces);
-        collect_json_key_values(artifact, "authPolicy", &mut auth_policies);
-        collect_json_key_values(artifact, "operationKind", &mut operation_kinds);
-        collect_json_key_values(artifact, "method", &mut methods);
-        collect_json_key_values(artifact, "stateMachines", &mut state_machines);
-        collect_json_key_values(artifact, "dataModel", &mut data_models);
-        collect_json_key_values(artifact, "runtimeDependencies", &mut runtime_dependencies);
-        collect_json_key_values(artifact, "externalServices", &mut external_services);
-        collect_json_key_values(artifact, "runtimeDelivery", &mut runtime_deliveries);
-        collect_json_key_values(artifact, "paginationPolicy", &mut pagination_policies);
-    }
-    let mut dependency_kinds = Vec::new();
-    for dependency in &runtime_dependencies {
-        let mut kinds = Vec::new();
-        collect_json_key_values(dependency, "kind", &mut kinds);
-        dependency_kinds.extend(kinds.into_iter().filter_map(Value::as_str));
-    }
-
-    let has_api = json_key_has_non_empty_array(&interfaces);
-    let has_auth = json_key_has_object_field(&auth_policies, "required", "required")
-        || json_key_has_any_object_field(&auth_policies, &["actorRefs", "permissionRefs"]);
-    let has_write = json_key_has_string(&operation_kinds, "create")
-        || json_key_has_string(&operation_kinds, "update")
-        || json_key_has_string(&operation_kinds, "transition")
-        || json_key_has_string(&methods, "POST")
-        || json_key_has_string(&methods, "PATCH")
-        || json_key_has_string(&methods, "PUT")
-        || json_key_has_string(&methods, "DELETE");
-    let has_create =
-        json_key_has_string(&operation_kinds, "create") || json_key_has_string(&methods, "POST");
-    let has_state = json_key_has_non_empty_array(&state_machines)
-        || json_key_has_string(&operation_kinds, "transition");
-    let has_persistence = json_key_has_non_empty_array(&data_models)
-        || dependency_kinds.iter().any(|kind| {
-            matches!(
-                kind.to_ascii_lowercase().as_str(),
-                "storage" | "database" | "persistence"
-            )
-        });
-    let has_external = external_services.iter().any(|value| {
-        value
-            .get("selection")
-            .and_then(Value::as_str)
-            .is_some_and(|selection| {
-                !matches!(
-                    selection.to_ascii_lowercase().as_str(),
-                    "none" | "not_needed" | "不需要"
-                )
-            })
-    }) || dependency_kinds.iter().any(|kind| {
-        !matches!(
-            kind.to_ascii_lowercase().as_str(),
-            "storage" | "database" | "persistence"
-        )
-    });
-    let has_runtime = json_key_has_non_empty_array(&runtime_deliveries)
-        || accepted_artifacts.iter().any(|artifact| {
-            artifact.get("runtimeDelivery").is_some() || artifact.get("runtimeSurfaces").is_some()
-        });
-    let has_list = json_key_has_string(&operation_kinds, "list")
-        || json_key_has_string(&operation_kinds, "query")
-        || pagination_policies.iter().any(|value| {
-            value
-                .get("strategy")
-                .and_then(Value::as_str)
-                .is_some_and(|strategy| strategy != "not_applicable")
-        });
-    let has_tenant = accepted_artifacts.iter().any(|artifact| {
-        ["tenantId", "tenant_id", "workspaceId", "workspace_id"]
-            .iter()
-            .any(|key| {
-                let mut values = Vec::new();
-                collect_json_key_values(artifact, key, &mut values);
-                !values.is_empty()
-            })
-    });
-    let unknown_applicability = !has_api && !has_persistence && !has_runtime;
-
-    VSEFM_CHECK_IDS
-        .iter()
-        .map(|check_id| match *check_id {
-            "BUSINESS-INTENT" => check_plan_entry(
-                check_id,
-                true,
-                "Every delivery has a declared business subject.",
-                "Accepted requirement and acceptance evidence.",
-            ),
-            "AUTH-HORIZONTAL" => check_plan_entry(
-                check_id,
-                has_auth,
-                if has_auth {
-                    "The accepted architecture declares an authentication policy."
-                } else {
-                    "No structured authentication policy is declared."
-                },
-                "Server-verified session, token, or identity-provider context plus object ownership evidence; client-supplied identity values are not authentication evidence.",
-            ),
-            "AUTH-VERTICAL" => check_plan_entry(
-                check_id,
-                has_auth && has_write,
-                if has_auth && has_write {
-                    "Authenticated write interfaces are declared."
-                } else {
-                    "No authenticated write interface is declared."
-                },
-                "Server-side authentication and authorization evidence for write operations; client-supplied roles or owner ids are not evidence.",
-            ),
-            "TENANT-ISOLATION" => check_plan_entry(
-                check_id,
-                has_tenant,
-                if has_tenant {
-                    "Tenant or workspace fields are present in accepted contracts."
-                } else {
-                    "No tenant or workspace boundary is present in accepted contracts."
-                },
-                "Cross-tenant access evidence.",
-            ),
-            "STATE-MACHINE" => check_plan_entry(
-                check_id,
-                has_state,
-                if has_state {
-                    "State-machine or transition behavior is declared."
-                } else {
-                    "No state-machine or transition behavior is declared."
-                },
-                "Legal and illegal transition evidence.",
-            ),
-            "IDEMPOTENCY" => check_plan_entry(
-                check_id,
-                has_create,
-                if has_create {
-                    "A create interface is declared and replay behavior must be evaluated."
-                } else {
-                    "No create interface is declared."
-                },
-                "Replay or idempotency-key evidence.",
-            ),
-            "CONCURRENCY" => check_plan_entry(
-                check_id,
-                has_persistence && has_write,
-                if has_persistence && has_write {
-                    "Persistent write behavior is declared."
-                } else {
-                    "No persistent write behavior is declared."
-                },
-                "Concurrent request evidence.",
-            ),
-            "TRANSACTION" => check_plan_entry(
-                check_id,
-                has_persistence && has_write,
-                if has_persistence && has_write {
-                    "Persistent mutations are declared."
-                } else {
-                    "No persistent mutation is declared."
-                },
-                "Commit, rollback, and atomicity evidence.",
-            ),
-            "DATA-INTEGRITY" => check_plan_entry(
-                check_id,
-                has_persistence,
-                if has_persistence {
-                    "A persistence model is declared."
-                } else {
-                    "No persistence model is declared."
-                },
-                "Schema and persistence evidence.",
-            ),
-            "API-COMPATIBILITY" => check_plan_entry(
-                check_id,
-                has_api,
-                if has_api {
-                    "HTTP interfaces are declared."
-                } else {
-                    "No HTTP interface is declared."
-                },
-                "Accepted API contract and observed responses.",
-            ),
-            "ERROR-RECOVERY" => check_plan_entry(
-                check_id,
-                has_api || has_runtime,
-                if has_api || has_runtime {
-                    "A runtime or HTTP surface is declared."
-                } else {
-                    "No runtime surface is declared."
-                },
-                "Actionable failure and recovery evidence.",
-            ),
-            "SECURITY-BOUNDARY" => check_plan_entry(
-                check_id,
-                has_api || has_runtime,
-                if has_api || has_runtime {
-                    "A callable runtime surface is declared."
-                } else {
-                    "No callable runtime surface is declared."
-                },
-                "Input, secret, path, command, and network-boundary evidence; authentication and authorization belong to AUTH checks.",
-            ),
-            "RETRY-TIMEOUT-RATE-LIMIT" => check_plan_entry(
-                check_id,
-                has_external,
-                if has_external {
-                    "External or asynchronous dependencies are declared."
-                } else {
-                    "No external or asynchronous dependency is declared."
-                },
-                "Bounded timeout, retry, and rate-limit evidence.",
-            ),
-            "OBSERVABILITY-EVIDENCE" => check_plan_entry(
-                check_id,
-                has_api || has_runtime,
-                if has_api || has_runtime {
-                    "A runtime surface requires traceable evidence."
-                } else {
-                    "No runtime surface is declared."
-                },
-                "Request, mutation, and response trace evidence.",
-            ),
-            "REGRESSION-COMPATIBILITY" => check_plan_entry(
-                check_id,
-                changed_files,
-                if changed_files {
-                    "The subject contains changed files."
-                } else {
-                    "No changed files are declared."
-                },
-                "Existing test and compatibility evidence.",
-            ),
-            "PERFORMANCE-CAPACITY" => check_plan_entry(
-                check_id,
-                has_api && (has_list || has_persistence),
-                if has_api && (has_list || has_persistence) {
-                    "A query or persistent API surface is declared."
-                } else {
-                    "No scalable query or persistent API surface is declared."
-                },
-                "Bounded load or capacity evidence.",
-            ),
-            _ if unknown_applicability => check_plan_entry(
-                check_id,
-                true,
-                "No structured delivery facts are available; retain the full verifier catalog.",
-                "Read-only source and test evidence.",
-            ),
-            _ => check_plan_entry(
-                check_id,
-                false,
-                "The accepted delivery facts do not declare this capability.",
-                "No evidence required for a non-applicable check.",
-            ),
-        })
-        .collect()
+fn rule_by_id<'a>(catalog: &'a SefmRuleCatalog, check_id: &str) -> Option<&'a SefmRule> {
+    catalog.rules.iter().find(|rule| rule.id == check_id)
 }
 
 fn start_local_verification(
@@ -1049,6 +728,22 @@ fn start_local_verification(
         } else {
             "completed_phases"
         });
+    let supplemental_check_ids = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("supplementalRuleIds"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let supplemental_baseline_ref = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("supplementalBaselineRef"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let subject = match subject_override {
         Some(subject) => subject,
         None => match build_verification_subject(
@@ -1069,6 +764,13 @@ fn start_local_verification(
         Ok(path) => path,
         Err(error) => return failed(project_root, "VSEFM_PROMPT_UNAVAILABLE", error),
     };
+    if let Err(error) = read_rule_catalog(&prompt_ref) {
+        return failed(project_root, "VSEFM_PROMPT_INVALID", error);
+    }
+    let rule_catalog_hash = match rule_catalog_hash(&prompt_ref) {
+        Ok(hash) => hash,
+        Err(error) => return failed(project_root, "VSEFM_PROMPT_INVALID", error),
+    };
     let runtime_provenance = verification_runtime_provenance(&prompt_ref);
     let result_file = format!(".loom/agent-writable/{verification_id}/verification-result.json");
     let request_file = format!(".loom/verification/sessions/{verification_id}/request.json");
@@ -1085,12 +787,20 @@ fn start_local_verification(
         &result_file,
         &subject,
         &runtime_provenance,
+        &rule_catalog_hash,
+        &supplemental_check_ids,
+        supplemental_baseline_ref.as_deref(),
     );
     let stored = match state::write_native_request(
         project_root,
         state::NativeRequestInput {
             request_id,
-            request_kind: "vsefm_local_verification".to_string(),
+            request_kind: if supplemental_check_ids.is_empty() {
+                "vsefm_local_verification"
+            } else {
+                "vsefm_supplemental_verification"
+            }
+            .to_string(),
             request_file: Some(request_file),
             delivery_id: effective_delivery_id.clone(),
             phase_id: phase_id.map(str::to_string),
@@ -1106,7 +816,7 @@ fn start_local_verification(
             )
         }
     };
-    let session = json!({
+    let mut session = json!({
         "schemaVersion": "1.0",
         "verificationId": verification_id,
         "trigger": trigger,
@@ -1115,6 +825,7 @@ fn start_local_verification(
         "scope": scope,
         "subjectRef": subject_ref,
         "promptRef": prompt_ref,
+        "ruleCatalogHash": rule_catalog_hash,
         "requestRef": stored.request_ref,
         "resultFile": result_file,
         "runtimeProvenance": runtime_provenance,
@@ -1124,6 +835,17 @@ fn start_local_verification(
         "createdAt": state::store::now_string(),
         "updatedAt": state::store::now_string()
     });
+    if let Some(object) = session.as_object_mut() {
+        if !supplemental_check_ids.is_empty() {
+            object.insert(
+                "supplementalRuleIds".to_string(),
+                json!(supplemental_check_ids),
+            );
+            if let Some(baseline_ref) = supplemental_baseline_ref {
+                object.insert("supplementalBaselineRef".to_string(), json!(baseline_ref));
+            }
+        }
+    }
     if let Err(error) = state::store::write_json_atomic(&session_dir.join("state.json"), &session) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
     }
@@ -1622,7 +1344,6 @@ fn build_verification_subject(
     let mut changed_files = BTreeSet::new();
     let mut source_refs = Vec::new();
     let mut accepted_artifacts = Vec::new();
-    let mut accepted_artifact_values = Vec::new();
     let mut accepted_paths = BTreeSet::new();
     if let Some(delivery_id) = delivery_id {
         let delivery = FileTransitionStore
@@ -1650,7 +1371,6 @@ fn build_verification_subject(
                 &mut accepted_paths,
                 &mut source_refs,
                 &mut accepted_artifacts,
-                &mut accepted_artifact_values,
             );
         }
         let selected = if scope == "current_phase" {
@@ -1713,7 +1433,6 @@ fn build_verification_subject(
                     &mut accepted_paths,
                     &mut source_refs,
                     &mut accepted_artifacts,
-                    &mut accepted_artifact_values,
                 );
             }
             add_latest_review_artifact(
@@ -1723,7 +1442,6 @@ fn build_verification_subject(
                 &mut accepted_paths,
                 &mut source_refs,
                 &mut accepted_artifacts,
-                &mut accepted_artifact_values,
             );
             add_latest_task_result_artifacts(
                 root,
@@ -1732,12 +1450,10 @@ fn build_verification_subject(
                 &mut accepted_paths,
                 &mut source_refs,
                 &mut accepted_artifacts,
-                &mut accepted_artifact_values,
                 &mut changed_files,
             );
         }
     }
-    let has_changed_files = !changed_files.is_empty();
     let files = changed_files
         .into_iter()
         .filter_map(|path| {
@@ -1760,8 +1476,6 @@ fn build_verification_subject(
         "requirementRefs": source_refs,
         "acceptedArtifacts": accepted_artifacts,
         "changedFiles": files,
-        "checkIds": VSEFM_CHECK_IDS,
-        "checkPlan": derive_check_plan(&accepted_artifact_values, has_changed_files),
         "generatedAt": state::store::now_string()
     }))
 }
@@ -1774,7 +1488,6 @@ fn add_accepted_artifact(
     accepted_paths: &mut BTreeSet<String>,
     source_refs: &mut Vec<String>,
     accepted_artifacts: &mut Vec<Value>,
-    accepted_artifact_values: &mut Vec<Value>,
 ) {
     if !accepted_paths.insert(reference.to_string()) {
         return;
@@ -1784,10 +1497,10 @@ fn add_accepted_artifact(
         accepted_paths.remove(reference);
         return;
     };
-    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+    if serde_json::from_slice::<Value>(&bytes).is_err() {
         accepted_paths.remove(reference);
         return;
-    };
+    }
     let hash = Sha256::digest(&bytes);
     source_refs.push(reference.to_string());
     accepted_artifacts.push(json!({
@@ -1797,7 +1510,6 @@ fn add_accepted_artifact(
         "sha256": format!("{hash:x}"),
         "bytes": bytes.len()
     }));
-    accepted_artifact_values.push(value);
 }
 
 fn add_latest_review_artifact(
@@ -1807,7 +1519,6 @@ fn add_latest_review_artifact(
     accepted_paths: &mut BTreeSet<String>,
     source_refs: &mut Vec<String>,
     accepted_artifacts: &mut Vec<Value>,
-    accepted_artifact_values: &mut Vec<Value>,
 ) {
     let latest = root.join(format!(
         ".loom/deliveries/{delivery_id}/reviews/{phase_id}/latest.json"
@@ -1826,7 +1537,6 @@ fn add_latest_review_artifact(
         accepted_paths,
         source_refs,
         accepted_artifacts,
-        accepted_artifact_values,
     );
 }
 
@@ -1837,7 +1547,6 @@ fn add_latest_task_result_artifacts(
     accepted_paths: &mut BTreeSet<String>,
     source_refs: &mut Vec<String>,
     accepted_artifacts: &mut Vec<Value>,
-    accepted_artifact_values: &mut Vec<Value>,
     changed_files: &mut BTreeSet<String>,
 ) {
     let latest_run = root.join(format!(
@@ -1891,7 +1600,6 @@ fn add_latest_task_result_artifacts(
             accepted_paths,
             source_refs,
             accepted_artifacts,
-            accepted_artifact_values,
         );
     }
 }
@@ -1938,28 +1646,70 @@ fn verification_request(
     result_file: &str,
     subject: &Value,
     runtime_provenance: &Value,
+    rule_catalog_hash: &str,
+    supplemental_check_ids: &[String],
+    supplemental_baseline_ref: Option<&str>,
 ) -> Value {
     let result_schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
         .unwrap_or_else(|_| json!({"type": "object"}));
+    let mut steps = vec![
+        "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.".to_string(),
+        "Read the complete sefm-verify.md from promptRef, including its machine-readable rule catalog, before evaluating any delivery artifact.".to_string(),
+        "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.".to_string(),
+        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. For each rule, decide applicability from the accepted artifacts, then either produce one checks entry or one not_applicable_checks entry.".to_string(),
+        "Keep each check within its rule section: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability; BROWSER-QUALITY owns Playwright browser checks.".to_string(),
+        "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.".to_string(),
+        "Record concrete input, expected, observed, evidence, and timestamp for every applicable check. For every non-applicable rule, record its rule id, reason, and evidence in not_applicable_checks.".to_string(),
+        "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.".to_string(),
+        "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
+        "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.".to_string(),
+        "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.".to_string(),
+    ];
+    if supplemental_check_ids.is_empty() {
+        steps.push(
+            "Account for every rule id in the prompt catalog exactly once across checks and not_applicable_checks."
+                .to_string(),
+        );
+    } else {
+        steps.push(format!(
+            "This is supplemental verification. Execute only these missing check ids: {}. Submit checks only for these ids; Loom will merge them with the previously accepted canonical result.",
+            supplemental_check_ids.join(", ")
+        ));
+        steps.push(
+            "Do not modify product files, do not rerun unrelated checks, and do not copy previously accepted checks into this result.".to_string(),
+        );
+    }
+    steps.push(
+        "Write the result candidate and submit it with loom.vsefmVerificationAcceptFile."
+            .to_string(),
+    );
+    let mut source = json!({
+        "trigger": trigger,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "scope": scope
+    });
+    if !supplemental_check_ids.is_empty() {
+        if let Some(object) = source.as_object_mut() {
+            object.insert(
+                "supplementalRuleIds".to_string(),
+                json!(supplemental_check_ids),
+            );
+            if let Some(baseline_ref) = supplemental_baseline_ref {
+                object.insert("baselineResultRef".to_string(), json!(baseline_ref));
+            }
+        }
+    }
     let instruction = json!({
         "role": "software_delivery_verifier",
-        "objective": "Verify the declared delivery subject against sefm-verify.md without modifying product or Loom files.",
-        "steps": [
-            "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.",
-            "Read sefm-verify.md from promptRef.",
-            "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.",
-            "Use subject.checkPlan as the only canonical verification plan. Evaluate only entries whose applicability is required; do not emit checks for not_applicable entries.",
-            "Keep each check within its generated scope: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability.",
-            "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.",
-            "Record concrete input, expected, observed, evidence, and timestamp for every required check.",
-            "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.",
-            "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.",
-            "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.",
-            "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.",
-            "Write the result candidate and submit it with loom.vsefmVerificationAcceptFile."
-        ],
+        "objective": if supplemental_check_ids.is_empty() {
+            "Verify the declared delivery subject against sefm-verify.md without modifying product or Loom files."
+        } else {
+            "Collect only the missing V-SEFM evidence listed in source.supplementalRuleIds without modifying product or Loom files."
+        },
+        "steps": steps,
         "hardBlockingRules": [
-            "A failed checkPlan entry with hard_blocking=true requires a blocking_failure reference; Loom derives the outer status after acceptance.",
+            "A failed rule marked blocking=true in the prompt catalog requires a blocking_failure reference; Loom derives the outer status after acceptance.",
             "Never claim pass without reproducible evidence.",
             "Use unknown when the subject or environment does not establish a conclusion; do not use it to hide an established defect.",
             "Do not add fields, duplicate check plans, or use natural-language keywords as a substitute for the generated check scope."
@@ -1977,17 +1727,17 @@ fn verification_request(
     });
     json!({
         "schemaVersion": "1.0",
-        "requestType": "vsefm_local_verification",
-        "verificationId": verification_id,
-        "source": {
-            "trigger": trigger,
-            "deliveryId": delivery_id,
-            "phaseId": phase_id,
-            "scope": scope
+        "requestType": if supplemental_check_ids.is_empty() {
+            "vsefm_local_verification"
+        } else {
+            "vsefm_supplemental_verification"
         },
+        "verificationId": verification_id,
+        "source": source,
         "agentInstruction": instruction,
         "prompt": {
-            "ref": prompt_ref
+            "ref": prompt_ref,
+            "ruleCatalogHash": rule_catalog_hash
         },
         "runtimeProvenance": runtime_provenance,
         "subject": subject,
@@ -2005,6 +1755,7 @@ fn verification_request(
             "agentOwnedFields": [
                 "status",
                 "checks",
+                "not_applicable_checks",
                 "blocking_failures",
                 "warnings",
                 "unknown_checks",
@@ -2014,8 +1765,8 @@ fn verification_request(
                 "artifact_id",
                 "verification_id",
                 "scope",
-                "source",
-                "check_plan",
+            "source",
+            "rule_catalog_hash",
                 "statistics",
                 "attempts"
             ],
@@ -2023,6 +1774,7 @@ fn verification_request(
             "resultTemplate": {
                 "status": "inconclusive",
                 "checks": [],
+                "not_applicable_checks": [],
                 "blocking_failures": [],
                 "warnings": [],
                 "unknown_checks": [],
@@ -2038,7 +1790,7 @@ fn verification_request(
                     "prompt", "prompt.ref"
                 ].into_iter().map(str::to_string).collect(), format!("loom://vsefm/{verification_id}/prompt")),
                 delivery_core::ReadGroupRef::new("verification_subject", 3, vec![
-                    "subject", "subject.scope", "subject.phaseIds", "subject.requirementRefs", "subject.acceptedArtifacts", "subject.changedFiles", "subject.checkPlan"
+                    "subject", "subject.scope", "subject.phaseIds", "subject.requirementRefs", "subject.acceptedArtifacts", "subject.changedFiles"
                 ].into_iter().map(str::to_string).collect(), subject_ref),
                 delivery_core::ReadGroupRef::new("verification_result_contract", 4, vec![
                     "outputContract"
@@ -2107,46 +1859,28 @@ pub fn accept_vsefm_verification_file<D: DomainDispatcher>(
             "V-SEFM verification result is not awaiting an Agent result.",
         );
     }
-    let subject_ref = match session.get("subjectRef").and_then(Value::as_str) {
-        Some(reference) => reference,
+    let prompt_ref = match session.get("promptRef").and_then(Value::as_str) {
+        Some(prompt_ref) => prompt_ref,
         None => {
             return failed(
                 &input.project_root,
-                "VSEFM_SCOPE_BUILD_FAILED",
-                "V-SEFM session is missing subjectRef.",
+                "VSEFM_PROMPT_UNAVAILABLE",
+                "V-SEFM session is missing promptRef.",
             )
         }
     };
-    let subject_path = match state::paths::from_project_relative(root, subject_ref) {
-        Ok(path) => path,
-        Err(error) => {
-            return failed(
-                &input.project_root,
-                "VSEFM_SCOPE_BUILD_FAILED",
-                error.to_string(),
-            )
-        }
+    let rule_catalog = match read_rule_catalog(prompt_ref) {
+        Ok(catalog) => catalog,
+        Err(error) => return failed(&input.project_root, "VSEFM_PROMPT_INVALID", error),
     };
-    let subject = match state::store::read_json_value(&subject_path) {
-        Ok(subject) => subject,
-        Err(error) => {
-            return failed(
-                &input.project_root,
-                "VSEFM_SCOPE_BUILD_FAILED",
-                error.to_string(),
-            )
-        }
-    };
-    let check_plan = match subject.get("checkPlan").cloned() {
-        Some(check_plan) => check_plan,
-        None => {
-            return failed(
-                &input.project_root,
-                "VSEFM_SCOPE_BUILD_FAILED",
-                "V-SEFM subject is missing generated checkPlan.",
-            )
-        }
-    };
+    let supplemental_ids = session
+        .get("supplementalRuleIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
     let candidate: VsefmVerificationCandidate = match deserialize_vsefm_candidate(raw.clone()) {
         Ok(candidate) => candidate,
         Err(issue) => {
@@ -2177,7 +1911,70 @@ pub fn accept_vsefm_verification_file<D: DomainDispatcher>(
             return vsefm_result_repair_with_issues(input, authorized, vec![issue]);
         }
     };
-    let issues = validate_vsefm_candidate(&candidate, &check_plan);
+    let mut issues = if supplemental_ids.is_empty() {
+        validate_vsefm_candidate(&candidate, &rule_catalog, None)
+    } else {
+        validate_vsefm_candidate(&candidate, &rule_catalog, Some(&supplemental_ids))
+    };
+    let candidate = if issues.is_empty() && !supplemental_ids.is_empty() {
+        let baseline_ref = session
+            .get("supplementalBaselineRef")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "supplemental V-SEFM session is missing baselineResultRef".to_string());
+        match baseline_ref {
+            Ok(baseline_ref) => match state::paths::from_project_relative(root, baseline_ref) {
+                Ok(path) => match state::store::read_json_value(&path) {
+                    Ok(baseline) => match merge_supplemental_candidate(
+                        &baseline,
+                        candidate.clone(),
+                        &supplemental_ids,
+                    ) {
+                        Ok(merged) => merged,
+                        Err(error) => {
+                            issues.push(vsefm_issue(
+                                "VSEFM_SUPPLEMENTAL_MERGE_FAILED",
+                                "checks",
+                                &error,
+                            ));
+                            candidate
+                        }
+                    },
+                    Err(error) => {
+                        issues.push(vsefm_issue(
+                            "VSEFM_SUPPLEMENTAL_BASELINE_READ_FAILED",
+                            "source.baselineResultRef",
+                            &error.to_string(),
+                        ));
+                        candidate
+                    }
+                },
+                Err(error) => {
+                    issues.push(vsefm_issue(
+                        "VSEFM_SUPPLEMENTAL_BASELINE_REF_INVALID",
+                        "source.baselineResultRef",
+                        &error.to_string(),
+                    ));
+                    candidate
+                }
+            },
+            Err(error) => {
+                issues.push(vsefm_issue(
+                    "VSEFM_SUPPLEMENTAL_BASELINE_MISSING",
+                    "source.baselineResultRef",
+                    &error,
+                ));
+                candidate
+            }
+        }
+    } else {
+        candidate
+    };
+    if issues.is_empty() && !supplemental_ids.is_empty() {
+        // The supplemental candidate is scope-checked before merging. Once merged,
+        // the canonical result must be validated as the complete catalog rather
+        // than treating the retained baseline checks as out of scope.
+        issues = validate_vsefm_candidate(&candidate, &rule_catalog, None);
+    }
     if !issues.is_empty() {
         let repeated = match record_vsefm_submit_attempt(
             root,
@@ -2690,6 +2487,34 @@ where
                 "Supplemental verification is only valid for an inconclusive result without blocking findings.",
             );
         }
+        let missing_rule_ids = supplemental_rule_ids(&result);
+        if missing_rule_ids.is_empty() {
+            return failed(
+                &input.project_root,
+                "VSEFM_RESOLUTION_INVALID",
+                "Supplemental verification requires at least one missing or unknown rule.",
+            );
+        }
+        let has_failed_check =
+            result
+                .get("checks")
+                .and_then(Value::as_array)
+                .is_some_and(|checks| {
+                    checks
+                        .iter()
+                        .any(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
+                });
+        if has_failed_check {
+            return failed(
+                &input.project_root,
+                "VSEFM_RESOLUTION_INVALID",
+                "A result with a confirmed failed check requires repair or manual review, not supplemental verification.",
+            );
+        }
+        let baseline_result_ref = session
+            .get("resultRef")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let subject_ref = session
             .get("subjectRef")
             .and_then(Value::as_str)
@@ -2723,7 +2548,7 @@ where
             object.insert("status".to_string(), json!("supplemental_started"));
             object.insert(
                 "supplementalReason".to_string(),
-                json!("The result is inconclusive without blocking findings; run the same canonical check plan with supplemental evidence."),
+                json!("The result is inconclusive without blocking findings; collect only the missing check evidence and merge it with the accepted result."),
             );
             object.insert("updatedAt".to_string(), json!(state::store::now_string()));
         }
@@ -2741,7 +2566,7 @@ where
         let action = RouteAction {
             kind: RouteActionKind::VsefmVerification,
             source: "vsefm_supplemental".to_string(),
-            reason: "Collect supplemental V-SEFM evidence using the accepted canonical check plan."
+            reason: "Collect supplemental V-SEFM evidence using the accepted prompt rule catalog."
                 .to_string(),
             prompt: None,
             accepted_responses: vec![],
@@ -2749,7 +2574,9 @@ where
             details: Some(json!({
                 "trigger": "supplemental",
                 "scope": session.get("scope").cloned().unwrap_or_else(|| json!("completed_phases")),
-                "resumeAction": session.get("resumeAction").cloned().unwrap_or(Value::Null)
+                "resumeAction": session.get("resumeAction").cloned().unwrap_or(Value::Null),
+                "supplementalRuleIds": missing_rule_ids,
+                "supplementalBaselineRef": baseline_result_ref
             })),
             target_phase_id: None,
         };
@@ -2806,48 +2633,37 @@ where
 
 fn validate_vsefm_candidate(
     candidate: &VsefmVerificationCandidate,
-    check_plan: &Value,
+    catalog: &SefmRuleCatalog,
+    supplemental_rule_ids: Option<&BTreeSet<String>>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut check_statuses = std::collections::BTreeMap::new();
-    let plan = match serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone()) {
-        Ok(plan) => plan,
-        Err(error) => {
-            issues.push(vsefm_issue(
-                "VSEFM_CHECK_PLAN_INVALID",
-                "checkPlan",
-                &format!("The MCP-generated check plan is invalid: {error}"),
-            ));
-            return issues;
-        }
-    };
-    let plan_by_id = plan
-        .iter()
-        .map(|entry| (entry.check_id.as_str(), entry))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut check_statuses = BTreeMap::new();
+
     for (index, check) in candidate.checks.iter().enumerate() {
         let field_prefix = format!("checks[{index}]");
-        let Some(plan_entry) = plan_by_id.get(check.check_id.as_str()) else {
+        if rule_by_id(catalog, &check.check_id).is_none() {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_ID_INVALID",
                 &format!("{field_prefix}.check_id"),
-                "Check id is not in the generated check plan.",
+                "check_id is not present in the sefm-verify.md rule catalog.",
             ));
             continue;
-        };
-        if plan_entry.applicability != VsefmCheckApplicability::Required {
-            issues.push(vsefm_issue(
-                "VSEFM_CHECK_NOT_APPLICABLE",
-                &format!("{field_prefix}.check_id"),
-                "Do not emit a check whose generated applicability is not_applicable.",
-            ));
+        }
+        if let Some(scope) = supplemental_rule_ids {
+            if !scope.contains(&check.check_id) {
+                issues.push(vsefm_issue(
+                    "VSEFM_SUPPLEMENTAL_RULE_OUT_OF_SCOPE",
+                    &format!("{field_prefix}.check_id"),
+                    "A supplemental result may only contain the rule ids supplied by Loom.",
+                ));
+            }
         }
         if !seen.insert(check.check_id.clone()) {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_DUPLICATE",
                 &format!("{field_prefix}.check_id"),
-                "Each canonical check id must appear once.",
+                "Each rule id may appear only once across the result.",
             ));
         }
         check_statuses.insert(check.check_id.clone(), check.status);
@@ -2860,84 +2676,91 @@ fn validate_vsefm_candidate(
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_CONTEXT_REQUIRED",
                 &field_prefix,
-                "Each check requires non-empty input, expected, and observed values.",
+                "Each applicable check requires non-empty input, expected, and observed values.",
             ));
         }
         if check.evidence.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_EVIDENCE_REQUIRED",
                 &format!("{field_prefix}.evidence"),
-                "Every check requires evidence.",
+                "Every applicable check requires evidence.",
             ));
         }
         if check.timestamp.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_TIMESTAMP_REQUIRED",
                 &format!("{field_prefix}.timestamp"),
-                "Every check requires a non-empty evidence timestamp.",
+                "Every applicable check requires a non-empty evidence timestamp.",
             ));
         }
     }
-    let missing = plan
-        .iter()
-        .filter(|entry| {
-            entry.applicability == VsefmCheckApplicability::Required
-                && !seen.contains(&entry.check_id)
-        })
-        .map(|entry| entry.check_id.as_str())
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        issues.push(vsefm_issue(
-            "VSEFM_CHECK_COVERAGE_INCOMPLETE",
-            "checks",
-            &format!("Missing generated required checks: {}", missing.join(", ")),
-        ));
-    }
-    for check in &candidate.checks {
-        let Some(plan_entry) = plan_by_id.get(check.check_id.as_str()) else {
-            continue;
-        };
-        let has_finding = candidate
-            .blocking_failures
-            .iter()
-            .any(|failure| failure.check_id == check.check_id);
-        if plan_entry.hard_blocking && check.status == VsefmCheckStatus::Fail && !has_finding {
+
+    for (index, check) in candidate.not_applicable_checks.iter().enumerate() {
+        let field_prefix = format!("not_applicable_checks[{index}]");
+        if rule_by_id(catalog, &check.check_id).is_none() {
             issues.push(vsefm_issue(
-                "VSEFM_BLOCKING_FAILURE_MISSING",
-                "blocking_failures",
-                &format!(
-                    "Hard-blocking failed check {} requires a blocking failure reference.",
-                    check.check_id
-                ),
+                "VSEFM_CHECK_ID_INVALID",
+                &format!("{field_prefix}.check_id"),
+                "check_id is not present in the sefm-verify.md rule catalog.",
+            ));
+            continue;
+        }
+        if let Some(scope) = supplemental_rule_ids {
+            if !scope.contains(&check.check_id) {
+                issues.push(vsefm_issue(
+                    "VSEFM_SUPPLEMENTAL_RULE_OUT_OF_SCOPE",
+                    &format!("{field_prefix}.check_id"),
+                    "A supplemental result may only contain the rule ids supplied by Loom.",
+                ));
+            }
+        }
+        if !seen.insert(check.check_id.clone()) {
+            issues.push(vsefm_issue(
+                "VSEFM_CHECK_DUPLICATE",
+                &format!("{field_prefix}.check_id"),
+                "Each rule id may appear only once across the result.",
+            ));
+        }
+        if check.reason.trim().is_empty() || check.evidence.trim().is_empty() {
+            issues.push(vsefm_issue(
+                "VSEFM_NOT_APPLICABLE_CONTEXT_REQUIRED",
+                &field_prefix,
+                "Each not-applicable rule requires a reason and evidence.",
             ));
         }
     }
-    let mut unknown_ids = BTreeSet::new();
+
     for (index, unknown) in candidate.unknown_checks.iter().enumerate() {
         let field_prefix = format!("unknown_checks[{index}]");
-        if !plan_by_id.contains_key(unknown.check_id.as_str()) {
+        if rule_by_id(catalog, &unknown.check_id).is_none() {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_ID_INVALID",
                 &format!("{field_prefix}.check_id"),
-                "Unknown check id is not in the generated check plan.",
-            ));
-        } else if plan_by_id[unknown.check_id.as_str()].applicability
-            != VsefmCheckApplicability::Required
-        {
-            issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_NOT_APPLICABLE",
-                &format!("{field_prefix}.check_id"),
-                "Unknown checks may only reference a generated required check.",
+                "unknown check id is not present in the sefm-verify.md rule catalog.",
             ));
         }
-        if !unknown_ids.insert(unknown.check_id.clone()) || unknown.reason.trim().is_empty() {
+        if let Some(scope) = supplemental_rule_ids {
+            if !scope.contains(&unknown.check_id) {
+                issues.push(vsefm_issue(
+                    "VSEFM_SUPPLEMENTAL_RULE_OUT_OF_SCOPE",
+                    &format!("{field_prefix}.check_id"),
+                    "A supplemental result may only reference the supplied rule ids.",
+                ));
+            }
+        }
+        if unknown.reason.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_INVALID",
                 &field_prefix,
-                "Each unknown check must be unique and explain why it could not be established.",
+                "Each unknown check must explain why the result could not be established.",
             ));
-        }
-        if check_statuses.get(&unknown.check_id) != Some(&VsefmCheckStatus::Unknown) {
+        } else if !seen.contains(&unknown.check_id) {
+            issues.push(vsefm_issue(
+                "VSEFM_UNKNOWN_CHECK_MISSING_RESULT",
+                &format!("{field_prefix}.check_id"),
+                "unknown_checks must reference a check result with status unknown.",
+            ));
+        } else if check_statuses.get(&unknown.check_id) != Some(&VsefmCheckStatus::Unknown) {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_STATUS_INVALID",
                 &format!("{field_prefix}.check_id"),
@@ -2945,31 +2768,39 @@ fn validate_vsefm_candidate(
             ));
         }
     }
-    for check in &candidate.checks {
-        if check.status == VsefmCheckStatus::Unknown && !unknown_ids.contains(&check.check_id) {
-            issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_MISSING",
-                "unknown_checks",
-                "Every unknown check must include an explanatory unknown_checks entry.",
-            ));
-        }
-    }
+
     let mut finding_ids = BTreeSet::new();
     for (index, failure) in candidate.blocking_failures.iter().enumerate() {
         let field_prefix = format!("blocking_failures[{index}]");
-        let Some(_plan_entry) = plan_by_id.get(failure.check_id.as_str()) else {
+        let Some(rule) = rule_by_id(catalog, &failure.check_id) else {
             issues.push(vsefm_issue(
                 "VSEFM_BLOCKING_CHECK_INVALID",
                 &format!("{field_prefix}.check_id"),
-                "Blocking failure must reference a generated check plan entry.",
+                "blocking failure must reference a rule in the sefm-verify.md catalog.",
             ));
             continue;
         };
+        if let Some(scope) = supplemental_rule_ids {
+            if !scope.contains(&failure.check_id) {
+                issues.push(vsefm_issue(
+                    "VSEFM_SUPPLEMENTAL_RULE_OUT_OF_SCOPE",
+                    &format!("{field_prefix}.check_id"),
+                    "A supplemental result may only reference the supplied rule ids.",
+                ));
+            }
+        }
         if check_statuses.get(&failure.check_id) != Some(&VsefmCheckStatus::Fail) {
             issues.push(vsefm_issue(
                 "VSEFM_BLOCKING_CHECK_UNSUPPORTED",
                 &format!("{field_prefix}.check_id"),
-                "Blocking failure must reference a failed check.",
+                "blocking failure must reference a failed check.",
+            ));
+        }
+        if !rule.blocking {
+            issues.push(vsefm_issue(
+                "VSEFM_BLOCKING_RULE_MISMATCH",
+                &format!("{field_prefix}.check_id"),
+                "A blocking failure may only reference a rule marked blocking in the prompt catalog.",
             ));
         }
         if !finding_ids.insert(failure.finding_id.clone())
@@ -2997,6 +2828,33 @@ fn vsefm_issue(code: &str, field_path: &str, message: &str) -> delivery_core::Re
     }
 }
 
+fn candidate_coverage(
+    catalog: &SefmRuleCatalog,
+    candidate: &VsefmVerificationCandidate,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let checked_ids = candidate
+        .checks
+        .iter()
+        .map(|check| check.check_id.clone())
+        .collect::<BTreeSet<_>>();
+    let not_applicable_ids = candidate
+        .not_applicable_checks
+        .iter()
+        .map(|check| check.check_id.clone())
+        .collect::<BTreeSet<_>>();
+    let missing_ids = catalog
+        .rules
+        .iter()
+        .filter(|rule| !checked_ids.contains(&rule.id) && !not_applicable_ids.contains(&rule.id))
+        .map(|rule| rule.id.clone())
+        .collect::<Vec<_>>();
+    (
+        checked_ids.into_iter().collect(),
+        not_applicable_ids.into_iter().collect(),
+        missing_ids,
+    )
+}
+
 fn canonical_vsefm_result(
     root: &Path,
     verification_id: &str,
@@ -3011,15 +2869,13 @@ fn canonical_vsefm_result(
         .map_err(|error| error.to_string())?;
     let subject_bytes = std::fs::read(&subject_path).map_err(|error| error.to_string())?;
     let subject_hash = Sha256::digest(&subject_bytes);
-    let subject =
-        state::store::read_json_value(&subject_path).map_err(|error| error.to_string())?;
-    let check_plan = subject
-        .get("checkPlan")
-        .cloned()
-        .ok_or_else(|| "V-SEFM subject is missing generated checkPlan".to_string())?;
-    let check_plan_entries = serde_json::from_value::<Vec<VsefmCheckPlanEntry>>(check_plan.clone())
-        .map_err(|error| format!("V-SEFM subject checkPlan is invalid: {error}"))?;
-    let status = canonical_vsefm_status(candidate, &check_plan_entries);
+    let prompt_ref = session
+        .get("promptRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "V-SEFM session is missing promptRef".to_string())?;
+    let catalog = read_rule_catalog(prompt_ref)?;
+    let (checked_ids, not_applicable_ids, missing_ids) = candidate_coverage(&catalog, candidate);
+    let status = canonical_vsefm_status(candidate, &catalog, !missing_ids.is_empty());
     let runtime_provenance = session
         .get("runtimeProvenance")
         .cloned()
@@ -3049,11 +2905,17 @@ fn canonical_vsefm_result(
         "verification_id": verification_id,
         "status": status,
         "checks": candidate.checks,
+        "not_applicable_checks": candidate.not_applicable_checks,
         "blocking_failures": candidate.blocking_failures,
         "warnings": candidate.warnings,
         "unknown_checks": candidate.unknown_checks,
         "recommended_actions": candidate.recommended_actions,
-        "check_plan": check_plan,
+        "rule_catalog_hash": session.get("ruleCatalogHash"),
+        "coverage": {
+            "checked_rule_ids": checked_ids,
+            "not_applicable_rule_ids": not_applicable_ids,
+            "missing_rule_ids": missing_ids
+        },
         "passed_checks": passed_checks,
         "failed_checks": candidate
             .checks
@@ -3061,7 +2923,7 @@ fn canonical_vsefm_result(
             .filter(|check| check.status == VsefmCheckStatus::Fail)
             .count(),
         "warning_count": candidate.warnings.len(),
-        "unknown_count": candidate.unknown_checks.len(),
+        "unknown_count": candidate.unknown_checks.len() + missing_ids.len(),
         "attempts": session.get("attempt").cloned().unwrap_or_else(|| json!(1)),
         "source": {
             "delivery_id": session.get("deliveryId"),
@@ -3082,24 +2944,22 @@ fn canonical_vsefm_result(
 
 fn canonical_vsefm_status(
     candidate: &VsefmVerificationCandidate,
-    check_plan: &[VsefmCheckPlanEntry],
+    catalog: &SefmRuleCatalog,
+    has_missing_rules: bool,
 ) -> VsefmVerificationStatus {
-    let hard_blocking_ids = check_plan
-        .iter()
-        .filter(|entry| entry.hard_blocking)
-        .map(|entry| entry.check_id.as_str())
-        .collect::<BTreeSet<_>>();
     if candidate.checks.iter().any(|check| {
         check.status == VsefmCheckStatus::Fail
-            && hard_blocking_ids.contains(check.check_id.as_str())
+            && rule_by_id(catalog, &check.check_id).is_some_and(|rule| rule.blocking)
     }) {
         VsefmVerificationStatus::Blocked
-    } else if candidate.checks.iter().any(|check| {
-        matches!(
-            check.status,
-            VsefmCheckStatus::Fail | VsefmCheckStatus::Unknown
-        )
-    }) {
+    } else if has_missing_rules
+        || candidate.checks.iter().any(|check| {
+            matches!(
+                check.status,
+                VsefmCheckStatus::Fail | VsefmCheckStatus::Unknown
+            )
+        })
+    {
         VsefmVerificationStatus::Inconclusive
     } else {
         VsefmVerificationStatus::Pass
@@ -3114,6 +2974,77 @@ fn read_vsefm_result(root: &Path, session: &Value) -> Result<Value, String> {
     let path =
         state::paths::from_project_relative(root, reference).map_err(|error| error.to_string())?;
     state::store::read_json_value(&path).map_err(|error| error.to_string())
+}
+
+fn supplemental_rule_ids(result: &Value) -> Vec<String> {
+    let mut ids = result
+        .get("unknown_checks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("check_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = result
+        .pointer("/coverage/missing_rule_ids")
+        .and_then(Value::as_array)
+    {
+        ids.extend(missing.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    ids.into_iter().collect()
+}
+
+fn canonical_result_candidate(result: &Value) -> Result<VsefmVerificationCandidate, String> {
+    serde_json::from_value(json!({
+        "status": result.get("status").cloned().unwrap_or_else(|| json!("inconclusive")),
+        "checks": result.get("checks").cloned().unwrap_or_else(|| json!([])),
+        "not_applicable_checks": result.get("not_applicable_checks").cloned().unwrap_or_else(|| json!([])),
+        "blocking_failures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])),
+        "warnings": result.get("warnings").cloned().unwrap_or_else(|| json!([])),
+        "unknown_checks": result.get("unknown_checks").cloned().unwrap_or_else(|| json!([])),
+        "recommended_actions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([]))
+    }))
+    .map_err(|error| format!("previous V-SEFM result cannot be merged: {error}"))
+}
+
+fn merge_supplemental_candidate(
+    baseline: &Value,
+    supplemental: VsefmVerificationCandidate,
+    supplemental_rule_ids: &BTreeSet<String>,
+) -> Result<VsefmVerificationCandidate, String> {
+    let mut merged = canonical_result_candidate(baseline)?;
+    merged
+        .checks
+        .retain(|check| !supplemental_rule_ids.contains(&check.check_id));
+    merged
+        .not_applicable_checks
+        .retain(|check| !supplemental_rule_ids.contains(&check.check_id));
+    merged.checks.extend(supplemental.checks);
+    merged
+        .not_applicable_checks
+        .extend(supplemental.not_applicable_checks);
+    merged
+        .blocking_failures
+        .retain(|finding| !supplemental_rule_ids.contains(&finding.check_id));
+    merged
+        .blocking_failures
+        .extend(supplemental.blocking_failures);
+    merged
+        .unknown_checks
+        .retain(|unknown| !supplemental_rule_ids.contains(&unknown.check_id));
+    merged.unknown_checks.extend(supplemental.unknown_checks);
+    for warning in supplemental.warnings {
+        if !merged.warnings.contains(&warning) {
+            merged.warnings.push(warning);
+        }
+    }
+    for action in supplemental.recommended_actions {
+        if !merged.recommended_actions.contains(&action) {
+            merged.recommended_actions.push(action);
+        }
+    }
+    merged.status = VsefmVerificationStatus::Inconclusive;
+    Ok(merged)
 }
 
 fn finish_vsefm_session<D>(
@@ -3367,6 +3298,16 @@ where
         .unwrap_or_else(|error| failed(project_root, "VSEFM_RESUME_FAILED", error.to_string()))
 }
 
+fn vsefm_check_display_name(check_id: &str) -> String {
+    match check_id {
+        "CONCURRENCY" => "并发一致性".to_string(),
+        "OBSERVABILITY-EVIDENCE" => "可观察性".to_string(),
+        "PERFORMANCE-CAPACITY" => "容量".to_string(),
+        "BROWSER-QUALITY" => "浏览器 Playwright".to_string(),
+        _ => check_id.to_string(),
+    }
+}
+
 fn vsefm_result_gate(
     project_root: &str,
     verification_id: &str,
@@ -3383,15 +3324,33 @@ fn vsefm_result_gate(
         .get("blocking_failures")
         .and_then(Value::as_array)
         .is_some_and(|failures| !failures.is_empty());
+    let missing_rule_ids = supplemental_rule_ids(result);
+    let has_failed_checks = result
+        .get("checks")
+        .and_then(Value::as_array)
+        .is_some_and(|checks| {
+            checks
+                .iter()
+                .any(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
+        });
+    let can_supplement = status == "inconclusive"
+        && !has_blocking_failures
+        && !has_failed_checks
+        && !missing_rule_ids.is_empty();
     let choices = vec!["1".to_string(), "2".to_string()];
     let options = if status == "pass" {
         json!([
             {"value": "1", "label": "接受验证结果", "decision": "accept"},
             {"value": "2", "label": "转人工审查", "decision": "manual_review"}
         ])
-    } else if status == "inconclusive" && !has_blocking_failures {
+    } else if can_supplement {
+        let missing_summary = missing_rule_ids
+            .iter()
+            .map(|check_id| vsefm_check_display_name(check_id))
+            .collect::<Vec<_>>()
+            .join("、");
         json!([
-            {"value": "1", "label": "补充验证", "decision": "supplemental_verification"},
+            {"value": "1", "label": format!("让 Agent 补齐 {missing_summary} 证据并重新验证"), "decision": "supplemental_verification"},
             {"value": "2", "label": "转人工审查", "decision": "manual_review"}
         ])
     } else {
@@ -3412,15 +3371,27 @@ fn vsefm_result_gate(
     } else {
         vec![]
     };
+    let message = if can_supplement {
+        let missing_summary = missing_rule_ids
+            .iter()
+            .map(|check_id| vsefm_check_display_name(check_id))
+            .collect::<Vec<_>>()
+            .join("、");
+        format!(
+            "V-SEFM 本地验证结果：{status}。当前缺少：{missing_summary}证据。选项 1 只补充并执行这些验证，不修改业务代码；发现实际缺陷后再进入自动修复。请选择后续处理方式：\n结果文件：{result_ref}"
+        )
+    } else {
+        format!("V-SEFM 本地验证结果：{status}。请选择后续处理方式：\n结果文件：{result_ref}")
+    };
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
         project_root.to_string(),
-        format!("V-SEFM 本地验证结果：{status}。请选择后续处理方式：\n结果文件：{result_ref}"),
+        message,
         choices,
         None,
         delivery_id.map(str::to_string),
         phase_id.map(str::to_string),
-        Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])), "options": options})),
-    ).with_agent_instruction("展示 V-SEFM 验证结果摘要和选项。用户选择 1 或 2 后，将序号映射为 gate.options 中的 decision，再调用 loom.vsefmVerificationResolve；inconclusive 且没有 blocking_failures 时，选项 1 只创建补充验证请求，不创建代码修复请求；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
+        Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "unknownChecks": result.get("unknown_checks").cloned().unwrap_or_else(|| json!([])), "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])), "options": options})),
+    ).with_agent_instruction("展示 V-SEFM 验证结果摘要、缺失证据和选项。用户选择 1 或 2 后，将序号映射为 gate.options 中的 decision，再调用 loom.vsefmVerificationResolve；选项 1 只补充执行 Loom 列出的缺失检查，不创建代码修复请求；不要调用 loom.continue、loom.inspectRequest 或知识工具。"))
     .with_warnings(warnings)
 }
 
@@ -4515,36 +4486,72 @@ mod tests {
     }
 
     #[test]
-    fn check_plan_uses_structured_delivery_facts() {
-        let artifacts = vec![json!({
-            "authPolicy": {"required": "required"},
-            "interfaces": [{"method": "POST", "path": "/items"}],
-            "dataModel": [{"name": "item"}],
-            "runtimeDependencies": [{"kind": "cache", "provider": "redis"}],
-            "tenantId": "workspace_id"
-        })];
-        let plan = derive_check_plan(&artifacts, true);
-        let entry = |check_id: &str| {
-            plan.iter()
-                .find(|entry| entry["check_id"] == check_id)
-                .expect("check plan entry")
-        };
-        assert_eq!(entry("AUTH-HORIZONTAL")["applicability"], "required");
-        assert_eq!(entry("AUTH-VERTICAL")["applicability"], "required");
-        assert_eq!(entry("TENANT-ISOLATION")["applicability"], "required");
-        assert_eq!(entry("DATA-INTEGRITY")["applicability"], "required");
-        assert_eq!(
-            entry("SECURITY-BOUNDARY")["required_evidence"],
-            "Input, secret, path, command, and network-boundary evidence; authentication and authorization belong to AUTH checks."
-        );
-        assert_eq!(
-            entry("RETRY-TIMEOUT-RATE-LIMIT")["applicability"],
-            "required"
-        );
-        assert_eq!(entry("STATE-MACHINE")["applicability"], "not_applicable");
-        assert!(plan
+    fn prompt_rule_catalog_is_the_single_check_id_source() {
+        let prompt = repository_prompt_path();
+        let prompt_text = std::fs::read_to_string(&prompt).expect("prompt text");
+        assert!(!prompt_text.contains("Loom 本地验证输出合同"));
+        assert!(!prompt_text.contains("Loom 本地验证修复输出合同"));
+        assert!(!prompt_text.contains("建议的验证分类"));
+        assert!(!prompt_text.contains("最终验收结果建议"));
+        assert!(!prompt_text.contains("AUTH-OBJECT-001"));
+        let catalog = read_rule_catalog(&prompt).expect("rule catalog");
+        assert_eq!(catalog.schema_version, "1.0");
+        assert_eq!(catalog.rules.len(), 17);
+        assert!(catalog
+            .rules
             .iter()
-            .all(|entry| entry.get("reason").and_then(Value::as_str).is_some()));
+            .any(|rule| rule.id == "CONCURRENCY" && rule.section == "7"));
+        assert!(catalog
+            .rules
+            .iter()
+            .any(|rule| rule.id == "BROWSER-QUALITY" && rule.section == "17"));
+        let ids = catalog
+            .rules
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), catalog.rules.len());
+    }
+
+    #[test]
+    fn candidate_coverage_separates_checked_not_applicable_and_missing_rules() {
+        let prompt = repository_prompt_path();
+        let catalog = read_rule_catalog(&prompt).expect("rule catalog");
+        let candidate: VsefmVerificationCandidate = serde_json::from_value(json!({
+            "status": "inconclusive",
+            "checks": [{
+                "check_id": "CONCURRENCY",
+                "category": "CONSISTENCY",
+                "rule": "concurrency",
+                "status": "unknown",
+                "input": "bounded concurrent writes",
+                "expected": "no lost update",
+                "observed": "runner unavailable",
+                "evidence": "environment blocker",
+                "timestamp": "2026-08-05T00:00:00Z"
+            }],
+            "not_applicable_checks": [{
+                "check_id": "TENANT-ISOLATION",
+                "reason": "No tenant boundary is declared.",
+                "evidence": "accepted architecture artifact"
+            }],
+            "blocking_failures": [],
+            "warnings": [],
+            "unknown_checks": [{
+                "check_id": "CONCURRENCY",
+                "reason": "The local runner is unavailable."
+            }],
+            "recommended_actions": []
+        }))
+        .expect("candidate");
+        let (checked, not_applicable, missing) = candidate_coverage(&catalog, &candidate);
+        assert_eq!(checked, vec!["CONCURRENCY".to_string()]);
+        assert_eq!(not_applicable, vec!["TENANT-ISOLATION".to_string()]);
+        assert_eq!(missing.len(), 15);
+        assert_eq!(
+            canonical_vsefm_status(&candidate, &catalog, true),
+            VsefmVerificationStatus::Inconclusive
+        );
     }
 
     #[test]
@@ -4580,6 +4587,26 @@ mod tests {
     fn env_lock() -> MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().expect("V-SEFM environment lock")
+    }
+
+    fn repository_prompt_path() -> String {
+        let _guard = env_lock();
+        let previous = std::env::var_os("LOOM_RUNTIME_HOME");
+        std::env::set_var(
+            "LOOM_RUNTIME_HOME",
+            std::env::temp_dir().join(format!(
+                "loom-vsefm-missing-runtime-{}-{}",
+                std::process::id(),
+                state::store::now_millis()
+            )),
+        );
+        let prompt = verification_prompt_path().expect("verification prompt");
+        if let Some(value) = previous {
+            std::env::set_var("LOOM_RUNTIME_HOME", value);
+        } else {
+            std::env::remove_var("LOOM_RUNTIME_HOME");
+        }
+        prompt
     }
 
     fn restore_env(previous: Option<std::ffi::OsString>) {
