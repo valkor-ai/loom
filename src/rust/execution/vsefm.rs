@@ -86,7 +86,6 @@ pub struct VsefmCheckResult {
 pub enum VsefmCheckStatus {
     Pass,
     Fail,
-    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1682,21 +1681,12 @@ fn verification_result_schema(
 }
 
 fn verification_result_template(
-    catalog: &SefmRuleCatalog,
-    supplemental_check_ids: &[String],
+    _catalog: &SefmRuleCatalog,
+    _supplemental_check_ids: &[String],
 ) -> Value {
-    let ids = if supplemental_check_ids.is_empty() {
-        catalog
-            .rules
-            .iter()
-            .map(|rule| rule.id.clone())
-            .collect::<Vec<_>>()
-    } else {
-        supplemental_check_ids.to_vec()
-    };
     json!({
         "status": "inconclusive",
-        "checks": ids.iter().map(|id| json!({"check_id": id})).collect::<Vec<_>>(),
+        "checks": [],
         "not_applicable_checks": [],
         "blocking_failures": [],
         "warnings": [],
@@ -1727,24 +1717,24 @@ fn verification_request(
         "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.".to_string(),
         "Read the complete sefm-verify.md from promptRef, including its machine-readable rule catalog, before evaluating any delivery artifact.".to_string(),
         "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.".to_string(),
-        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. The verification Agent decides applicability from the accepted artifacts; MCP does not decide semantic applicability. For each rule, produce exactly one checks entry or one not_applicable_checks entry.".to_string(),
+        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. The verification Agent decides applicability from the accepted artifacts; MCP does not decide semantic applicability. For each rule, produce exactly one entry in checks (status pass or fail), unknown_checks, or not_applicable_checks.".to_string(),
         "Keep each check within its rule section: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability; BROWSER-QUALITY owns Playwright browser checks.".to_string(),
         "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.".to_string(),
         "Record concrete input, expected, observed, evidence, and timestamp for every applicable check. For every non-applicable rule, record its rule id, reason, and evidence in not_applicable_checks.".to_string(),
         "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.".to_string(),
         "For every unknown_checks entry, write a complete reason: state what was attempted, why the evidence is insufficient, and what concrete evidence or environment capability would resolve the check. Do not submit a generic reason such as 'missing evidence'.".to_string(),
-        "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
+        "Do not put a confirmed failure in unknown_checks, do not put an unknown result in checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
         "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.".to_string(),
         "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.".to_string(),
     ];
     if supplemental_check_ids.is_empty() {
         steps.push(
-            "Account for every rule id in the prompt catalog exactly once across checks and not_applicable_checks."
+            "Account for every rule id in the prompt catalog exactly once across checks, unknown_checks, and not_applicable_checks. A rule that could not be established belongs only in unknown_checks with its reason; never add it to checks with status unknown."
                 .to_string(),
         );
     } else {
         steps.push(format!(
-            "This is supplemental verification. Execute only these missing check ids: {}. Submit checks only for these ids; Loom will merge them with the previously accepted canonical result.",
+            "This is supplemental verification. Execute only these missing or unknown check ids: {}. Submit exactly one checks, unknown_checks, or not_applicable_checks entry for each supplied id; Loom will merge them with the previously accepted canonical result.",
             supplemental_check_ids.join(", ")
         ));
         steps.push(
@@ -2809,6 +2799,7 @@ fn validate_vsefm_candidate(
                 &format!("{field_prefix}.check_id"),
                 "unknown check id is not present in the sefm-verify.md rule catalog.",
             ));
+            continue;
         }
         if let Some(scope) = supplemental_rule_ids {
             if !scope.contains(&unknown.check_id) {
@@ -2819,23 +2810,18 @@ fn validate_vsefm_candidate(
                 ));
             }
         }
+        if !seen.insert(unknown.check_id.clone()) {
+            issues.push(vsefm_issue(
+                "VSEFM_CHECK_DUPLICATE",
+                &format!("{field_prefix}.check_id"),
+                "Each rule id may appear only once across the result.",
+            ));
+        }
         if unknown.reason.trim().is_empty() {
             issues.push(vsefm_issue(
                 "VSEFM_UNKNOWN_CHECK_INVALID",
                 &field_prefix,
                 "Each unknown check must explain why the result could not be established.",
-            ));
-        } else if !seen.contains(&unknown.check_id) {
-            issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_MISSING_RESULT",
-                &format!("{field_prefix}.check_id"),
-                "unknown_checks must reference a check result with status unknown.",
-            ));
-        } else if check_statuses.get(&unknown.check_id) != Some(&VsefmCheckStatus::Unknown) {
-            issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_STATUS_INVALID",
-                &format!("{field_prefix}.check_id"),
-                "unknown_checks must reference a check whose status is unknown.",
             ));
         }
     }
@@ -2913,10 +2899,19 @@ fn candidate_coverage(
         .iter()
         .map(|check| check.check_id.clone())
         .collect::<BTreeSet<_>>();
+    let unknown_ids = candidate
+        .unknown_checks
+        .iter()
+        .map(|check| check.check_id.clone())
+        .collect::<BTreeSet<_>>();
     let missing_ids = catalog
         .rules
         .iter()
-        .filter(|rule| !checked_ids.contains(&rule.id) && !not_applicable_ids.contains(&rule.id))
+        .filter(|rule| {
+            !checked_ids.contains(&rule.id)
+                && !not_applicable_ids.contains(&rule.id)
+                && !unknown_ids.contains(&rule.id)
+        })
         .map(|rule| rule.id.clone())
         .collect::<Vec<_>>();
     (
@@ -3024,12 +3019,11 @@ fn canonical_vsefm_status(
     }) {
         VsefmVerificationStatus::Blocked
     } else if has_missing_rules
-        || candidate.checks.iter().any(|check| {
-            matches!(
-                check.status,
-                VsefmCheckStatus::Fail | VsefmCheckStatus::Unknown
-            )
-        })
+        || !candidate.unknown_checks.is_empty()
+        || candidate
+            .checks
+            .iter()
+            .any(|check| check.status == VsefmCheckStatus::Fail)
     {
         VsefmVerificationStatus::Inconclusive
     } else {
@@ -4735,17 +4729,7 @@ mod tests {
         let catalog = read_rule_catalog(&prompt).expect("rule catalog");
         let candidate: VsefmVerificationCandidate = serde_json::from_value(json!({
             "status": "inconclusive",
-            "checks": [{
-                "check_id": "CONCURRENCY",
-                "category": "CONSISTENCY",
-                "rule": "concurrency",
-                "status": "unknown",
-                "input": "bounded concurrent writes",
-                "expected": "no lost update",
-                "observed": "runner unavailable",
-                "evidence": "environment blocker",
-                "timestamp": "2026-08-05T00:00:00Z"
-            }],
+            "checks": [],
             "not_applicable_checks": [{
                 "check_id": "TENANT-ISOLATION",
                 "reason": "No tenant boundary is declared.",
@@ -4761,7 +4745,7 @@ mod tests {
         }))
         .expect("candidate");
         let (checked, not_applicable, missing) = candidate_coverage(&catalog, &candidate);
-        assert_eq!(checked, vec!["CONCURRENCY".to_string()]);
+        assert!(checked.is_empty());
         assert_eq!(not_applicable, vec!["TENANT-ISOLATION".to_string()]);
         assert_eq!(missing.len(), 15);
         assert_eq!(

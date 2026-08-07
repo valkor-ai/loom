@@ -262,7 +262,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         .iter()
         .map(|check| check["check_id"].as_str().expect("template check id"))
         .collect::<Vec<_>>();
-    assert_eq!(template_ids, check_ids);
+    assert!(template_ids.is_empty());
     for definition in [
         "VsefmCheckResult",
         "VsefmNotApplicableCheck",
@@ -445,12 +445,7 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
-        .iter_mut()
-        .find(|check| check["check_id"] == "CONCURRENCY")
-        .expect("concurrency check")
-        .as_object_mut()
-        .expect("concurrency object")
-        .insert("status".to_string(), json!("unknown"));
+        .retain(|check| check["check_id"] != "CONCURRENCY");
     candidate["unknown_checks"] = json!([{
         "check_id": "CONCURRENCY",
         "reason": "No concurrent request evidence was accepted."
@@ -567,9 +562,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
-        .iter_mut()
-        .find(|check| check["check_id"] == "CONCURRENCY")
-        .expect("concurrency check")["status"] = json!("unknown");
+        .retain(|check| check["check_id"] != "CONCURRENCY");
     candidate["unknown_checks"] = json!([{
         "check_id": "CONCURRENCY",
         "reason": "The available local evidence does not establish concurrent behavior."
@@ -640,9 +633,9 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         .as_array()
         .expect("supplemental steps")
         .iter()
-        .any(|step| step
-            .as_str()
-            .is_some_and(|step| step.contains("only these missing check ids: CONCURRENCY"))));
+        .any(|step| step.as_str().is_some_and(
+            |step| step.contains("only these missing or unknown check ids: CONCURRENCY")
+        )));
     assert_eq!(supplemental_request["subject"].get("checkPlan"), None);
     let supplemental_contract = read_request_group(
         &server,
@@ -652,7 +645,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     );
     assert_eq!(
         supplemental_contract["fields"]["outputContract"]["resultTemplate"]["checks"],
-        json!([{ "check_id": "CONCURRENCY" }])
+        json!([])
     );
     for definition in [
         "VsefmCheckResult",
