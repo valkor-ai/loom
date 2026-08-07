@@ -3961,6 +3961,33 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
     let request_file = format!(".loom/verification/sessions/{verification_id}/repair-request.json");
     let baseline_ref =
         format!(".loom/verification/sessions/{verification_id}/{repair_id}-baseline.json");
+    let prompt_ref = result
+        .get("source")
+        .and_then(|source| source.get("prompt_ref"))
+        .and_then(Value::as_str)
+        .filter(|prompt_ref| !prompt_ref.is_empty())
+        .ok_or_else(|| "V-SEFM result is missing source.prompt_ref".to_string());
+    let prompt_ref = match prompt_ref {
+        Ok(prompt_ref) => prompt_ref,
+        Err(error) => return failed(project_root, "VSEFM_PROMPT_UNAVAILABLE", error),
+    };
+    let catalog = match read_rule_catalog(prompt_ref) {
+        Ok(catalog) => catalog,
+        Err(error) => return failed(project_root, "VSEFM_PROMPT_INVALID", error),
+    };
+    let repair_findings = vsefm_result_gate_model(
+        &verification_id,
+        session
+            .get("resultRef")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        &result,
+        &catalog,
+    )
+    .0
+    .get("confirmedFindings")
+    .cloned()
+    .unwrap_or_else(|| json!([]));
     let request = json!({
         "schemaVersion": "1.0",
         "requestType": "vsefm_repair",
@@ -3973,13 +4000,13 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
             "phaseId": session.get("phaseId")
         },
         "agentInstruction": {
-            "objective": "Fix the blocking V-SEFM findings in the project and prepare it for re-verification.",
-            "findings": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])),
+            "objective": "Fix the confirmed V-SEFM findings in the project and prepare it for re-verification.",
+            "findings": repair_findings,
             "steps": [
                 "Read repair_core and repair_result_contract.",
-                "Read each blocking finding and inspect the project files needed to find its root cause.",
+                "Read each confirmed finding and inspect the project files needed to find its root cause.",
                 "Modify any ordinary project source, configuration, test, migration, build, or deployment file needed for the repair.",
-                "Run bounded verification for the repaired findings; the command list is not part of the result contract.",
+                "Run bounded verification for every repaired finding; the command list is not part of the result contract.",
                 "Write repair result and submit it with loom.vsefmRepairAcceptFile."
             ],
             "boundaryRules": [

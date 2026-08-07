@@ -533,6 +533,32 @@ fn confirmed_failure_is_not_presented_as_environment_retry() {
         .as_str()
         .expect("agent instruction")
         .contains("notApplicableChecks"));
+
+    let repair = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "verificationId": started["next"]["verificationId"],
+                    "decision": "repair"
+                }))),
+            )
+            .expect("repair decision for confirmed non-blocking finding"),
+    );
+    assert_eq!(repair["state"], "auto_runnable", "{repair:#}");
+    let repair_request = request_json(
+        &fixture,
+        repair["next"]["requestRef"]
+            .as_str()
+            .expect("repair request ref"),
+    );
+    let repair_findings = repair_request["agentInstruction"]["findings"]
+        .as_array()
+        .expect("repair findings");
+    assert_eq!(repair_findings.len(), 1);
+    assert_eq!(repair_findings[0]["checkId"], "BROWSER-QUALITY");
+    assert_eq!(repair_findings[0]["summary"], "认证创建请求返回非 2xx");
 }
 
 #[test]
