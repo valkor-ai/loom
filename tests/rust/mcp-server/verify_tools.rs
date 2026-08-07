@@ -421,6 +421,81 @@ fn valid_check_results_normalize_agent_outer_status_without_repair() {
 }
 
 #[test]
+fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
+    let (fixture, server, started) = prepare_local_verification("non-blocking-failure");
+    let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
+    read_request_groups(&server, &fixture, request_ref);
+    let result_file = fixture
+        .root
+        .join(started["next"]["resultFile"].as_str().expect("result file"));
+    let mut candidate = passing_candidate();
+    candidate["status"] = json!("inconclusive");
+    candidate["checks"]
+        .as_array_mut()
+        .expect("checks")
+        .iter_mut()
+        .find(|check| check["check_id"] == "BROWSER-QUALITY")
+        .expect("browser quality check")
+        .as_object_mut()
+        .expect("browser quality object")
+        .extend([
+            ("status".to_string(), json!("fail")),
+            ("observed".to_string(), json!("认证创建请求返回非 2xx")),
+        ]);
+    candidate["checks"]
+        .as_array_mut()
+        .expect("checks")
+        .iter_mut()
+        .find(|check| check["check_id"] == "CONCURRENCY")
+        .expect("concurrency check")
+        .as_object_mut()
+        .expect("concurrency object")
+        .insert("status".to_string(), json!("unknown"));
+    candidate["unknown_checks"] = json!([{
+        "check_id": "CONCURRENCY",
+        "reason": "No concurrent request evidence was accepted."
+    }]);
+    write_json(&result_file, candidate);
+
+    let gated = structured(
+        server
+            .invoke_tool(
+                "loom.vsefmVerificationAcceptFile",
+                Some(args(json!({
+                    "projectRoot": fixture.root,
+                    "requestRef": request_ref,
+                    "writtenTargetIds": ["result"]
+                }))),
+            )
+            .expect("verification result submit"),
+    );
+    assert_eq!(gated["state"], "user_gate", "{gated:#}");
+    assert_eq!(gated["gate"]["options"][0]["decision"], "repair");
+    assert_eq!(gated["gate"]["options"][1]["decision"], "manual_review");
+    assert_eq!(gated["gate"]["canSupplement"], false);
+    assert!(gated["prompt"]
+        .as_str()
+        .expect("gate prompt")
+        .contains("已确认问题"));
+    assert!(gated["prompt"]
+        .as_str()
+        .expect("gate prompt")
+        .contains("浏览器 Playwright"));
+    assert!(gated["prompt"]
+        .as_str()
+        .expect("gate prompt")
+        .contains("尚未完成验证"));
+    assert!(gated["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("不得把已确认失败描述为“缺失证据”"));
+    assert!(!gated["gate"]["options"][0]["label"]
+        .as_str()
+        .expect("repair label")
+        .contains("补充"));
+}
+
+#[test]
 fn incomplete_rule_coverage_is_accepted_as_inconclusive_without_repair() {
     let (fixture, server, started) = prepare_local_verification("incomplete-coverage");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
