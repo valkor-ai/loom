@@ -764,9 +764,10 @@ fn start_local_verification(
         Ok(path) => path,
         Err(error) => return failed(project_root, "VSEFM_PROMPT_UNAVAILABLE", error),
     };
-    if let Err(error) = read_rule_catalog(&prompt_ref) {
-        return failed(project_root, "VSEFM_PROMPT_INVALID", error);
-    }
+    let rule_catalog = match read_rule_catalog(&prompt_ref) {
+        Ok(catalog) => catalog,
+        Err(error) => return failed(project_root, "VSEFM_PROMPT_INVALID", error),
+    };
     let rule_catalog_hash = match rule_catalog_hash(&prompt_ref) {
         Ok(hash) => hash,
         Err(error) => return failed(project_root, "VSEFM_PROMPT_INVALID", error),
@@ -787,6 +788,7 @@ fn start_local_verification(
         &result_file,
         &subject,
         &runtime_provenance,
+        &rule_catalog,
         &rule_catalog_hash,
         &supplemental_check_ids,
         supplemental_baseline_ref.as_deref(),
@@ -1635,6 +1637,63 @@ fn is_safe_verification_path(path: &str) -> bool {
         && !path.to_string_lossy().contains("appkey")
 }
 
+fn verification_result_schema(
+    catalog: &SefmRuleCatalog,
+    supplemental_check_ids: &[String],
+) -> Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
+        .unwrap_or_else(|_| json!({"type": "object"}));
+    let ids = if supplemental_check_ids.is_empty() {
+        catalog
+            .rules
+            .iter()
+            .map(|rule| json!(rule.id))
+            .collect::<Vec<_>>()
+    } else {
+        supplemental_check_ids
+            .iter()
+            .map(|check_id| json!(check_id))
+            .collect::<Vec<_>>()
+    };
+    for definition in [
+        "VsefmCheckResult",
+        "VsefmNotApplicableCheck",
+        "VsefmUnknownCheck",
+        "VsefmBlockingFailure",
+    ] {
+        if let Some(check_id) =
+            schema.pointer_mut(&format!("/$defs/{definition}/properties/check_id"))
+        {
+            check_id["enum"] = json!(ids);
+        }
+    }
+    schema
+}
+
+fn verification_result_template(
+    catalog: &SefmRuleCatalog,
+    supplemental_check_ids: &[String],
+) -> Value {
+    let ids = if supplemental_check_ids.is_empty() {
+        catalog
+            .rules
+            .iter()
+            .map(|rule| rule.id.clone())
+            .collect::<Vec<_>>()
+    } else {
+        supplemental_check_ids.to_vec()
+    };
+    json!({
+        "status": "inconclusive",
+        "checks": ids.iter().map(|id| json!({"check_id": id})).collect::<Vec<_>>(),
+        "not_applicable_checks": [],
+        "blocking_failures": [],
+        "warnings": [],
+        "unknown_checks": [],
+        "recommended_actions": []
+    })
+}
+
 fn verification_request(
     verification_id: &str,
     trigger: &str,
@@ -1646,17 +1705,18 @@ fn verification_request(
     result_file: &str,
     subject: &Value,
     runtime_provenance: &Value,
+    rule_catalog: &SefmRuleCatalog,
     rule_catalog_hash: &str,
     supplemental_check_ids: &[String],
     supplemental_baseline_ref: Option<&str>,
 ) -> Value {
-    let result_schema = serde_json::to_value(schemars::schema_for!(VsefmVerificationCandidate))
-        .unwrap_or_else(|_| json!({"type": "object"}));
+    let result_schema = verification_result_schema(rule_catalog, supplemental_check_ids);
+    let result_template = verification_result_template(rule_catalog, supplemental_check_ids);
     let mut steps = vec![
         "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.".to_string(),
         "Read the complete sefm-verify.md from promptRef, including its machine-readable rule catalog, before evaluating any delivery artifact.".to_string(),
         "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.".to_string(),
-        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. For each rule, decide applicability from the accepted artifacts, then either produce one checks entry or one not_applicable_checks entry.".to_string(),
+        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. The verification Agent decides applicability from the accepted artifacts; MCP does not decide semantic applicability. For each rule, produce exactly one checks entry or one not_applicable_checks entry.".to_string(),
         "Keep each check within its rule section: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability; BROWSER-QUALITY owns Playwright browser checks.".to_string(),
         "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.".to_string(),
         "Record concrete input, expected, observed, evidence, and timestamp for every applicable check. For every non-applicable rule, record its rule id, reason, and evidence in not_applicable_checks.".to_string(),
@@ -1712,7 +1772,7 @@ fn verification_request(
             "A failed rule marked blocking=true in the prompt catalog requires a blocking_failure reference; Loom derives the outer status after acceptance.",
             "Never claim pass without reproducible evidence.",
             "Use unknown when the subject or environment does not establish a conclusion; do not use it to hide an established defect.",
-            "Do not add fields, duplicate check plans, or use natural-language keywords as a substitute for the generated check scope."
+            "Do not add fields, duplicate rule plans, or use natural-language keywords as a substitute for the generated rule catalog."
         ],
         "completionBarrier": {
             "resultFile": result_file,
@@ -1735,7 +1795,7 @@ fn verification_request(
         "verificationId": verification_id,
         "source": source,
         "agentInstruction": instruction,
-        "prompt": {
+            "prompt": {
             "ref": prompt_ref,
             "ruleCatalogHash": rule_catalog_hash
         },
@@ -1765,21 +1825,20 @@ fn verification_request(
                 "artifact_id",
                 "verification_id",
                 "scope",
-            "source",
-            "rule_catalog_hash",
+                "source",
+                "rule_catalog_hash",
                 "statistics",
                 "attempts"
             ],
+            "mcpOwnedPaths": [
+                "checks[*].check_id",
+                "not_applicable_checks[*].check_id",
+                "unknown_checks[*].check_id",
+                "blocking_failures[*].check_id"
+            ],
+            "ruleCatalog": rule_catalog,
             "resultSchema": result_schema,
-            "resultTemplate": {
-                "status": "inconclusive",
-                "checks": [],
-                "not_applicable_checks": [],
-                "blocking_failures": [],
-                "warnings": [],
-                "unknown_checks": [],
-                "recommended_actions": []
-            }
+            "resultTemplate": result_template
         },
         "requestReadPlan": {
             "groups": [

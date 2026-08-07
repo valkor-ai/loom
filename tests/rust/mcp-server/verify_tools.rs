@@ -134,6 +134,13 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         .any(|step| step
             .as_str()
             .is_some_and(|step| step.contains("client-provided identity"))));
+    assert!(request["agentInstruction"]["steps"]
+        .as_array()
+        .expect("agent steps")
+        .iter()
+        .any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("MCP does not decide semantic applicability"))));
     assert!(request["runtimeProvenance"]["runtimeFingerprint"].is_string());
     assert!(request["runtimeProvenance"]["verificationRulesSha256"].is_string());
     assert!(request["agentInstruction"]["hardBlockingRules"]
@@ -211,6 +218,15 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         contract["fields"]["outputContract"]["resultSchema"]["additionalProperties"],
         false
     );
+    assert_eq!(
+        contract["fields"]["outputContract"]["mcpOwnedPaths"],
+        json!([
+            "checks[*].check_id",
+            "not_applicable_checks[*].check_id",
+            "unknown_checks[*].check_id",
+            "blocking_failures[*].check_id"
+        ])
+    );
     let result_file = fixture
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
@@ -230,9 +246,35 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         "RETRY-TIMEOUT-RATE-LIMIT",
         "OBSERVABILITY-EVIDENCE",
         "REGRESSION-COMPATIBILITY",
-        "BROWSER-QUALITY",
         "PERFORMANCE-CAPACITY",
+        "BROWSER-QUALITY",
     ];
+    let catalog_ids = contract["fields"]["outputContract"]["ruleCatalog"]["rules"]
+        .as_array()
+        .expect("rule catalog")
+        .iter()
+        .map(|rule| rule["id"].as_str().expect("rule id"))
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_ids, check_ids);
+    let template_ids = contract["fields"]["outputContract"]["resultTemplate"]["checks"]
+        .as_array()
+        .expect("result template checks")
+        .iter()
+        .map(|check| check["check_id"].as_str().expect("template check id"))
+        .collect::<Vec<_>>();
+    assert_eq!(template_ids, check_ids);
+    for definition in [
+        "VsefmCheckResult",
+        "VsefmNotApplicableCheck",
+        "VsefmUnknownCheck",
+        "VsefmBlockingFailure",
+    ] {
+        assert_eq!(
+            contract["fields"]["outputContract"]["resultSchema"]["$defs"][definition]["properties"]
+                ["check_id"]["enum"],
+            json!(check_ids)
+        );
+    }
     let checks = check_ids
         .iter()
         .map(|check_id| {
@@ -517,6 +559,28 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
             .as_str()
             .is_some_and(|step| step.contains("only these missing check ids: CONCURRENCY"))));
     assert_eq!(supplemental_request["subject"].get("checkPlan"), None);
+    let supplemental_contract = read_request_group(
+        &server,
+        &fixture,
+        supplemental_request_ref,
+        "verification_result_contract",
+    );
+    assert_eq!(
+        supplemental_contract["fields"]["outputContract"]["resultTemplate"]["checks"],
+        json!([{ "check_id": "CONCURRENCY" }])
+    );
+    for definition in [
+        "VsefmCheckResult",
+        "VsefmNotApplicableCheck",
+        "VsefmUnknownCheck",
+        "VsefmBlockingFailure",
+    ] {
+        assert_eq!(
+            supplemental_contract["fields"]["outputContract"]["resultSchema"]["$defs"][definition]
+                ["properties"]["check_id"]["enum"],
+            json!(["CONCURRENCY"])
+        );
+    }
     assert_ne!(
         supplemental_request["requestType"], "vsefm_repair",
         "{supplemental_request:#}"
