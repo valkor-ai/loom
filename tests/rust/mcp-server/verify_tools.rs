@@ -472,27 +472,32 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
     assert_eq!(gated["state"], "user_gate", "{gated:#}");
     assert_eq!(gated["gate"]["options"][0]["decision"], "repair");
     assert_eq!(gated["gate"]["options"][1]["decision"], "manual_review");
-    assert_eq!(gated["gate"]["canSupplement"], false);
-    assert!(gated["prompt"]
+    assert_eq!(gated["gate"]["counts"]["failed"], 1);
+    assert_eq!(gated["gate"]["counts"]["unknown"], 1);
+    assert_eq!(
+        gated["gate"]["confirmedFindings"][0]["checkId"],
+        "BROWSER-QUALITY"
+    );
+    assert!(gated["gate"]["confirmedFindings"][0]["title"]
         .as_str()
-        .expect("gate prompt")
-        .contains("已确认问题"));
-    assert!(gated["prompt"]
-        .as_str()
-        .expect("gate prompt")
-        .contains("浏览器 Playwright"));
-    assert!(gated["prompt"]
-        .as_str()
-        .expect("gate prompt")
-        .contains("尚未完成验证"));
+        .expect("rule title")
+        .contains("浏览器质量"));
+    assert_eq!(
+        gated["gate"]["unresolvedChecks"][0]["checkId"],
+        "CONCURRENCY"
+    );
+    assert_eq!(
+        gated["gate"]["unresolvedChecks"][0]["reason"],
+        "No concurrent request evidence was accepted."
+    );
     assert!(gated["agentInstruction"]
         .as_str()
         .expect("agent instruction")
-        .contains("不得把已确认失败描述为“缺失证据”"));
-    assert!(!gated["gate"]["options"][0]["label"]
+        .contains("gate 结构化结果"));
+    assert!(gated["agentInstruction"]
         .as_str()
-        .expect("repair label")
-        .contains("补充"));
+        .expect("agent instruction")
+        .contains("unknown 或 not_evaluated"));
 }
 
 #[test]
@@ -588,10 +593,15 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         gated["gate"]["options"][0]["decision"],
         "supplemental_verification"
     );
-    assert!(gated["gate"]["options"][0]["label"]
-        .as_str()
-        .expect("supplemental label")
-        .contains("并发一致性"));
+    assert_eq!(
+        gated["gate"]["unresolvedChecks"][0]["checkId"],
+        "CONCURRENCY"
+    );
+    assert_eq!(gated["gate"]["unresolvedChecks"][0]["state"], "unknown");
+    assert_eq!(
+        gated["gate"]["unresolvedChecks"][0]["reason"],
+        "The available local evidence does not establish concurrent behavior."
+    );
 
     let supplemental = structured(
         server

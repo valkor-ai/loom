@@ -127,6 +127,8 @@ struct SefmRule {
     id: String,
     section: String,
     blocking: bool,
+    #[serde(skip)]
+    title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -657,7 +659,7 @@ fn read_rule_catalog(prompt_ref: &str) -> Result<SefmRuleCatalog, String> {
         .find(RULE_CATALOG_END)
         .map(|offset| start + offset)
         .ok_or_else(|| "V-SEFM prompt is missing the rule catalog end marker.".to_string())?;
-    let catalog: SefmRuleCatalog = serde_json::from_str(content[start..end].trim())
+    let mut catalog: SefmRuleCatalog = serde_json::from_str(content[start..end].trim())
         .map_err(|error| format!("V-SEFM prompt rule catalog is invalid: {error}"))?;
     if catalog.schema_version != "1.0" || catalog.rules.is_empty() {
         return Err(
@@ -665,12 +667,21 @@ fn read_rule_catalog(prompt_ref: &str) -> Result<SefmRuleCatalog, String> {
         );
     }
     let mut ids = BTreeSet::new();
-    for rule in &catalog.rules {
+    for rule in &mut catalog.rules {
         if rule.id.trim().is_empty() || rule.section.trim().is_empty() || !ids.insert(&rule.id) {
             return Err(
                 "V-SEFM prompt rule catalog contains an empty or duplicate rule id.".to_string(),
             );
         }
+        rule.title = content
+            .lines()
+            .find_map(|line| {
+                let heading = line.trim().strip_prefix("## ")?;
+                let (section, title) = heading.split_once('.')?;
+                (section.trim() == rule.section && !title.trim().is_empty())
+                    .then(|| title.trim().to_string())
+            })
+            .unwrap_or_else(|| rule.id.clone());
     }
     Ok(catalog)
 }
@@ -1721,6 +1732,7 @@ fn verification_request(
         "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.".to_string(),
         "Record concrete input, expected, observed, evidence, and timestamp for every applicable check. For every non-applicable rule, record its rule id, reason, and evidence in not_applicable_checks.".to_string(),
         "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.".to_string(),
+        "For every unknown_checks entry, write a complete reason: state what was attempted, why the evidence is insufficient, and what concrete evidence or environment capability would resolve the check. Do not submit a generic reason such as 'missing evidence'.".to_string(),
         "Do not put a confirmed failure in unknown_checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
         "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.".to_string(),
         "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.".to_string(),
@@ -3357,120 +3369,196 @@ where
         .unwrap_or_else(|error| failed(project_root, "VSEFM_RESUME_FAILED", error.to_string()))
 }
 
-fn vsefm_check_display_name(check_id: &str) -> String {
-    match check_id {
-        "BUSINESS-INTENT" => "需求完整性".to_string(),
-        "AUTH-HORIZONTAL" => "跨操作者隔离".to_string(),
-        "AUTH-VERTICAL" => "权限边界".to_string(),
-        "TENANT-ISOLATION" => "租户隔离".to_string(),
-        "STATE-MACHINE" => "状态机".to_string(),
-        "IDEMPOTENCY" => "幂等性".to_string(),
-        "CONCURRENCY" => "并发一致性".to_string(),
-        "TRANSACTION" => "事务边界".to_string(),
-        "DATA-INTEGRITY" => "数据完整性".to_string(),
-        "API-COMPATIBILITY" => "API 兼容性".to_string(),
-        "ERROR-RECOVERY" => "错误可恢复性".to_string(),
-        "SECURITY-BOUNDARY" => "安全边界".to_string(),
-        "RETRY-TIMEOUT-RATE-LIMIT" => "重试、超时和限流".to_string(),
-        "OBSERVABILITY-EVIDENCE" => "可观察性".to_string(),
-        "REGRESSION-COMPATIBILITY" => "回归兼容性".to_string(),
-        "PERFORMANCE-CAPACITY" => "性能容量".to_string(),
-        "BROWSER-QUALITY" => "浏览器 Playwright".to_string(),
-        _ => check_id.to_string(),
-    }
+fn vsefm_rule_title(catalog: &SefmRuleCatalog, check_id: &str) -> String {
+    rule_by_id(catalog, check_id)
+        .map(|rule| rule.title.clone())
+        .unwrap_or_else(|| check_id.to_string())
 }
 
-fn vsefm_result_unknown_ids(result: &Value) -> Vec<String> {
+fn vsefm_result_ids(result: &Value, path: &str) -> Vec<String> {
     result
-        .get("unknown_checks")
+        .pointer(path)
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|entry| entry.get("check_id").and_then(Value::as_str))
+        .filter_map(|entry| {
+            entry
+                .as_str()
+                .or_else(|| entry.get("check_id").and_then(Value::as_str))
+        })
         .map(str::to_string)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
-fn vsefm_result_missing_ids(result: &Value) -> Vec<String> {
+fn vsefm_result_failed_check_ids(result: &Value) -> Vec<String> {
     result
+        .get("checks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
+        .filter_map(|check| check.get("check_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn vsefm_result_gate_model(
+    verification_id: &str,
+    result_ref: &str,
+    result: &Value,
+    catalog: &SefmRuleCatalog,
+) -> (Value, bool) {
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("inconclusive");
+    let failed_check_ids = vsefm_result_failed_check_ids(result);
+    let blocking_failure_ids = vsefm_result_ids(result, "/blocking_failures");
+    let confirmed_ids = failed_check_ids
+        .iter()
+        .chain(blocking_failure_ids.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unknown_ids = vsefm_result_ids(result, "/unknown_checks");
+    let missing_ids = result
         .pointer("/coverage/missing_rule_ids")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
+        .collect::<BTreeSet<_>>();
+    let not_applicable_ids = vsefm_result_ids(result, "/not_applicable_checks");
+    let has_confirmed_failure = !confirmed_ids.is_empty();
+    let can_supplement = status == "inconclusive"
+        && !has_confirmed_failure
+        && (!unknown_ids.is_empty() || !missing_ids.is_empty());
 
-fn vsefm_result_failed_summaries(result: &Value) -> Vec<String> {
-    let mut finding_by_check = BTreeMap::new();
+    let mut failure_by_check = BTreeMap::new();
     if let Some(failures) = result.get("blocking_failures").and_then(Value::as_array) {
         for failure in failures {
-            if let (Some(check_id), Some(summary)) = (
-                failure.get("check_id").and_then(Value::as_str),
-                failure.get("summary").and_then(Value::as_str),
-            ) {
-                finding_by_check.insert(check_id.to_string(), summary.to_string());
+            if let Some(check_id) = failure.get("check_id").and_then(Value::as_str) {
+                failure_by_check.insert(check_id.to_string(), failure);
             }
         }
     }
-
-    let mut summaries = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut check_by_id = BTreeMap::new();
     if let Some(checks) = result.get("checks").and_then(Value::as_array) {
-        for check in checks
-            .iter()
-            .filter(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
-        {
-            let Some(check_id) = check.get("check_id").and_then(Value::as_str) else {
-                continue;
-            };
-            let name = vsefm_check_display_name(check_id);
-            let detail = finding_by_check
-                .get(check_id)
-                .cloned()
-                .or_else(|| {
-                    check
-                        .get("observed")
-                        .and_then(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| "验证未通过".to_string());
-            if seen.insert(check_id.to_string()) {
-                summaries.push(format!("{name}：{detail}"));
+        for check in checks {
+            if let Some(check_id) = check.get("check_id").and_then(Value::as_str) {
+                check_by_id.insert(check_id.to_string(), check);
             }
         }
     }
-    if let Some(failures) = result.get("blocking_failures").and_then(Value::as_array) {
-        for failure in failures {
-            let Some(check_id) = failure.get("check_id").and_then(Value::as_str) else {
-                continue;
-            };
-            if seen.insert(check_id.to_string()) {
-                let name = vsefm_check_display_name(check_id);
-                let detail = failure
-                    .get("summary")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or("验证未通过");
-                summaries.push(format!("{name}：{detail}"));
-            }
-        }
-    }
-    summaries
-}
-
-fn vsefm_result_names(check_ids: &[String]) -> String {
-    check_ids
+    let confirmed_findings = confirmed_ids
         .iter()
-        .map(|check_id| vsefm_check_display_name(check_id))
-        .collect::<Vec<_>>()
-        .join("、")
+        .map(|check_id| {
+            let check = check_by_id.get(check_id).copied();
+            let failure = failure_by_check.get(check_id).copied();
+            let summary = failure
+                .and_then(|value| value.get("summary").and_then(Value::as_str))
+                .or_else(|| check.and_then(|value| value.get("observed").and_then(Value::as_str)))
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("验证未通过");
+            let remediation = failure
+                .and_then(|value| value.get("remediation").and_then(Value::as_str))
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("修复该检查项后重新执行 V-SEFM 验证");
+            json!({
+                "checkId": check_id,
+                "title": vsefm_rule_title(catalog, check_id),
+                "severity": failure
+                    .and_then(|value| value.get("severity").and_then(Value::as_str))
+                    .unwrap_or("confirmed"),
+                "summary": summary,
+                "remediation": remediation
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut unknown_reasons = BTreeMap::new();
+    if let Some(unknowns) = result.get("unknown_checks").and_then(Value::as_array) {
+        for unknown in unknowns {
+            if let (Some(check_id), Some(reason)) = (
+                unknown.get("check_id").and_then(Value::as_str),
+                unknown.get("reason").and_then(Value::as_str),
+            ) {
+                unknown_reasons.insert(check_id.to_string(), reason.to_string());
+            }
+        }
+    }
+    let mut unresolved_checks = unknown_ids
+        .iter()
+        .map(|check_id| {
+            json!({
+                "checkId": check_id,
+                "title": vsefm_rule_title(catalog, check_id),
+                "state": "unknown",
+                "reason": unknown_reasons.get(check_id).cloned().unwrap_or_else(|| "当前证据不足，无法得出结论".to_string())
+            })
+        })
+        .collect::<Vec<_>>();
+    unresolved_checks.extend(missing_ids.iter().map(|check_id| {
+        json!({
+            "checkId": check_id,
+            "title": vsefm_rule_title(catalog, check_id),
+            "state": "not_evaluated",
+            "reason": "本轮 Agent 未提交该检查结果，因此无法判断是否通过；补充验证时只执行这一项。"
+        })
+    }));
+
+    let passed_count = result
+        .get("checks")
+        .and_then(Value::as_array)
+        .map(|checks| {
+            checks
+                .iter()
+                .filter(|check| check.get("status").and_then(Value::as_str) == Some("pass"))
+                .count()
+        })
+        .unwrap_or(0);
+    let failed_count = failed_check_ids.len();
+    let options = if has_confirmed_failure {
+        json!([
+            {"value": "1", "decision": "repair"},
+            {"value": "2", "decision": "manual_review"}
+        ])
+    } else if can_supplement {
+        json!([
+            {"value": "1", "decision": "supplemental_verification"},
+            {"value": "2", "decision": "manual_review"}
+        ])
+    } else {
+        json!([
+            {"value": "1", "decision": "accept"},
+            {"value": "2", "decision": "manual_review"}
+        ])
+    };
+    (
+        json!({
+            "kind": "vsefm_result",
+            "verificationId": verification_id,
+            "resultRef": result_ref,
+            "status": status,
+            "counts": {
+                "passed": passed_count,
+                "failed": failed_count,
+                "unknown": unknown_ids.len(),
+                "notApplicable": not_applicable_ids.len(),
+                "notEvaluated": missing_ids.len()
+            },
+            "confirmedFindings": confirmed_findings,
+            "unresolvedChecks": unresolved_checks,
+            "notApplicableCheckIds": not_applicable_ids,
+            "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])),
+            "options": options
+        }),
+        can_supplement,
+    )
 }
 
 fn vsefm_result_gate(
@@ -3481,57 +3569,19 @@ fn vsefm_result_gate(
     delivery_id: Option<&str>,
     phase_id: Option<&str>,
 ) -> LoomMcpActionResult {
-    let status = result
-        .get("status")
+    let catalog = result
+        .get("source")
+        .and_then(|source| source.get("prompt_ref"))
         .and_then(Value::as_str)
-        .unwrap_or("inconclusive");
-    let has_blocking_failures = result
-        .get("blocking_failures")
-        .and_then(Value::as_array)
-        .is_some_and(|failures| !failures.is_empty());
-    let missing_rule_ids = supplemental_rule_ids(result);
-    let unknown_rule_ids = vsefm_result_unknown_ids(result);
-    let uncovered_rule_ids = vsefm_result_missing_ids(result);
-    let failed_summaries = vsefm_result_failed_summaries(result);
-    let has_failed_checks = result
-        .get("checks")
-        .and_then(Value::as_array)
-        .is_some_and(|checks| {
-            checks
-                .iter()
-                .any(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
+        .and_then(|prompt_ref| read_rule_catalog(prompt_ref).ok())
+        .unwrap_or_else(|| SefmRuleCatalog {
+            schema_version: "1.0".to_string(),
+            rules: vec![],
         });
-    let can_supplement = status == "inconclusive"
-        && !has_blocking_failures
-        && !has_failed_checks
-        && !missing_rule_ids.is_empty();
+    let (gate_model, _can_supplement) =
+        vsefm_result_gate_model(verification_id, result_ref, result, &catalog);
     let choices = vec!["1".to_string(), "2".to_string()];
-    let (options, agent_instruction) = if status == "pass" {
-        (
-            json!([
-                {"value": "1", "label": "接受验证结果", "decision": "accept"},
-                {"value": "2", "label": "转人工审查", "decision": "manual_review"}
-            ]),
-            "验证已通过。严格展示 gate.options 中的两个选项，用户选择 1 调用 loom.vsefmVerificationResolve，decision=accept；选择 2 调用 decision=manual_review。不要自行增加修复或补充验证选项。不要调用 loom.continue、loom.inspectRequest 或知识工具。".to_string(),
-        )
-    } else if can_supplement {
-        let missing_summary = vsefm_result_names(&missing_rule_ids);
-        (
-            json!([
-                {"value": "1", "label": format!("让 Agent 补充验证 {missing_summary}"), "decision": "supplemental_verification"},
-                {"value": "2", "label": "转人工审查", "decision": "manual_review"}
-            ]),
-            format!("当前没有已确认的失败，只有尚未完成的验证：{missing_summary}。严格展示 gate.options 中的两个选项，用户选择 1 仅调用 loom.vsefmVerificationResolve，decision=supplemental_verification；选择 2 调用 decision=manual_review。不要修改业务代码，不要把尚未完成验证描述为已发现缺陷，不要调用 loom.continue、loom.inspectRequest 或知识工具。"),
-        )
-    } else {
-        (
-            json!([
-                {"value": "1", "label": "让 Agent 修复已确认问题并重新验证", "decision": "repair"},
-                {"value": "2", "label": "转人工审查", "decision": "manual_review"}
-            ]),
-            "结果包含已确认失败。严格展示 gate.options 中的两个选项，用户选择 1 调用 loom.vsefmVerificationResolve，decision=repair；选择 2 调用 decision=manual_review。不得把已确认失败描述为“缺失证据”或 supplemental verification，也不得自行改写选项。不要调用 loom.continue、loom.inspectRequest 或知识工具。".to_string(),
-        )
-    };
+    let agent_instruction = "读取 gate 结构化结果并用用户当前语言展示：先展示 status 和 counts，再展示 confirmedFindings 中已经确认的问题及其 remediation，最后展示 unresolvedChecks 中每项的 title、state 和完整 reason。unknown 或 not_evaluated 只能说明尚未得出结论，不能改写成已发现缺陷。严格使用 gate.options 的 value 和 decision，用户选择后调用 loom.vsefmVerificationResolve；不要自行计算路由、增加选项或调用 loom.continue、loom.inspectRequest、loom.readFieldGroup 或知识工具。用户选择 1 时必须使用 gate.options[0].decision，选择 2 时必须使用 gate.options[1].decision。".to_string();
     let warnings = if result
         .pointer("/runtime_provenance_check/matches_current_runtime")
         .and_then(Value::as_bool)
@@ -3544,56 +3594,20 @@ fn vsefm_result_gate(
     } else {
         vec![]
     };
-    let mut message_sections = vec![format!("V-SEFM 本地验证结果：{status}。")];
-    if !failed_summaries.is_empty() {
-        message_sections.push(format!(
-            "已确认问题（需要先处理）：\n- {}",
-            failed_summaries.join("\n- ")
-        ));
-    }
-    if !unknown_rule_ids.is_empty() {
-        message_sections.push(format!(
-            "尚未完成验证（尚未判定为缺陷）：\n- {}",
-            vsefm_result_names(&unknown_rule_ids)
-        ));
-    }
-    if !uncovered_rule_ids.is_empty() {
-        message_sections.push(format!(
-            "尚未生成验证结果（尚未判定为缺陷）：\n- {}",
-            vsefm_result_names(&uncovered_rule_ids)
-        ));
-    }
-    if failed_summaries.is_empty() && unknown_rule_ids.is_empty() && uncovered_rule_ids.is_empty() {
-        message_sections.push("所有规则均已完成验证。".to_string());
-    }
-    let option_summary = if can_supplement {
-        "1. 让 Agent 补充验证尚未完成的检查\n2. 转人工审查"
-    } else if status == "pass" {
-        "1. 接受验证结果\n2. 转人工审查"
-    } else {
-        "1. 让 Agent 修复已确认问题并重新验证\n2. 转人工审查"
-    };
-    message_sections.push(format!("请选择后续处理方式：\n{option_summary}"));
-    message_sections.push(format!("结果文件：{result_ref}"));
-    let message = message_sections.join("\n\n");
-    let failed_check_ids = result
-        .get("checks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
-        .filter_map(|check| check.get("check_id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
-        project_root.to_string(),
-        message,
-        choices,
-        None,
-        delivery_id.map(str::to_string),
-        phase_id.map(str::to_string),
-        Some(json!({"kind": "vsefm_result", "verificationId": verification_id, "resultRef": result_ref, "status": status, "blockingFailures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])), "failedChecks": failed_check_ids, "unknownChecks": result.get("unknown_checks").cloned().unwrap_or_else(|| json!([])), "missingRuleIds": uncovered_rule_ids, "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])), "canSupplement": can_supplement, "options": options})),
-    ).with_agent_instruction(agent_instruction))
+    let message =
+        "V-SEFM 验证结果已生成，请根据 gate 结构化结果向用户说明并等待选择 1 或 2。".to_string();
+    LoomMcpActionResult::UserGate(
+        LoomMcpUserGateResult::new(
+            project_root.to_string(),
+            message,
+            choices,
+            None,
+            delivery_id.map(str::to_string),
+            phase_id.map(str::to_string),
+            Some(gate_model),
+        )
+        .with_agent_instruction(agent_instruction),
+    )
     .with_warnings(warnings)
 }
 
