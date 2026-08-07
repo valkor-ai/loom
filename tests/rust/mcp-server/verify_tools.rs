@@ -126,7 +126,8 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         .iter()
         .any(|step| step
             .as_str()
-            .is_some_and(|step| step.contains("missing dedicated test alone"))));
+            .is_some_and(|step| step
+                .contains("initial verification pass must attempt every applicable rule"))));
     assert!(request["agentInstruction"]["steps"]
         .as_array()
         .expect("agent steps")
@@ -192,9 +193,9 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
             "status",
             "checks",
             "not_applicable_checks",
+            "environment_blocked_checks",
             "blocking_failures",
             "warnings",
-            "unknown_checks",
             "recommended_actions"
         ])
     );
@@ -223,7 +224,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         json!([
             "checks[*].check_id",
             "not_applicable_checks[*].check_id",
-            "unknown_checks[*].check_id",
+            "environment_blocked_checks[*].check_id",
             "blocking_failures[*].check_id"
         ])
     );
@@ -266,7 +267,7 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
     for definition in [
         "VsefmCheckResult",
         "VsefmNotApplicableCheck",
-        "VsefmUnknownCheck",
+        "VsefmEnvironmentBlockedCheck",
         "VsefmBlockingFailure",
     ] {
         assert_eq!(
@@ -298,9 +299,10 @@ fn verify_required_with_appkey_runs_local_agent_verification_and_gates_result() 
         serde_json::to_vec_pretty(&json!({
             "status": "pass",
             "checks": checks,
+            "not_applicable_checks": [],
+            "environment_blocked_checks": [],
             "blocking_failures": [],
             "warnings": [],
-            "unknown_checks": [],
             "recommended_actions": []
         }))
         .expect("candidate json"),
@@ -421,7 +423,7 @@ fn valid_check_results_normalize_agent_outer_status_without_repair() {
 }
 
 #[test]
-fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
+fn confirmed_failure_is_not_presented_as_environment_retry() {
     let (fixture, server, started) = prepare_local_verification("non-blocking-failure");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
     read_request_groups(&server, &fixture, request_ref);
@@ -429,7 +431,7 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
     let mut candidate = passing_candidate();
-    candidate["status"] = json!("inconclusive");
+    candidate["status"] = json!("blocked");
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
@@ -446,9 +448,20 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
         .as_array_mut()
         .expect("checks")
         .retain(|check| check["check_id"] != "CONCURRENCY");
-    candidate["unknown_checks"] = json!([{
+    candidate["checks"]
+        .as_array_mut()
+        .expect("checks")
+        .retain(|check| check["check_id"] != "TENANT-ISOLATION");
+    candidate["environment_blocked_checks"] = json!([{
         "check_id": "CONCURRENCY",
-        "reason": "No concurrent request evidence was accepted."
+        "attempted": "Ran the bounded concurrent-write verification against the local service.",
+        "reason": "The local runner could not start the required concurrency tool.",
+        "required_capability": "A working concurrency test runner."
+    }]);
+    candidate["not_applicable_checks"] = json!([{
+        "check_id": "TENANT-ISOLATION",
+        "reason": "The accepted delivery does not declare tenant or workspace boundaries.",
+        "evidence": "Accepted architecture contains no tenant isolation model."
     }]);
     write_json(&result_file, candidate);
 
@@ -468,7 +481,24 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
     assert_eq!(gated["gate"]["options"][0]["decision"], "repair");
     assert_eq!(gated["gate"]["options"][1]["decision"], "manual_review");
     assert_eq!(gated["gate"]["counts"]["failed"], 1);
-    assert_eq!(gated["gate"]["counts"]["unknown"], 1);
+    assert_eq!(gated["gate"]["counts"]["environmentBlocked"], 1);
+    assert_eq!(gated["gate"]["counts"]["notApplicable"], 1);
+    assert_eq!(
+        gated["gate"]["passedChecks"].as_array().map(Vec::len),
+        Some(14)
+    );
+    assert_eq!(
+        gated["gate"]["passedChecks"][0]["checkId"],
+        "API-COMPATIBILITY"
+    );
+    assert_eq!(
+        gated["gate"]["notApplicableChecks"][0]["checkId"],
+        "TENANT-ISOLATION"
+    );
+    assert_eq!(
+        gated["gate"]["notApplicableChecks"][0]["reason"],
+        "The accepted delivery does not declare tenant or workspace boundaries."
+    );
     assert_eq!(
         gated["gate"]["confirmedFindings"][0]["checkId"],
         "BROWSER-QUALITY"
@@ -478,12 +508,12 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
         .expect("rule title")
         .contains("浏览器质量"));
     assert_eq!(
-        gated["gate"]["unresolvedChecks"][0]["checkId"],
+        gated["gate"]["environmentBlockedChecks"][0]["checkId"],
         "CONCURRENCY"
     );
     assert_eq!(
-        gated["gate"]["unresolvedChecks"][0]["reason"],
-        "No concurrent request evidence was accepted."
+        gated["gate"]["environmentBlockedChecks"][0]["requiredCapability"],
+        "A working concurrency test runner."
     );
     assert!(gated["agentInstruction"]
         .as_str()
@@ -492,11 +522,19 @@ fn non_blocking_failure_is_not_presented_as_supplemental_verification() {
     assert!(gated["agentInstruction"]
         .as_str()
         .expect("agent instruction")
-        .contains("unknown 或 not_evaluated"));
+        .contains("environmentBlockedChecks"));
+    assert!(gated["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("passedChecks"));
+    assert!(gated["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("notApplicableChecks"));
 }
 
 #[test]
-fn incomplete_rule_coverage_is_accepted_as_inconclusive_without_repair() {
+fn incomplete_rule_coverage_is_rejected_with_a_missing_coverage_issue() {
     let (fixture, server, started) = prepare_local_verification("incomplete-coverage");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
     read_request_groups(&server, &fixture, request_ref);
@@ -510,7 +548,7 @@ fn incomplete_rule_coverage_is_accepted_as_inconclusive_without_repair() {
         .retain(|check| check["check_id"] != "CONCURRENCY");
     write_json(&result_file, candidate);
 
-    let gated = structured(
+    let rejected = structured(
         server
             .invoke_tool(
                 "loom.vsefmVerificationAcceptFile",
@@ -522,35 +560,20 @@ fn incomplete_rule_coverage_is_accepted_as_inconclusive_without_repair() {
             )
             .expect("incomplete verification result submit"),
     );
-    assert_eq!(gated["state"], "user_gate", "{gated:#}");
-    assert!(gated.get("issues").is_none() || gated["issues"].is_null());
-    assert_eq!(
-        gated["gate"]["options"][0]["decision"],
-        "supplemental_verification"
-    );
-
-    let verification_id = started["next"]["verificationId"]
-        .as_str()
-        .expect("verification id");
-    let canonical: Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            fixture
-                .root
-                .join(format!(".loom/verification/results/{verification_id}.json")),
-        )
-        .expect("canonical result"),
-    )
-    .expect("canonical result json");
-    assert_eq!(canonical["status"], "inconclusive");
-    assert_eq!(
-        canonical["coverage"]["missing_rule_ids"],
-        json!(["CONCURRENCY"])
-    );
-    assert_eq!(canonical["attempts"], 1);
+    assert_eq!(rejected["state"], "repairable_error", "{rejected:#}");
+    assert_eq!(rejected["stopAllowed"], false, "{rejected:#}");
+    assert!(rejected["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(|issue| issue["code"] == "VSEFM_CHECK_COVERAGE_MISSING"
+            && issue["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("CONCURRENCY"))));
 }
 
 #[test]
-fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
+fn environment_blocked_result_uses_environment_retry_without_repair_request() {
     let (fixture, server, started) = prepare_local_verification("supplemental-verification");
     let request_ref = started["next"]["requestRef"].as_str().expect("request ref");
     read_request_groups(&server, &fixture, request_ref);
@@ -558,14 +581,16 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         .root
         .join(started["next"]["resultFile"].as_str().expect("result file"));
     let mut candidate = passing_candidate();
-    candidate["status"] = json!("inconclusive");
+    candidate["status"] = json!("environment_blocked");
     candidate["checks"]
         .as_array_mut()
         .expect("checks")
         .retain(|check| check["check_id"] != "CONCURRENCY");
-    candidate["unknown_checks"] = json!([{
+    candidate["environment_blocked_checks"] = json!([{
         "check_id": "CONCURRENCY",
-        "reason": "The available local evidence does not establish concurrent behavior."
+        "attempted": "Ran the bounded concurrent-write verification against the local service.",
+        "reason": "The local runner could not start the required concurrency tool.",
+        "required_capability": "A working concurrency test runner."
     }]);
     write_json(&result_file, candidate);
 
@@ -579,7 +604,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
                     "writtenTargetIds": ["result"]
                 }))),
             )
-            .expect("inconclusive verification result submit"),
+            .expect("environment-blocked verification result submit"),
     );
     assert_eq!(gated["state"], "user_gate", "{gated:#}");
     assert_eq!(
@@ -587,13 +612,12 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         "supplemental_verification"
     );
     assert_eq!(
-        gated["gate"]["unresolvedChecks"][0]["checkId"],
+        gated["gate"]["environmentBlockedChecks"][0]["checkId"],
         "CONCURRENCY"
     );
-    assert_eq!(gated["gate"]["unresolvedChecks"][0]["state"], "unknown");
     assert_eq!(
-        gated["gate"]["unresolvedChecks"][0]["reason"],
-        "The available local evidence does not establish concurrent behavior."
+        gated["gate"]["environmentBlockedChecks"][0]["reason"],
+        "The local runner could not start the required concurrency tool."
     );
 
     let supplemental = structured(
@@ -634,7 +658,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
         .expect("supplemental steps")
         .iter()
         .any(|step| step.as_str().is_some_and(
-            |step| step.contains("only these missing or unknown check ids: CONCURRENCY")
+            |step| step.contains("only these environment-blocked check ids: CONCURRENCY")
         )));
     assert_eq!(supplemental_request["subject"].get("checkPlan"), None);
     let supplemental_contract = read_request_group(
@@ -650,7 +674,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     for definition in [
         "VsefmCheckResult",
         "VsefmNotApplicableCheck",
-        "VsefmUnknownCheck",
+        "VsefmEnvironmentBlockedCheck",
         "VsefmBlockingFailure",
     ] {
         assert_eq!(
@@ -698,7 +722,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
             }],
             "blocking_failures": [],
             "warnings": [],
-            "unknown_checks": [],
+            "environment_blocked_checks": [],
             "recommended_actions": []
         }),
     );
@@ -726,7 +750,7 @@ fn inconclusive_result_uses_supplemental_verification_without_repair_request() {
     )
     .expect("merged supplemental result json");
     assert_eq!(merged_result["status"], "pass");
-    assert_eq!(merged_result["unknown_count"], 0);
+    assert_eq!(merged_result["environment_blocked_count"], 0);
     assert_eq!(merged_result["checks"].as_array().map(Vec::len), Some(17));
 }
 
@@ -1169,7 +1193,7 @@ fn passing_candidate() -> Value {
         "checks": checks,
         "blocking_failures": [],
         "warnings": [],
-        "unknown_checks": [],
+        "environment_blocked_checks": [],
         "recommended_actions": []
     })
 }
@@ -1316,7 +1340,7 @@ fn blocked_candidate() -> Value {
             "remediation": "Bind resource lookup and authorization to the authenticated owner."
         }],
         "warnings": [],
-        "unknown_checks": [],
+        "environment_blocked_checks": [],
         "recommended_actions": ["Add object-level authorization."]
     })
 }

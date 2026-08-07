@@ -53,9 +53,10 @@ pub struct VsefmVerificationCandidate {
     pub checks: Vec<VsefmCheckResult>,
     #[serde(default)]
     pub not_applicable_checks: Vec<VsefmNotApplicableCheck>,
+    #[serde(default)]
+    pub environment_blocked_checks: Vec<VsefmEnvironmentBlockedCheck>,
     pub blocking_failures: Vec<VsefmBlockingFailure>,
     pub warnings: Vec<String>,
-    pub unknown_checks: Vec<VsefmUnknownCheck>,
     pub recommended_actions: Vec<String>,
 }
 
@@ -64,7 +65,7 @@ pub struct VsefmVerificationCandidate {
 pub enum VsefmVerificationStatus {
     Pass,
     Blocked,
-    Inconclusive,
+    EnvironmentBlocked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -100,17 +101,19 @@ pub struct VsefmBlockingFailure {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct VsefmUnknownCheck {
-    pub check_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct VsefmNotApplicableCheck {
     pub check_id: String,
     pub reason: String,
     pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct VsefmEnvironmentBlockedCheck {
+    pub check_id: String,
+    pub attempted: String,
+    pub reason: String,
+    pub required_capability: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1668,7 +1671,7 @@ fn verification_result_schema(
     for definition in [
         "VsefmCheckResult",
         "VsefmNotApplicableCheck",
-        "VsefmUnknownCheck",
+        "VsefmEnvironmentBlockedCheck",
         "VsefmBlockingFailure",
     ] {
         if let Some(check_id) =
@@ -1685,12 +1688,12 @@ fn verification_result_template(
     _supplemental_check_ids: &[String],
 ) -> Value {
     json!({
-        "status": "inconclusive",
+        "status": "pass",
         "checks": [],
         "not_applicable_checks": [],
+        "environment_blocked_checks": [],
         "blocking_failures": [],
         "warnings": [],
-        "unknown_checks": [],
         "recommended_actions": []
     })
 }
@@ -1717,24 +1720,25 @@ fn verification_request(
         "Read verification_execution_core, verification_prompt, verification_subject, and verification_result_contract.".to_string(),
         "Read the complete sefm-verify.md from promptRef, including its machine-readable rule catalog, before evaluating any delivery artifact.".to_string(),
         "Read only the files listed by subject.changedFiles and subject.acceptedArtifacts; these are the complete accepted inputs for this verification.".to_string(),
-        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. The verification Agent decides applicability from the accepted artifacts; MCP does not decide semantic applicability. For each rule, produce exactly one entry in checks (status pass or fail), unknown_checks, or not_applicable_checks.".to_string(),
+        "Use the rule ids and rule text from sefm-verify.md as the only verification catalog. The verification Agent decides applicability from the accepted artifacts; MCP does not decide semantic applicability. For each rule, produce exactly one entry in checks (status pass or fail), not_applicable_checks, or environment_blocked_checks.".to_string(),
         "Keep each check within its rule section: AUTH checks own identity and authorization; SECURITY-BOUNDARY owns input, secret, path, command, and network boundaries; OBSERVABILITY-EVIDENCE owns request, mutation, and response traceability; BROWSER-QUALITY owns Playwright browser checks.".to_string(),
         "For AUTH checks, accept identity only from a server-verified session, token, or identity-provider context. A client-provided identity header, form value, query value, resource owner id, or similar request field is not authentication evidence; test the server-side verification and authorization path instead.".to_string(),
         "Record concrete input, expected, observed, evidence, and timestamp for every applicable check. For every non-applicable rule, record its rule id, reason, and evidence in not_applicable_checks.".to_string(),
-        "Use unknown only when the available evidence cannot establish either pass or fail. A missing dedicated test alone does not override a confirmed source or runtime violation; report a confirmed violation as fail.".to_string(),
-        "For every unknown_checks entry, write a complete reason: state what was attempted, why the evidence is insufficient, and what concrete evidence or environment capability would resolve the check. Do not submit a generic reason such as 'missing evidence'.".to_string(),
-        "Do not put a confirmed failure in unknown_checks, do not put an unknown result in checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
-        "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or inconclusive.".to_string(),
+        "This initial verification pass must attempt every applicable rule before writing the result. Follow the concrete checks in sefm-verify.md; for concurrency, observability, and performance, run bounded checks with the available project tools instead of deferring the check.".to_string(),
+        "Every applicable rule must end as pass or fail. A missing dedicated test is not a reason to defer a rule; inspect the implementation and run a bounded verification that can establish the result.".to_string(),
+        "Use environment_blocked_checks only after an actual attempt was made and a concrete environment or tool capability prevented completion. Record the attempted action, exact blocking reason, and required capability. Do not use environment_blocked_checks for omitted or inconvenient work.".to_string(),
+        "Do not put an environment-blocked result in checks, do not put a confirmed failure in environment_blocked_checks, and do not copy a finding from one check into another check with a different generated scope.".to_string(),
+        "The outer status is normalized by Loom after structural acceptance. Do not resubmit a structurally valid result only to change status from pass, blocked, or environment_blocked.".to_string(),
         "Create one blocking_failure per distinct finding and reference the failed check with check_id; do not duplicate check evidence in blocking_failures.".to_string(),
     ];
     if supplemental_check_ids.is_empty() {
         steps.push(
-            "Account for every rule id in the prompt catalog exactly once across checks, unknown_checks, and not_applicable_checks. A rule that could not be established belongs only in unknown_checks with its reason; never add it to checks with status unknown."
+            "Account for every rule id in the prompt catalog exactly once across checks, not_applicable_checks, and environment_blocked_checks. There must be no missing rule ids and no unknown result group."
                 .to_string(),
         );
     } else {
         steps.push(format!(
-            "This is supplemental verification. Execute only these missing or unknown check ids: {}. Submit exactly one checks, unknown_checks, or not_applicable_checks entry for each supplied id; Loom will merge them with the previously accepted canonical result.",
+            "This is an environment-retry verification. Execute only these environment-blocked check ids: {} after the required capability is available. Submit exactly one checks, not_applicable_checks, or environment_blocked_checks entry for each supplied id; Loom will merge them with the previously accepted canonical result.",
             supplemental_check_ids.join(", ")
         ));
         steps.push(
@@ -1773,7 +1777,7 @@ fn verification_request(
         "hardBlockingRules": [
             "A failed rule marked blocking=true in the prompt catalog requires a blocking_failure reference; Loom derives the outer status after acceptance.",
             "Never claim pass without reproducible evidence.",
-            "Use unknown when the subject or environment does not establish a conclusion; do not use it to hide an established defect.",
+            "Attempt every applicable rule in the initial pass. Use environment_blocked_checks only after an actual attempt is blocked by a concrete environment or tool limitation; do not use it to defer work or hide an established defect.",
             "Do not add fields, duplicate rule plans, or use natural-language keywords as a substitute for the generated rule catalog."
         ],
         "completionBarrier": {
@@ -1818,9 +1822,9 @@ fn verification_request(
                 "status",
                 "checks",
                 "not_applicable_checks",
+                "environment_blocked_checks",
                 "blocking_failures",
                 "warnings",
-                "unknown_checks",
                 "recommended_actions"
             ],
             "mcpOwnedFields": [
@@ -1835,7 +1839,7 @@ fn verification_request(
             "mcpOwnedPaths": [
                 "checks[*].check_id",
                 "not_applicable_checks[*].check_id",
-                "unknown_checks[*].check_id",
+                "environment_blocked_checks[*].check_id",
                 "blocking_failures[*].check_id"
             ],
             "ruleCatalog": rule_catalog,
@@ -2537,39 +2541,19 @@ where
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let has_blocking_failures = result
-            .get("blocking_failures")
-            .and_then(Value::as_array)
-            .is_some_and(|failures| !failures.is_empty());
-        if status != "inconclusive" || has_blocking_failures {
+        if status != "environment_blocked" {
             return failed(
                 &input.project_root,
                 "VSEFM_RESOLUTION_INVALID",
-                "Supplemental verification is only valid for an inconclusive result without blocking findings.",
+                "Environment retry is only valid for an environment-blocked result.",
             );
         }
-        let missing_rule_ids = supplemental_rule_ids(&result);
-        if missing_rule_ids.is_empty() {
+        let blocked_rule_ids = supplemental_rule_ids(&result);
+        if blocked_rule_ids.is_empty() {
             return failed(
                 &input.project_root,
                 "VSEFM_RESOLUTION_INVALID",
-                "Supplemental verification requires at least one missing or unknown rule.",
-            );
-        }
-        let has_failed_check =
-            result
-                .get("checks")
-                .and_then(Value::as_array)
-                .is_some_and(|checks| {
-                    checks
-                        .iter()
-                        .any(|check| check.get("status").and_then(Value::as_str) == Some("fail"))
-                });
-        if has_failed_check {
-            return failed(
-                &input.project_root,
-                "VSEFM_RESOLUTION_INVALID",
-                "A result with a confirmed failed check requires repair or manual review, not supplemental verification.",
+                "Environment retry requires at least one environment-blocked rule.",
             );
         }
         let baseline_result_ref = session
@@ -2609,7 +2593,7 @@ where
             object.insert("status".to_string(), json!("supplemental_started"));
             object.insert(
                 "supplementalReason".to_string(),
-                json!("The result is inconclusive without blocking findings; collect only the missing check evidence and merge it with the accepted result."),
+                json!("The result contains environment-blocked checks; retry only those checks after the required capability is available and merge them with the accepted result."),
             );
             object.insert("updatedAt".to_string(), json!(state::store::now_string()));
         }
@@ -2636,7 +2620,7 @@ where
                 "trigger": "supplemental",
                 "scope": session.get("scope").cloned().unwrap_or_else(|| json!("completed_phases")),
                 "resumeAction": session.get("resumeAction").cloned().unwrap_or(Value::Null),
-                "supplementalRuleIds": missing_rule_ids,
+                "supplementalRuleIds": blocked_rule_ids,
                 "supplementalBaselineRef": baseline_result_ref
             })),
             target_phase_id: None,
@@ -2791,18 +2775,18 @@ fn validate_vsefm_candidate(
         }
     }
 
-    for (index, unknown) in candidate.unknown_checks.iter().enumerate() {
-        let field_prefix = format!("unknown_checks[{index}]");
-        if rule_by_id(catalog, &unknown.check_id).is_none() {
+    for (index, blocked) in candidate.environment_blocked_checks.iter().enumerate() {
+        let field_prefix = format!("environment_blocked_checks[{index}]");
+        if rule_by_id(catalog, &blocked.check_id).is_none() {
             issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_ID_INVALID",
+                "VSEFM_ENVIRONMENT_BLOCKED_CHECK_ID_INVALID",
                 &format!("{field_prefix}.check_id"),
-                "unknown check id is not present in the sefm-verify.md rule catalog.",
+                "environment-blocked check id is not present in the sefm-verify.md rule catalog.",
             ));
             continue;
         }
         if let Some(scope) = supplemental_rule_ids {
-            if !scope.contains(&unknown.check_id) {
+            if !scope.contains(&blocked.check_id) {
                 issues.push(vsefm_issue(
                     "VSEFM_SUPPLEMENTAL_RULE_OUT_OF_SCOPE",
                     &format!("{field_prefix}.check_id"),
@@ -2810,18 +2794,52 @@ fn validate_vsefm_candidate(
                 ));
             }
         }
-        if !seen.insert(unknown.check_id.clone()) {
+        if !seen.insert(blocked.check_id.clone()) {
             issues.push(vsefm_issue(
                 "VSEFM_CHECK_DUPLICATE",
                 &format!("{field_prefix}.check_id"),
                 "Each rule id may appear only once across the result.",
             ));
         }
-        if unknown.reason.trim().is_empty() {
+        if blocked.attempted.trim().is_empty()
+            || blocked.reason.trim().is_empty()
+            || blocked.required_capability.trim().is_empty()
+        {
             issues.push(vsefm_issue(
-                "VSEFM_UNKNOWN_CHECK_INVALID",
+                "VSEFM_ENVIRONMENT_BLOCKED_CONTEXT_REQUIRED",
                 &field_prefix,
-                "Each unknown check must explain why the result could not be established.",
+                "Each environment-blocked check requires the attempted action, blocking reason, and required capability.",
+            ));
+        }
+    }
+
+    let expected_ids = supplemental_rule_ids
+        .cloned()
+        .unwrap_or_else(|| catalog.rules.iter().map(|rule| rule.id.clone()).collect());
+    for check_id in expected_ids {
+        if !seen.contains(&check_id) {
+            issues.push(vsefm_issue(
+                "VSEFM_CHECK_COVERAGE_MISSING",
+                "result",
+                &format!("Rule {check_id} must have exactly one pass, fail, not-applicable, or environment-blocked result."),
+            ));
+        }
+    }
+
+    let blocking_failure_check_ids = candidate
+        .blocking_failures
+        .iter()
+        .map(|failure| failure.check_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for (index, check) in candidate.checks.iter().enumerate() {
+        if check.status == VsefmCheckStatus::Fail
+            && rule_by_id(catalog, &check.check_id).is_some_and(|rule| rule.blocking)
+            && !blocking_failure_check_ids.contains(check.check_id.as_str())
+        {
+            issues.push(vsefm_issue(
+                "VSEFM_BLOCKING_FINDING_REQUIRED",
+                &format!("checks[{index}].check_id"),
+                "A failed blocking rule requires one blocking_failure with the same check_id.",
             ));
         }
     }
@@ -2888,7 +2906,7 @@ fn vsefm_issue(code: &str, field_path: &str, message: &str) -> delivery_core::Re
 fn candidate_coverage(
     catalog: &SefmRuleCatalog,
     candidate: &VsefmVerificationCandidate,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
     let checked_ids = candidate
         .checks
         .iter()
@@ -2899,8 +2917,8 @@ fn candidate_coverage(
         .iter()
         .map(|check| check.check_id.clone())
         .collect::<BTreeSet<_>>();
-    let unknown_ids = candidate
-        .unknown_checks
+    let environment_blocked_ids = candidate
+        .environment_blocked_checks
         .iter()
         .map(|check| check.check_id.clone())
         .collect::<BTreeSet<_>>();
@@ -2910,13 +2928,14 @@ fn candidate_coverage(
         .filter(|rule| {
             !checked_ids.contains(&rule.id)
                 && !not_applicable_ids.contains(&rule.id)
-                && !unknown_ids.contains(&rule.id)
+                && !environment_blocked_ids.contains(&rule.id)
         })
         .map(|rule| rule.id.clone())
         .collect::<Vec<_>>();
     (
         checked_ids.into_iter().collect(),
         not_applicable_ids.into_iter().collect(),
+        environment_blocked_ids.into_iter().collect(),
         missing_ids,
     )
 }
@@ -2940,8 +2959,9 @@ fn canonical_vsefm_result(
         .and_then(Value::as_str)
         .ok_or_else(|| "V-SEFM session is missing promptRef".to_string())?;
     let catalog = read_rule_catalog(prompt_ref)?;
-    let (checked_ids, not_applicable_ids, missing_ids) = candidate_coverage(&catalog, candidate);
-    let status = canonical_vsefm_status(candidate, &catalog, !missing_ids.is_empty());
+    let (checked_ids, not_applicable_ids, environment_blocked_ids, missing_ids) =
+        candidate_coverage(&catalog, candidate);
+    let status = canonical_vsefm_status(candidate);
     let runtime_provenance = session
         .get("runtimeProvenance")
         .cloned()
@@ -2972,14 +2992,15 @@ fn canonical_vsefm_result(
         "status": status,
         "checks": candidate.checks,
         "not_applicable_checks": candidate.not_applicable_checks,
+        "environment_blocked_checks": candidate.environment_blocked_checks,
         "blocking_failures": candidate.blocking_failures,
         "warnings": candidate.warnings,
-        "unknown_checks": candidate.unknown_checks,
         "recommended_actions": candidate.recommended_actions,
         "rule_catalog_hash": session.get("ruleCatalogHash"),
         "coverage": {
             "checked_rule_ids": checked_ids,
             "not_applicable_rule_ids": not_applicable_ids,
+            "environment_blocked_rule_ids": environment_blocked_ids,
             "missing_rule_ids": missing_ids
         },
         "passed_checks": passed_checks,
@@ -2989,7 +3010,7 @@ fn canonical_vsefm_result(
             .filter(|check| check.status == VsefmCheckStatus::Fail)
             .count(),
         "warning_count": candidate.warnings.len(),
-        "unknown_count": candidate.unknown_checks.len() + missing_ids.len(),
+        "environment_blocked_count": candidate.environment_blocked_checks.len(),
         "attempts": session.get("attempt").cloned().unwrap_or_else(|| json!(1)),
         "source": {
             "delivery_id": session.get("deliveryId"),
@@ -3008,24 +3029,15 @@ fn canonical_vsefm_result(
     }))
 }
 
-fn canonical_vsefm_status(
-    candidate: &VsefmVerificationCandidate,
-    catalog: &SefmRuleCatalog,
-    has_missing_rules: bool,
-) -> VsefmVerificationStatus {
-    if candidate.checks.iter().any(|check| {
-        check.status == VsefmCheckStatus::Fail
-            && rule_by_id(catalog, &check.check_id).is_some_and(|rule| rule.blocking)
-    }) {
-        VsefmVerificationStatus::Blocked
-    } else if has_missing_rules
-        || !candidate.unknown_checks.is_empty()
-        || candidate
-            .checks
-            .iter()
-            .any(|check| check.status == VsefmCheckStatus::Fail)
+fn canonical_vsefm_status(candidate: &VsefmVerificationCandidate) -> VsefmVerificationStatus {
+    if candidate
+        .checks
+        .iter()
+        .any(|check| check.status == VsefmCheckStatus::Fail)
     {
-        VsefmVerificationStatus::Inconclusive
+        VsefmVerificationStatus::Blocked
+    } else if !candidate.environment_blocked_checks.is_empty() {
+        VsefmVerificationStatus::EnvironmentBlocked
     } else {
         VsefmVerificationStatus::Pass
     }
@@ -3042,31 +3054,26 @@ fn read_vsefm_result(root: &Path, session: &Value) -> Result<Value, String> {
 }
 
 fn supplemental_rule_ids(result: &Value) -> Vec<String> {
-    let mut ids = result
-        .get("unknown_checks")
+    result
+        .get("environment_blocked_checks")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.get("check_id").and_then(Value::as_str))
         .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    if let Some(missing) = result
-        .pointer("/coverage/missing_rule_ids")
-        .and_then(Value::as_array)
-    {
-        ids.extend(missing.iter().filter_map(Value::as_str).map(str::to_string));
-    }
-    ids.into_iter().collect()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn canonical_result_candidate(result: &Value) -> Result<VsefmVerificationCandidate, String> {
     serde_json::from_value(json!({
-        "status": result.get("status").cloned().unwrap_or_else(|| json!("inconclusive")),
+        "status": result.get("status").cloned().unwrap_or_else(|| json!("pass")),
         "checks": result.get("checks").cloned().unwrap_or_else(|| json!([])),
         "not_applicable_checks": result.get("not_applicable_checks").cloned().unwrap_or_else(|| json!([])),
+        "environment_blocked_checks": result.get("environment_blocked_checks").cloned().unwrap_or_else(|| json!([])),
         "blocking_failures": result.get("blocking_failures").cloned().unwrap_or_else(|| json!([])),
         "warnings": result.get("warnings").cloned().unwrap_or_else(|| json!([])),
-        "unknown_checks": result.get("unknown_checks").cloned().unwrap_or_else(|| json!([])),
         "recommended_actions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([]))
     }))
     .map_err(|error| format!("previous V-SEFM result cannot be merged: {error}"))
@@ -3084,20 +3091,22 @@ fn merge_supplemental_candidate(
     merged
         .not_applicable_checks
         .retain(|check| !supplemental_rule_ids.contains(&check.check_id));
+    merged
+        .environment_blocked_checks
+        .retain(|check| !supplemental_rule_ids.contains(&check.check_id));
     merged.checks.extend(supplemental.checks);
     merged
         .not_applicable_checks
         .extend(supplemental.not_applicable_checks);
+    merged
+        .environment_blocked_checks
+        .extend(supplemental.environment_blocked_checks);
     merged
         .blocking_failures
         .retain(|finding| !supplemental_rule_ids.contains(&finding.check_id));
     merged
         .blocking_failures
         .extend(supplemental.blocking_failures);
-    merged
-        .unknown_checks
-        .retain(|unknown| !supplemental_rule_ids.contains(&unknown.check_id));
-    merged.unknown_checks.extend(supplemental.unknown_checks);
     for warning in supplemental.warnings {
         if !merged.warnings.contains(&warning) {
             merged.warnings.push(warning);
@@ -3108,7 +3117,7 @@ fn merge_supplemental_candidate(
             merged.recommended_actions.push(action);
         }
     }
-    merged.status = VsefmVerificationStatus::Inconclusive;
+    merged.status = VsefmVerificationStatus::EnvironmentBlocked;
     Ok(merged)
 }
 
@@ -3409,7 +3418,7 @@ fn vsefm_result_gate_model(
     let status = result
         .get("status")
         .and_then(Value::as_str)
-        .unwrap_or("inconclusive");
+        .unwrap_or("pass");
     let failed_check_ids = vsefm_result_failed_check_ids(result);
     let blocking_failure_ids = vsefm_result_ids(result, "/blocking_failures");
     let confirmed_ids = failed_check_ids
@@ -3417,20 +3426,12 @@ fn vsefm_result_gate_model(
         .chain(blocking_failure_ids.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
-    let unknown_ids = vsefm_result_ids(result, "/unknown_checks");
-    let missing_ids = result
-        .pointer("/coverage/missing_rule_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
+    let environment_blocked_ids = vsefm_result_ids(result, "/environment_blocked_checks");
     let not_applicable_ids = vsefm_result_ids(result, "/not_applicable_checks");
     let has_confirmed_failure = !confirmed_ids.is_empty();
-    let can_supplement = status == "inconclusive"
+    let can_supplement = status == "environment_blocked"
         && !has_confirmed_failure
-        && (!unknown_ids.is_empty() || !missing_ids.is_empty());
+        && !environment_blocked_ids.is_empty();
 
     let mut failure_by_check = BTreeMap::new();
     if let Some(failures) = result.get("blocking_failures").and_then(Value::as_array) {
@@ -3469,41 +3470,92 @@ fn vsefm_result_gate_model(
                     .and_then(|value| value.get("severity").and_then(Value::as_str))
                     .unwrap_or("confirmed"),
                 "summary": summary,
-                "remediation": remediation
+                "remediation": remediation,
+                "input": check
+                    .and_then(|value| value.get("input").and_then(Value::as_str))
+                    .unwrap_or("已提交验证输入"),
+                "expected": check
+                    .and_then(|value| value.get("expected").and_then(Value::as_str))
+                    .unwrap_or("满足对应规则"),
+                "observed": check
+                    .and_then(|value| value.get("observed").and_then(Value::as_str))
+                    .unwrap_or(summary),
+                "evidence": check
+                    .and_then(|value| value.get("evidence").and_then(Value::as_str))
+                    .unwrap_or("已提交验证证据")
             })
         })
         .collect::<Vec<_>>();
 
-    let mut unknown_reasons = BTreeMap::new();
-    if let Some(unknowns) = result.get("unknown_checks").and_then(Value::as_array) {
-        for unknown in unknowns {
-            if let (Some(check_id), Some(reason)) = (
-                unknown.get("check_id").and_then(Value::as_str),
-                unknown.get("reason").and_then(Value::as_str),
-            ) {
-                unknown_reasons.insert(check_id.to_string(), reason.to_string());
-            }
-        }
-    }
-    let mut unresolved_checks = unknown_ids
-        .iter()
-        .map(|check_id| {
-            json!({
+    let passed_checks = check_by_id
+        .values()
+        .filter(|check| check.get("status").and_then(Value::as_str) == Some("pass"))
+        .filter_map(|check| {
+            let check_id = check.get("check_id").and_then(Value::as_str)?;
+            Some(json!({
                 "checkId": check_id,
                 "title": vsefm_rule_title(catalog, check_id),
-                "state": "unknown",
-                "reason": unknown_reasons.get(check_id).cloned().unwrap_or_else(|| "当前证据不足，无法得出结论".to_string())
-            })
+                "summary": check
+                    .get("observed")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("检查通过"),
+                "evidence": check
+                    .get("evidence")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("已提交验证证据")
+            }))
         })
         .collect::<Vec<_>>();
-    unresolved_checks.extend(missing_ids.iter().map(|check_id| {
-        json!({
-            "checkId": check_id,
-            "title": vsefm_rule_title(catalog, check_id),
-            "state": "not_evaluated",
-            "reason": "本轮 Agent 未提交该检查结果，因此无法判断是否通过；补充验证时只执行这一项。"
+
+    let not_applicable_checks = result
+        .get("not_applicable_checks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|check| {
+            let check_id = check.get("check_id").and_then(Value::as_str)?;
+            Some(json!({
+                "checkId": check_id,
+                "title": vsefm_rule_title(catalog, check_id),
+                "reason": check
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("该检查项不适用于当前交付"),
+                "evidence": check
+                    .get("evidence")
+                    .and_then(Value::as_str)
+                    .unwrap_or("已提交适用性依据")
+            }))
         })
-    }));
+        .collect::<Vec<_>>();
+
+    let environment_blocked_checks = result
+        .get("environment_blocked_checks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|check| {
+            let check_id = check.get("check_id").and_then(Value::as_str)?;
+            Some(json!({
+                "checkId": check_id,
+                "title": vsefm_rule_title(catalog, check_id),
+                "attempted": check
+                    .get("attempted")
+                    .and_then(Value::as_str)
+                    .unwrap_or("已尝试执行验证"),
+                "reason": check
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("验证被环境阻断"),
+                "requiredCapability": check
+                    .get("required_capability")
+                    .and_then(Value::as_str)
+                    .unwrap_or("完成该检查所需的环境或工具能力")
+            }))
+        })
+        .collect::<Vec<_>>();
 
     let passed_count = result
         .get("checks")
@@ -3518,18 +3570,18 @@ fn vsefm_result_gate_model(
     let failed_count = failed_check_ids.len();
     let options = if has_confirmed_failure {
         json!([
-            {"value": "1", "decision": "repair"},
-            {"value": "2", "decision": "manual_review"}
+            {"value": "1", "label": "修复已确认问题并重新验证", "decision": "repair"},
+            {"value": "2", "label": "转人工复核", "decision": "manual_review"}
         ])
     } else if can_supplement {
         json!([
-            {"value": "1", "decision": "supplemental_verification"},
-            {"value": "2", "decision": "manual_review"}
+            {"value": "1", "label": "环境准备完成后重试受阻检查", "decision": "supplemental_verification"},
+            {"value": "2", "label": "转人工复核", "decision": "manual_review"}
         ])
     } else {
         json!([
-            {"value": "1", "decision": "accept"},
-            {"value": "2", "decision": "manual_review"}
+            {"value": "1", "label": "接受验证结果并结束", "decision": "accept"},
+            {"value": "2", "label": "转人工复核", "decision": "manual_review"}
         ])
     };
     (
@@ -3541,13 +3593,13 @@ fn vsefm_result_gate_model(
             "counts": {
                 "passed": passed_count,
                 "failed": failed_count,
-                "unknown": unknown_ids.len(),
                 "notApplicable": not_applicable_ids.len(),
-                "notEvaluated": missing_ids.len()
+                "environmentBlocked": environment_blocked_ids.len()
             },
             "confirmedFindings": confirmed_findings,
-            "unresolvedChecks": unresolved_checks,
-            "notApplicableCheckIds": not_applicable_ids,
+            "passedChecks": passed_checks,
+            "notApplicableChecks": not_applicable_checks,
+            "environmentBlockedChecks": environment_blocked_checks,
             "recommendedActions": result.get("recommended_actions").cloned().unwrap_or_else(|| json!([])),
             "options": options
         }),
@@ -3575,7 +3627,7 @@ fn vsefm_result_gate(
     let (gate_model, _can_supplement) =
         vsefm_result_gate_model(verification_id, result_ref, result, &catalog);
     let choices = vec!["1".to_string(), "2".to_string()];
-    let agent_instruction = "读取 gate 结构化结果并用用户当前语言展示：先展示 status 和 counts，再展示 confirmedFindings 中已经确认的问题及其 remediation，最后展示 unresolvedChecks 中每项的 title、state 和完整 reason。unknown 或 not_evaluated 只能说明尚未得出结论，不能改写成已发现缺陷。严格使用 gate.options 的 value 和 decision，用户选择后调用 loom.vsefmVerificationResolve；不要自行计算路由、增加选项或调用 loom.continue、loom.inspectRequest、loom.readFieldGroup 或知识工具。用户选择 1 时必须使用 gate.options[0].decision，选择 2 时必须使用 gate.options[1].decision。".to_string();
+    let agent_instruction = "读取 gate 结构化结果并用用户当前语言完整展示：先展示 status 和 counts；然后逐项展示 passedChecks 中每个通过项的 title、summary 和 evidence，展示 notApplicableChecks 中每个不适用项的 title、reason 和 evidence，展示 environmentBlockedChecks 中每个环境阻断项的 title、attempted、reason 和 requiredCapability，再展示 confirmedFindings 中每个已确认问题的 title、severity、summary、input、expected、observed、evidence 和 remediation。不得只展示计数，不得省略任何通过项、不适用项、环境阻断项或已确认问题。不要使用 unknown 或 not_evaluated 这样的结论。严格使用 gate.options 的 value、label 和 decision，用户选择后调用 loom.vsefmVerificationResolve；不要自行计算路由、增加选项或调用 loom.continue、loom.inspectRequest、loom.readFieldGroup 或知识工具。用户选择 1 时必须使用 gate.options[0].decision，选择 2 时必须使用 gate.options[1].decision。".to_string();
     let warnings = if result
         .pointer("/runtime_provenance_check/matches_current_runtime")
         .and_then(Value::as_bool)
@@ -4728,29 +4780,33 @@ mod tests {
         let prompt = repository_prompt_path();
         let catalog = read_rule_catalog(&prompt).expect("rule catalog");
         let candidate: VsefmVerificationCandidate = serde_json::from_value(json!({
-            "status": "inconclusive",
+            "status": "environment_blocked",
             "checks": [],
             "not_applicable_checks": [{
                 "check_id": "TENANT-ISOLATION",
                 "reason": "No tenant boundary is declared.",
                 "evidence": "accepted architecture artifact"
             }],
+            "environment_blocked_checks": [{
+                "check_id": "CONCURRENCY",
+                "attempted": "Ran the bounded concurrent-write verification.",
+                "reason": "The local runner is unavailable.",
+                "required_capability": "A working concurrency test runner."
+            }],
             "blocking_failures": [],
             "warnings": [],
-            "unknown_checks": [{
-                "check_id": "CONCURRENCY",
-                "reason": "The local runner is unavailable."
-            }],
             "recommended_actions": []
         }))
         .expect("candidate");
-        let (checked, not_applicable, missing) = candidate_coverage(&catalog, &candidate);
+        let (checked, not_applicable, environment_blocked, missing) =
+            candidate_coverage(&catalog, &candidate);
         assert!(checked.is_empty());
         assert_eq!(not_applicable, vec!["TENANT-ISOLATION".to_string()]);
+        assert_eq!(environment_blocked, vec!["CONCURRENCY".to_string()]);
         assert_eq!(missing.len(), 15);
         assert_eq!(
-            canonical_vsefm_status(&candidate, &catalog, true),
-            VsefmVerificationStatus::Inconclusive
+            canonical_vsefm_status(&candidate),
+            VsefmVerificationStatus::EnvironmentBlocked
         );
     }
 
