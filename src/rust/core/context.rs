@@ -81,3 +81,28 @@ pub fn normalize_project_root(raw: &str) -> Result<NormalizedProjectRoot, String
         path: canonical,
     })
 }
+
+pub fn loom_home() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LOOM_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return Ok(path);
+    }
+    let user_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "HOME, USERPROFILE, or LOOM_HOME is required.".to_string())?;
+    Ok(user_home.join(".loom"))
+}
+
+pub fn loom_runtime_home() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LOOM_RUNTIME_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return Ok(path);
+    }
+    Ok(loom_home()?.join("runtime/current"))
+}

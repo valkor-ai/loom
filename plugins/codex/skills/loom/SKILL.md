@@ -16,6 +16,7 @@ Use the current workspace directory as `projectRoot`.
 - `@loom <request>` -> call `loom.plan` with the full request text.
 - `@loom plan <request>` -> call `loom.plan` with `<request>`.
 - `@loom continue`, `@loom resume`, `@loom proceed`, or `@loom next` -> call `loom.continue`.
+- `@loom verify` -> call `loom.verify` without a decision to show the V-SEFM onboarding gate.
 - `@loom status` -> call `loom.status`.
 - `@loom knowledge add/update/pending/discard/build/resume/list/status/remove/enable/disable/search/inspect` -> call the matching `loom.knowledge*` tool.
 - `@loom deploy` -> call `loom.deployRun`.
@@ -31,6 +32,7 @@ Follow `LoomMcpActionResult.state`.
 - `active_operation`: only call the observation tools named by the result.
 - `user_gate`: when `preResponseContract` is present, execute its steps in order before emitting any user-visible response. This means calling `loom.inspectRequest`, reading only the groups from `requestReadPlan.groups` whose `whenToRead` applies before the visible response with `loom.readFieldGroup`, and, for Brainstorm, completing every required `knowledge_context_plan` step before forming options or confirmation. Groups scheduled after user confirmation remain required before the confirm/submit call. The contract is the MCP-side gate for the response; do not answer from `prompt` alone, skip directly to generic options, or call `loom.continue` to bypass it. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `@loom continue`: do not stop at a progress recap or say "if you want to continue". After the contract steps complete, ask the visible current-block question and wait for the user's answer. For a gate without `preResponseContract`, present the returned prompt and wait for the accepted user response.
 - `repairable_error`: `stopAllowed=false`; first call `loom.inspectRequest` for the returned `requestRef`, read every required group in its `requestReadPlan.groups` with `loom.readFieldGroup`, then edit only the returned target file or target ids and call the returned resubmit tool. The returned `agentInstruction` is part of the repair contract.
+- For a `user_gate` whose `gate.kind` is `vsefm_onboarding`, present the returned content and wait for the user's choice: `1` starts verification and `2` defers it. Call `loom.verify` with `decision=required` for `1` or `decision=deferred` for `2`. Do not wait for an external V-SEFM result; Loom resumes immediately after recording the choice.
 - `done`, `blocked`, `failed`: stop and report the returned user-facing status.
 
 Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Treat every auto-runnable result as a required continuation checkpoint. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.

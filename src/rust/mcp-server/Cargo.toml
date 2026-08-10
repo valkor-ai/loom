@@ -57,3 +57,7 @@ path = "../../../tests/rust/mcp-server/knowledge_tools.rs"
 [[test]]
 name = "domain_dependency_boundaries"
 path = "../../../tests/rust/mcp-server/domain_dependency_boundaries.rs"
+
+[[test]]
+name = "verify_tools"
+path = "../../../tests/rust/mcp-server/verify_tools.rs"

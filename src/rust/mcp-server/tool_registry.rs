@@ -7,6 +7,7 @@ use delivery_core::{
     ReadFieldGroupResult,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
+use execution::{VsefmToolInput, VsefmVerificationResolveInput};
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
     KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
@@ -47,6 +48,8 @@ pub enum ToolInputKind {
     DeployBootstrap,
     InspectRequest,
     ReadFieldGroup,
+    Verification,
+    VerificationResolve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +89,22 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         description: "Rehydrate and continue the active Loom workflow for the current project after an interruption or context loss. Follow the returned action immediately; do not finish while it is auto_runnable or stopAllowed is false.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "verify",
+        description: "Show the V-SEFM verification onboarding with a 1/2 choice and record the decision. Choice 1 opens the configured platform only when the local appkey is absent, then resumes Loom immediately.",
+        target_batch: 9,
+        input_kind: ToolInputKind::Verification,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "vsefmVerificationResolve",
+        description: "Resolve a completed local V-SEFM verification result through the user-selected accept, repair, or manual review path.",
+        target_batch: 10,
+        input_kind: ToolInputKind::VerificationResolve,
         output_kind: ToolOutputKind::ActionResult,
         implemented: true,
     },
@@ -191,6 +210,22 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         name: "repairSubmitFile",
         description: "Submit a repair artifact file.",
         target_batch: 5,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "vsefmVerificationAcceptFile",
+        description: "Submit the Agent-owned local V-SEFM verification result candidate.",
+        target_batch: 10,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "vsefmRepairAcceptFile",
+        description: "Submit the Agent-owned V-SEFM repair result after fixing declared blocking findings.",
+        target_batch: 10,
         input_kind: ToolInputKind::FileSubmit,
         output_kind: ToolOutputKind::ActionResult,
         implemented: true,
@@ -483,6 +518,8 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
         ToolInputKind::DeployBootstrap => schema_for_type::<DeployBootstrapInput>(),
         ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
         ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
+        ToolInputKind::Verification => schema_for_type::<VsefmToolInput>(),
+        ToolInputKind::VerificationResolve => schema_for_type::<VsefmVerificationResolveInput>(),
     })
 }
 

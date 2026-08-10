@@ -17,6 +17,21 @@ pub enum LoomMcpActionResult {
 }
 
 impl LoomMcpActionResult {
+    pub fn with_warnings(self, warnings: Vec<String>) -> Self {
+        if warnings.is_empty() {
+            return self;
+        }
+        match self {
+            Self::AutoRunnable(result) => Self::AutoRunnable(result.with_warnings(warnings)),
+            Self::UserGate(result) => Self::UserGate(result.with_warnings(warnings)),
+            Self::Done(mut result) => {
+                result.warnings.extend(warnings);
+                Self::Done(result)
+            }
+            other => other,
+        }
+    }
+
     pub fn not_implemented_for_batch(
         project_root: impl Into<String>,
         tool_name: impl Into<String>,
@@ -58,6 +73,8 @@ pub struct LoomMcpAutoRunnableResult {
     pub stop_allowed: bool,
     pub agent_instruction: String,
     pub next: LoomMcpNextAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl LoomMcpAutoRunnableResult {
@@ -67,7 +84,13 @@ impl LoomMcpAutoRunnableResult {
             stop_allowed: false,
             agent_instruction: auto_runnable_agent_instruction(&next).to_string(),
             next,
+            warnings: vec![],
         }
+    }
+
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 }
 
@@ -87,6 +110,14 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until the TaskResult submit succeeds or Loom returns user_gate, done, blocked, or failed."
             )
         }
+        LoomMcpNextAction::RunVsefmVerification(_) => concat!(
+            "This is a required local V-SEFM verification task. Continue immediately: inspect requestRef, read every verification request group, read the declared sefm-verify reference and subject files, run only bounded read-only checks, write the verification result candidate, and submit it with loom.vsefmVerificationAcceptFile before reporting progress. ",
+            "Do not modify product files or Loom canonical artifacts. If a check cannot be established, record unknown or inconclusive evidence instead of inventing pass. Do not stop until the submit succeeds or Loom returns user_gate, done, blocked, or failed."
+        ),
+        LoomMcpNextAction::RunVsefmRepair(_) => concat!(
+            "This is a required V-SEFM repair task. Continue immediately: inspect requestRef, read every repair request group, modify the necessary ordinary project files, run bounded verification, write the repair result, and submit it with loom.vsefmRepairAcceptFile before reporting progress. ",
+            "The request scope hints are not a write allowlist: modify any ordinary project source, configuration, test, migration, build, or deployment file needed to fix the findings. Do not modify protected Loom or V-SEFM files. Do not stop until the repair submit succeeds or Loom returns user_gate, done, blocked, or failed."
+        ),
         LoomMcpNextAction::RunLoomTool(_) => {
             concat!(
                 "This is a required continuation checkpoint, not a progress message. Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. ",
@@ -128,6 +159,8 @@ pub struct LoomMcpUserGateResult {
     pub agent_instruction: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pre_response_contract: Option<LoomMcpUserGatePreResponseContract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl LoomMcpUserGateResult {
@@ -158,7 +191,18 @@ impl LoomMcpUserGateResult {
             gate,
             agent_instruction,
             pre_response_contract,
+            warnings: vec![],
         }
+    }
+
+    pub fn with_agent_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.agent_instruction = instruction.into();
+        self
+    }
+
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
     pub fn with_brainstorm_knowledge(mut self, block: impl Into<String>) -> Self {

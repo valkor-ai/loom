@@ -128,7 +128,9 @@ fn artifact_write_mode(kind: ArtifactKind) -> delivery_core::WriteMode {
         | ArtifactKind::TechnicalBaselineCandidate
         | ArtifactKind::RepositoryContextCandidate
         | ArtifactKind::ReviewResult
-        | ArtifactKind::ManualReviewResolution => delivery_core::WriteMode::SingleJson,
+        | ArtifactKind::ManualReviewResolution
+        | ArtifactKind::VsefmVerificationResult
+        | ArtifactKind::VsefmRepairResult => delivery_core::WriteMode::SingleJson,
         ArtifactKind::TaskResultRepair
         | ArtifactKind::TaskplanRepair
         | ArtifactKind::ArchitectureArtifactRepair

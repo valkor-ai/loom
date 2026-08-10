@@ -371,6 +371,7 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
 
     assert_eq!(report.status, "ok");
     assert!(env.runtime_current().exists() || env.runtime_current().symlink_metadata().is_ok());
+    assert!(env.vsefm_appkey_path().is_file());
     assert!(env
         .agent_plugin_root(AgentKind::Codex)
         .join(".loom-mcp-install.json")
@@ -741,6 +742,7 @@ fn purge_removes_user_runtime_but_preserves_project_state() {
 
     assert_eq!(report.command, "purge");
     assert!(!env.runtime_root().exists());
+    assert!(!env.vsefm_appkey_dir().exists());
     assert!(project_state.exists());
     assert!(opencode_user_config.exists());
 }
@@ -2568,6 +2570,22 @@ impl Fixture {
     }
 
     fn write_shared_references(&self) {
+        write_json(
+            &self
+                .package_root
+                .join("plugins/shared/loom/references/verification/v-sefm.json"),
+            &serde_json::json!({
+                "content": "V-SEFM test onboarding",
+                "url": "https://platform.example.test",
+                "autoRouteAfterReview": false
+            }),
+        );
+        write_file(
+            &self
+                .package_root
+                .join("plugins/shared/loom/references/verification/sefm-verify.md"),
+            "# V-SEFM verification prompt\n",
+        );
         for name in [
             "anti-patterns",
             "content",

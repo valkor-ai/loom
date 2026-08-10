@@ -9,6 +9,7 @@ use delivery_core::{
     TransitionEngine, TransitionStore,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
+use execution::{VsefmToolInput, VsefmVerificationResolveInput};
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
     KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
@@ -95,7 +96,7 @@ impl ServerHandler for LoomMcpServer {
         )
         .with_server_info(Implementation::new("loom-mcp-server", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use registered Loom tools and resources; do not call legacy CLI commands. An auto_runnable result is a required continuation checkpoint: the agent must execute its next action and may not finish with a progress summary. If a local or wrapped tool call fails, recover from the exact failure and continue from the latest Loom state; only user_gate, done, blocked, or failed is terminal.",
+            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use verify for the V-SEFM onboarding gate. Use registered Loom tools and resources; do not call legacy CLI commands. An auto_runnable result is a required continuation checkpoint: the agent must execute its next action and may not finish with a progress summary. If a local or wrapped tool call fails, recover from the exact failure and continue from the latest Loom state; only user_gate, done, blocked, or failed is terminal.",
         )
     }
 
@@ -163,6 +164,14 @@ fn call_tool(
         "continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
+        "verify" => action_result(verify_tool(parse_args::<VsefmToolInput>(
+            request.arguments,
+        )?)),
+        "vsefmVerificationResolve" => {
+            action_result(resolve_vsefm_tool(parse_args::<
+                VsefmVerificationResolveInput,
+            >(request.arguments)?))
+        }
         "browserRuntimePrepare" => action_result(crate::browser_runtime::prepare(parse_args::<
             ProjectToolInput,
         >(
@@ -478,6 +487,9 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
         Ok(root) => root,
         Err(message) => return LoomMcpActionResult::invalid_project_root(message),
     };
+    if let Some(result) = execution::resume_unattached_vsefm(&normalized.display) {
+        return result;
+    }
     let engine = TransitionEngine {
         store: FileTransitionStore,
         dispatcher: WorkflowDomainDispatcher,
@@ -498,6 +510,24 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
             },
         }),
     }
+}
+
+fn verify_tool(mut input: VsefmToolInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    input.project_root = normalized.display;
+    execution::verify(input, WorkflowDomainDispatcher)
+}
+
+fn resolve_vsefm_tool(mut input: VsefmVerificationResolveInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    input.project_root = normalized.display;
+    execution::resolve_vsefm_verification(input, WorkflowDomainDispatcher)
 }
 
 fn brainstorm_confirm_block_tool(input: BrainstormConfirmBlockInput) -> LoomMcpActionResult {
@@ -694,6 +724,28 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
                 &normalized_input,
                 &authorized,
                 execution::accept_repair_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
+            );
+        }
+        "vsefmVerificationAcceptFile" => {
+            return persist_repairable_result(
+                &normalized_input,
+                &authorized,
+                execution::accept_vsefm_verification_file(
+                    &normalized_input,
+                    &authorized,
+                    WorkflowDomainDispatcher,
+                ),
+            );
+        }
+        "vsefmRepairAcceptFile" => {
+            return persist_repairable_result(
+                &normalized_input,
+                &authorized,
+                execution::accept_vsefm_repair_file(
                     &normalized_input,
                     &authorized,
                     WorkflowDomainDispatcher,

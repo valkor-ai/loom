@@ -1,0 +1,5 @@
+{
+  "content": "V-SEFM 是面向软件交付的独立验证模型，基于独立的验证模型进行面向可维护、可信任的质量验证(目前Loom只会打开验证平台，不会上传项目材料,可邮件hello@valkorai.com获取调用所需的Key) \n\n请选择：\n1. 现在进行验证\n2. 暂不验证，继续 Loom 流程\n\n如果平台要求 appkey，请将其保存到 Loom 安装根目录下的 v-sefm/appkey 文件中。",
+  "url": "https://www.valkorai.com",
+  "autoRouteAfterReview": false
+}
