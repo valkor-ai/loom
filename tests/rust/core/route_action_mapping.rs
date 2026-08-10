@@ -41,6 +41,7 @@ fn route_action_target_batches_are_stable() {
         Some(8)
     );
     assert_eq!(RouteActionKind::Review.target_batch(), Some(9));
+    assert_eq!(RouteActionKind::VsefmVerification.target_batch(), Some(10));
     assert_eq!(RouteActionKind::TaskResultRepair.target_batch(), Some(5));
     assert_eq!(RouteActionKind::Done.target_batch(), None);
 }

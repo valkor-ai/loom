@@ -74,11 +74,10 @@ impl RouteActionKind {
             | Self::ArchitectureArtifactContract
             | Self::TaskplanGeneration
             | Self::ContinueExecution => Some(8),
-            Self::Review
-            | Self::ExecutionRepair
-            | Self::NeedsUserDecision
-            | Self::ManualReview
-            | Self::VsefmOnboarding
+            Self::Review | Self::ExecutionRepair | Self::NeedsUserDecision | Self::ManualReview => {
+                Some(9)
+            }
+            Self::VsefmOnboarding
             | Self::VsefmVerification
             | Self::VsefmResultGate
             | Self::VsefmRepair => Some(10),
