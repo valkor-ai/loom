@@ -15,6 +15,7 @@ members = [
   "deploy",
   "verification",
   "algorithm-client",
+  "release-tests",
 ]
 
 [workspace.package]

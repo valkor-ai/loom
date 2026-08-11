@@ -5,7 +5,9 @@
   "license": "Apache-2.0",
   "private": true,
   "scripts": {
-    "rust:test": "cargo test --manifest-path src/rust/Cargo.toml",
+    "rust:test": "node scripts/rust-test.mjs",
+    "rust:test:full": "cargo test --manifest-path src/rust/Cargo.toml",
+    "rust:test:serial": "npm run rust:test:full",
     "python:test": "python3 -m pytest tests/python"
   }
 }

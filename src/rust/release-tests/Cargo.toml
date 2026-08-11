@@ -1,0 +1,61 @@
+[package]
+name = "release-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "release_tests"
+path = "lib.rs"
+
+[[bin]]
+name = "loom-mcp-server"
+path = "../mcp-server/main.rs"
+
+[[bin]]
+name = "loom-setup"
+path = "../setup/main.rs"
+
+[[test]]
+name = "release_unit"
+path = "release_unit.rs"
+
+[[test]]
+name = "release_deploy"
+path = "release_deploy.rs"
+
+[[test]]
+name = "release_mcp"
+path = "release_mcp.rs"
+
+[[test]]
+name = "release_workflows"
+path = "release_workflows.rs"
+
+[dependencies]
+algorithm-client = { path = "../algorithm-client" }
+anyhow.workspace = true
+architecture = { path = "../architecture" }
+brainstorm = { path = "../brainstorm" }
+contracts = { path = "../contracts" }
+delivery-core = { path = "../core" }
+deploy = { path = "../deploy" }
+execution = { path = "../execution" }
+knowledge = { path = "../knowledge" }
+mcp-server = { path = "../mcp-server" }
+planning = { path = "../planning" }
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+setup = { path = "../setup" }
+sha2.workspace = true
+state = { path = "../state" }
+thiserror.workspace = true
+tokio.workspace = true
+toml_edit.workspace = true
+verification = { path = "../verification" }
+workflow = { path = "../workflow" }
+zip.workspace = true
