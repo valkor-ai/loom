@@ -1016,6 +1016,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "release-tests"
+version = "0.2.8"
+dependencies = [
+ "algorithm-client",
+ "anyhow",
+ "architecture",
+ "brainstorm",
+ "contracts",
+ "delivery-core",
+ "deploy",
+ "execution",
+ "knowledge",
+ "mcp-server",
+ "planning",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "setup",
+ "sha2",
+ "state",
+ "thiserror",
+ "tokio",
+ "toml_edit",
+ "verification",
+ "workflow",
+ "zip",
+]
+
+[[package]]
 name = "rmcp"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
