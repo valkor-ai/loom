@@ -124,6 +124,18 @@ pub fn delivery_index_file(project_root: &Path, delivery_id: &str) -> PathBuf {
     delivery_dir(project_root, delivery_id).join("index.json")
 }
 
+pub fn plan_conflicts_dir(project_root: &Path) -> PathBuf {
+    project_root.join(LOOM_DIR).join("plan-conflicts")
+}
+
+pub fn plan_conflict_file(project_root: &Path, conflict_id: &str) -> PathBuf {
+    plan_conflicts_dir(project_root).join(format!("{conflict_id}.json"))
+}
+
+pub fn plan_switch_journal_file(project_root: &Path) -> PathBuf {
+    project_root.join(LOOM_DIR).join("plan-switch.json")
+}
+
 pub fn phase_tmp_dir(project_root: &Path, locator: &DeliveryPhaseLocator) -> PathBuf {
     delivery_dir(project_root, &locator.delivery_id)
         .join("tmp")

@@ -19,6 +19,7 @@ pub enum DeliveryLifecycleStatus {
     Completed,
     CompletedWithOverride,
     Blocked,
+    Superseded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -31,6 +32,50 @@ pub struct DeliveryPhaseState {
     pub next_action: Option<RouteAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_repair: Option<PendingRepair>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanConflictStatus {
+    Pending,
+    ResolvedContinue,
+    ResolvedStartNew,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanSwitchStatus {
+    Preparing,
+    NewDeliveryCreated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanSwitchJournal {
+    pub schema_version: u32,
+    pub conflict_id: String,
+    pub old_delivery_id: String,
+    pub incoming_request: crate::PlanRequestIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_delivery_id: Option<String>,
+    pub status: PlanSwitchStatus,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanConflictRecord {
+    pub schema_version: u32,
+    pub conflict_id: String,
+    pub active_delivery_id: String,
+    pub incoming_request: crate::PlanRequestIdentity,
+    pub request_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirement_files: Vec<String>,
+    pub status: PlanConflictStatus,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -88,6 +133,8 @@ pub struct DeliveryIndex {
     pub status: DeliveryLifecycleStatus,
     pub phases: Vec<DeliveryPhaseState>,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_identity: Option<crate::PlanRequestIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -107,6 +154,8 @@ pub struct ProjectStatus {
     pub last_completed_delivery_id: Option<String>,
     pub deliveries: Vec<DeliveryStatusEntry>,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_plan_conflict_id: Option<String>,
 }
 
 impl ProjectStatus {
@@ -117,6 +166,7 @@ impl ProjectStatus {
             last_completed_delivery_id: None,
             deliveries: vec![],
             updated_at: now.into(),
+            pending_plan_conflict_id: None,
         }
     }
 }
@@ -142,11 +192,31 @@ pub fn apply_delivery_index(status: &mut ProjectStatus, delivery: &DeliveryIndex
             status.active_delivery_id = None;
             status.last_completed_delivery_id = Some(delivery.delivery_id.clone());
         }
+        DeliveryLifecycleStatus::Superseded => {
+            if status.active_delivery_id.as_deref() == Some(delivery.delivery_id.as_str()) {
+                status.active_delivery_id = None;
+            }
+        }
         _ => {
             status.active_delivery_id = Some(delivery.delivery_id.clone());
         }
     }
     status.updated_at = delivery.updated_at.clone();
+}
+
+pub fn mark_delivery_superseded(status: &mut ProjectStatus, delivery_id: &str, now: String) {
+    if let Some(entry) = status
+        .deliveries
+        .iter_mut()
+        .find(|entry| entry.delivery_id == delivery_id)
+    {
+        entry.status = DeliveryLifecycleStatus::Superseded;
+        entry.updated_at = now.clone();
+    }
+    if status.last_completed_delivery_id.as_deref() == Some(delivery_id) {
+        status.last_completed_delivery_id = None;
+    }
+    status.updated_at = now;
 }
 
 pub fn status_details(
@@ -175,6 +245,7 @@ pub fn status_details(
         "deliveryStatus": delivery_status,
         "nextAction": next_action,
         "activeOperation": active_operation,
+        "pendingPlanConflictId": status.pending_plan_conflict_id,
         "warnings": warnings,
     })
 }

@@ -297,9 +297,32 @@ where
         event: SubmitAcceptedEvent,
     ) -> LoomResult<LoomMcpActionResult> {
         let mut status = self.store.load_status(&ctx.project_root)?;
+        if status.active_delivery_id.as_deref() != Some(event.delivery_id.as_str()) {
+            return Err(LoomCoreError::failure(
+                "STALE_SUBMIT_DELIVERY",
+                format!(
+                    "Accepted submit event belongs to delivery {}, but the active delivery is {:?}.",
+                    event.delivery_id, status.active_delivery_id
+                ),
+            ));
+        }
         let mut delivery = self
             .store
             .load_delivery_index(&ctx.project_root, &event.delivery_id)?;
+        if matches!(
+            delivery.status,
+            crate::DeliveryLifecycleStatus::Completed
+                | crate::DeliveryLifecycleStatus::CompletedWithOverride
+                | crate::DeliveryLifecycleStatus::Superseded
+        ) {
+            return Err(LoomCoreError::failure(
+                "STALE_SUBMIT_DELIVERY",
+                format!(
+                    "Accepted submit event belongs to delivery {}, which is no longer active.",
+                    event.delivery_id
+                ),
+            ));
+        }
         if delivery.active_phase_id != event.phase_id {
             return Err(LoomCoreError::failure(
                 "STALE_SUBMIT_PHASE",

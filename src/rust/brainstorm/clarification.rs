@@ -316,6 +316,12 @@ fn confirm_block_inner(
         message: "Brainstorm request is missing phaseId.".to_string(),
     })?;
 
+    state::ensure_active_delivery(&project_root, &delivery_id).map_err(|error| ConfirmError {
+        project_root: project_root.clone(),
+        code: "STALE_DELIVERY_REQUEST".to_string(),
+        message: error.to_string(),
+    })?;
+
     let store = FileTransitionStore;
     let mut delivery = store
         .load_delivery_index(&project_root, &delivery_id)

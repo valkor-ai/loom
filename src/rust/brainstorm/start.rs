@@ -45,6 +45,26 @@ fn start_brainstorm_inner(
     input: &ValidatedPlanInput,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let project_root = Path::new(&input.project_root);
+    let store = FileTransitionStore;
+    let status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
+    if let Some(active_delivery_id) = status.active_delivery_id.as_deref() {
+        let active_delivery = store
+            .load_delivery_index(&input.project_root, active_delivery_id)
+            .map_err(to_state_error)?;
+        let active = !matches!(
+            active_delivery.status,
+            DeliveryLifecycleStatus::Completed
+                | DeliveryLifecycleStatus::CompletedWithOverride
+                | DeliveryLifecycleStatus::Superseded
+        );
+        if active && input.supersede_active_delivery_id.as_deref() != Some(active_delivery_id) {
+            return Err(state::store::StateError::StateCorrupted(
+                "an active Loom delivery already exists; resolve the plan conflict before starting another delivery".to_string(),
+            ));
+        }
+    }
     let now = state::store::now_string();
     let delivery_id = format!("delivery-{}", state::store::now_millis());
     let phase_id = "phase-1".to_string();
@@ -169,8 +189,8 @@ fn start_brainstorm_inner(
             pending_repair: None,
         }],
         updated_at: now.clone(),
+        request_identity: Some(input.request_identity.clone()),
     };
-    let store = FileTransitionStore;
     store
         .save_delivery_index(&input.project_root, &delivery)
         .map_err(to_state_error)?;

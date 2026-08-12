@@ -3,8 +3,8 @@ use std::{borrow::Cow, sync::Arc};
 use brainstorm::BrainstormConfirmBlockInput;
 use delivery_core::{
     normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestResult,
-    LoomMcpActionResult, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
-    ReadFieldGroupResult,
+    LoomMcpActionResult, PlanConflictResolveInput, PlanToolInput, ProjectToolInput,
+    ReadFieldGroupInput, ReadFieldGroupResult,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use execution::{VsefmToolInput, VsefmVerificationResolveInput};
@@ -33,6 +33,7 @@ pub struct ToolRegistration {
 pub enum ToolInputKind {
     Project,
     Plan,
+    PlanConflictResolve,
     FileSubmit,
     BrainstormConfirmBlock,
     KnowledgeAdd,
@@ -89,6 +90,14 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         description: "Rehydrate and continue the active Loom workflow for the current project after an interruption or context loss. Follow the returned action immediately; do not finish while it is auto_runnable or stopAllowed is false.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "planConflictResolve",
+        description: "Resolve an active plan conflict: choice 1 continues the current delivery; choice 2 supersedes it and starts the pending new requirement.",
+        target_batch: 4,
+        input_kind: ToolInputKind::PlanConflictResolve,
         output_kind: ToolOutputKind::ActionResult,
         implemented: true,
     },
@@ -501,6 +510,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
     normalize_schema_arc(match kind {
         ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
         ToolInputKind::Plan => schema_for_type::<PlanToolInput>(),
+        ToolInputKind::PlanConflictResolve => schema_for_type::<PlanConflictResolveInput>(),
         ToolInputKind::FileSubmit => schema_for_type::<FileSubmitInput>(),
         ToolInputKind::BrainstormConfirmBlock => schema_for_type::<BrainstormConfirmBlockInput>(),
         ToolInputKind::KnowledgeAdd => schema_for_type::<KnowledgeAddInput>(),

@@ -9,6 +9,8 @@ You are the Claude Code adapter for Loom MCP. The `/loom` command chooses the fi
 
 Do not replace Loom with Claude Plan Mode. Do not inspect project `.loom` state to decide the next step. Use Loom MCP tools and resources.
 
+When `loom.plan` returns a plan-conflict user gate, present its numbered choices and descriptions exactly. Choice 1 calls `loom.planConflictResolve` with `continue_current`; choice 2 calls it with `start_new`. Do not call `loom.plan` again to resolve the conflict.
+
 ## Result Discipline
 
 - `auto_runnable`: keep going immediately by executing the returned `next.kind`.

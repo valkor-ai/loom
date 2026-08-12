@@ -70,6 +70,7 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
             "knowledgeStatus",
             "knowledgeUpdate",
             "plan",
+            "planConflictResolve",
             "readFieldGroup",
             "recordTaskResultFile",
             "repairSubmitFile",

@@ -1,6 +1,6 @@
 use delivery_core::{
-    DeliveryIndex, LoomCoreError, LoomResult, OperationLease, ProjectStatus, TransitionDiagnostic,
-    TransitionStore,
+    DeliveryIndex, DeliveryLifecycleStatus, LoomCoreError, LoomResult, OperationLease,
+    ProjectStatus, TransitionDiagnostic, TransitionStore,
 };
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     project::initialize_project,
     store::{
         ensure_dir, now_millis, now_string, path_exists, read_json, write_json_atomic,
-        write_text_atomic, StateResult,
+        write_text_atomic, StateError, StateResult,
     },
 };
 
@@ -57,6 +57,10 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
         &paths.tmp_dir,
         &paths.requests_dir,
         &paths.metrics_dir,
+        &paths
+            .root
+            .join(crate::paths::LOOM_DIR)
+            .join("plan-conflicts"),
         &paths.config_file,
         &paths.status_file,
         &paths.gitignore_file,
@@ -99,6 +103,32 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
         created,
         already_existed,
     })
+}
+
+pub fn ensure_active_delivery(project_root: &str, delivery_id: &str) -> StateResult<()> {
+    let store = FileTransitionStore;
+    let status = store
+        .load_status(project_root)
+        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    if status.active_delivery_id.as_deref() != Some(delivery_id) {
+        return Err(StateError::StateCorrupted(format!(
+            "STALE_DELIVERY_REQUEST: delivery {delivery_id} is not the active Loom delivery"
+        )));
+    }
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    if matches!(
+        delivery.status,
+        DeliveryLifecycleStatus::Completed
+            | DeliveryLifecycleStatus::CompletedWithOverride
+            | DeliveryLifecycleStatus::Superseded
+    ) {
+        return Err(StateError::StateCorrupted(format!(
+            "STALE_DELIVERY_REQUEST: delivery {delivery_id} is no longer active"
+        )));
+    }
+    Ok(())
 }
 
 impl TransitionStore for FileTransitionStore {

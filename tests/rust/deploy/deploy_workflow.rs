@@ -4703,6 +4703,7 @@ impl Fixture {
                     pending_repair: None,
                 }],
                 updated_at: now_string(),
+                request_identity: None,
             },
         )
         .expect("write delivery index");
@@ -4719,6 +4720,7 @@ impl Fixture {
                     updated_at: now_string(),
                 }],
                 updated_at: now_string(),
+                pending_plan_conflict_id: None,
             },
         )
         .expect("write status");

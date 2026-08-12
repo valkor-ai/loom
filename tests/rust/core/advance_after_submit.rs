@@ -23,6 +23,7 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
             pending_repair: None,
         }],
         updated_at: "1".to_string(),
+        request_identity: None,
     };
     apply_delivery_index(&mut status, &delivery);
     let store = MemoryStore::new(status).with_delivery(delivery);
@@ -84,6 +85,7 @@ fn advance_after_submit_rejects_a_stale_phase_event() {
             },
         ],
         updated_at: "1".to_string(),
+        request_identity: None,
     };
     apply_delivery_index(&mut status, &delivery);
     let store = MemoryStore::new(status).with_delivery(delivery);
@@ -118,6 +120,64 @@ fn advance_after_submit_rejects_a_stale_phase_event() {
             .active_phase_id,
         "phase_1"
     );
+}
+
+#[test]
+fn advance_after_submit_rejects_an_event_from_a_superseded_delivery() {
+    let mut status = ProjectStatus::empty("1");
+    let old_delivery = DeliveryIndex {
+        schema_version: 1,
+        delivery_id: "delivery_old".to_string(),
+        active_phase_id: "phase_1".to_string(),
+        status: DeliveryLifecycleStatus::Superseded,
+        phases: vec![DeliveryPhaseState {
+            phase_id: "phase_1".to_string(),
+            latest_refs: Default::default(),
+            next_action: None,
+            pending_repair: None,
+        }],
+        updated_at: "1".to_string(),
+        request_identity: None,
+    };
+    let active_delivery = DeliveryIndex {
+        schema_version: 1,
+        delivery_id: "delivery_new".to_string(),
+        active_phase_id: "phase_1".to_string(),
+        status: DeliveryLifecycleStatus::Planning,
+        phases: vec![DeliveryPhaseState {
+            phase_id: "phase_1".to_string(),
+            latest_refs: Default::default(),
+            next_action: None,
+            pending_repair: None,
+        }],
+        updated_at: "1".to_string(),
+        request_identity: None,
+    };
+    apply_delivery_index(&mut status, &active_delivery);
+    let store = MemoryStore::new(status)
+        .with_delivery(old_delivery)
+        .with_delivery(active_delivery);
+    let engine = TransitionEngine {
+        store,
+        dispatcher: TestDispatcher,
+    };
+
+    let error = engine
+        .advance_after_submit(
+            OperationContext {
+                project_root: "/tmp/project".to_string(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id: "delivery_old".to_string(),
+                phase_id: "phase_1".to_string(),
+                source_tool: "loom.reviewAcceptFile".to_string(),
+                accepted_artifact_ref: "loom://artifact/stale-review".to_string(),
+                next_action: Some(RouteAction::done("stale")),
+            },
+        )
+        .expect_err("stale delivery event must fail");
+
+    assert_eq!(error.code(), "STALE_SUBMIT_DELIVERY");
 }
 
 struct TestDispatcher;

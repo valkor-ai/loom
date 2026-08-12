@@ -45,6 +45,12 @@ pub fn initialize_project(project_root: &str) -> StateResult<ProjectConfig> {
     ensure_dir(&paths.tmp_dir)?;
     ensure_dir(&paths.requests_dir)?;
     ensure_dir(&paths.metrics_dir)?;
+    ensure_dir(
+        &paths
+            .root
+            .join(crate::paths::LOOM_DIR)
+            .join("plan-conflicts"),
+    )?;
     let config = if path_exists(&paths.config_file) {
         read_project_config(project_root)?
     } else {

@@ -944,6 +944,8 @@ fn resolve_brainstorm_request_scope(
             "requestRef {request_ref} is missing phaseId in request index"
         ))
     })?;
+    state::ensure_active_delivery(project_root, &delivery_id)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
     Ok(BrainstormRequestScope {
         request_id,
         delivery_id,

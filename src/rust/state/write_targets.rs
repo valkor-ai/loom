@@ -65,6 +65,14 @@ pub fn authorize_write_targets(
     let index_entry =
         get_request_index_entry(&input.project_root, &parsed.request_id).map_err(fatal_state)?;
 
+    if let Some(request_delivery_id) = index_entry.delivery_id.as_deref() {
+        if let Err(error) =
+            crate::lifecycle_store::ensure_active_delivery(&input.project_root, request_delivery_id)
+        {
+            return Err(fatal("STALE_DELIVERY_REQUEST", error.to_string()));
+        }
+    }
+
     let paths = project_paths(&input.project_root).map_err(fatal_state)?;
     let request_file =
         from_project_relative(&paths.root, &index_entry.request_file).map_err(fatal_state)?;
