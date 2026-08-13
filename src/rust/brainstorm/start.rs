@@ -220,7 +220,7 @@ fn start_brainstorm_inner(
                     .supersede_active_delivery_id
                     .as_deref()
                     .unwrap_or_default()
-            || input.expected_lifecycle_revision != Some(conflict.active_revision)
+            || status.pending_plan_conflict_id.as_deref() != Some(conflict_id)
         {
             return Err(state::store::StateError::StateCorrupted(
                 "STALE_PLAN_CONFLICT: the plan conflict changed before the new delivery was committed"
@@ -406,5 +406,5 @@ fn summarize_request(request_text: &str, file_count: usize) -> RequestSummary {
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }

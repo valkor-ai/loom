@@ -1,9 +1,9 @@
 use std::{collections::BTreeSet, path::Path};
 
 use delivery_core::{
-    canonical_tool_name, submit_tool_accepts_artifact, ArtifactKind, DeliveryIndex,
-    FileSubmitInput, LoomMcpRepairableErrorResult, PendingRepair, ReadGroupRef, RepairIssue,
-    RouteAction, SubmitPreflightSummary, WriteMode, WriteTarget,
+    canonical_tool_name, submit_tool_accepts_artifact, ArtifactKind, FileSubmitInput,
+    LoomMcpRepairableErrorResult, ReadGroupRef, RepairIssue, RouteAction, SubmitPreflightSummary,
+    WriteMode, WriteTarget,
 };
 use serde_json::Value;
 
@@ -273,24 +273,27 @@ pub fn record_pending_repair(
     else {
         return Ok(());
     };
-    let paths = project_paths(project_root)?;
-    let delivery_file = crate::paths::delivery_index_file(&paths.root, delivery_id);
-    let mut delivery: DeliveryIndex = crate::store::read_json(&delivery_file)?;
-    let phase = delivery
-        .phases
-        .iter_mut()
-        .find(|phase| phase.phase_id == *phase_id)
-        .ok_or_else(|| {
-            StateError::StateCorrupted(format!(
-                "delivery {delivery_id} is missing phase {phase_id}"
-            ))
-        })?;
-    phase.pending_repair = Some(PendingRepair::from_result(
-        authorized.request_ref.clone(),
-        result,
-    ));
-    delivery.updated_at = crate::store::now_string();
-    crate::store::write_json_atomic(&delivery_file, &delivery)
+    crate::lifecycle::mutate_active_delivery(
+        project_root,
+        delivery_id,
+        Some(phase_id),
+        |delivery, _status| {
+            let phase = delivery
+                .phases
+                .iter_mut()
+                .find(|phase| phase.phase_id == *phase_id)
+                .ok_or_else(|| {
+                    StateError::StateCorrupted(format!(
+                        "delivery {delivery_id} is missing phase {phase_id}"
+                    ))
+                })?;
+            phase.pending_repair = Some(delivery_core::PendingRepair::from_result(
+                authorized.request_ref.clone(),
+                result,
+            ));
+            Ok(())
+        },
+    )
 }
 
 pub fn record_pending_repair_for_request(
@@ -311,21 +314,27 @@ pub fn record_pending_repair_for_request(
     else {
         return Ok(());
     };
-    let paths = project_paths(project_root)?;
-    let delivery_file = crate::paths::delivery_index_file(&paths.root, &delivery_id);
-    let mut delivery: DeliveryIndex = crate::store::read_json(&delivery_file)?;
-    let phase = delivery
-        .phases
-        .iter_mut()
-        .find(|phase| phase.phase_id == phase_id)
-        .ok_or_else(|| {
-            StateError::StateCorrupted(format!(
-                "delivery {delivery_id} is missing phase {phase_id}"
-            ))
-        })?;
-    phase.pending_repair = Some(PendingRepair::from_result(request_ref, result));
-    delivery.updated_at = crate::store::now_string();
-    crate::store::write_json_atomic(&delivery_file, &delivery)
+    crate::lifecycle::mutate_active_delivery(
+        project_root,
+        &delivery_id,
+        Some(&phase_id),
+        |delivery, _status| {
+            let phase = delivery
+                .phases
+                .iter_mut()
+                .find(|phase| phase.phase_id == phase_id)
+                .ok_or_else(|| {
+                    StateError::StateCorrupted(format!(
+                        "delivery {delivery_id} is missing phase {phase_id}"
+                    ))
+                })?;
+            phase.pending_repair = Some(delivery_core::PendingRepair::from_result(
+                request_ref,
+                result,
+            ));
+            Ok(())
+        },
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

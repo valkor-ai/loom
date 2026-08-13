@@ -7,6 +7,8 @@ use std::{
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
+use delivery_core::LoomCoreError;
+
 pub type StateResult<T> = Result<T, StateError>;
 
 #[derive(Debug, Error)]
@@ -19,6 +21,33 @@ pub enum StateError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("state busy: {0}")]
+    Busy(String),
+}
+
+impl StateError {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy(_))
+    }
+}
+
+pub fn from_core_error(error: LoomCoreError) -> StateError {
+    if error.code() == "LIFECYCLE_COMMIT_BUSY"
+        || error.message().contains("LIFECYCLE_COMMIT_BUSY")
+        || error.message().starts_with("state busy:")
+    {
+        StateError::Busy(error.to_string())
+    } else {
+        StateError::StateCorrupted(error.to_string())
+    }
+}
+
+pub fn to_core_error(error: StateError) -> LoomCoreError {
+    if error.is_busy() {
+        LoomCoreError::failure("LIFECYCLE_COMMIT_BUSY", error.to_string())
+    } else {
+        LoomCoreError::failure("STATE_ERROR", error.to_string())
+    }
 }
 
 pub fn ensure_dir(path: &Path) -> StateResult<()> {

@@ -11,6 +11,12 @@ use crate::{
 };
 
 pub fn persist_plan_request(input: &ValidatedPlanInput) -> StateResult<String> {
+    crate::lifecycle::with_lifecycle_lock(&input.project_root, || {
+        persist_plan_request_locked(input)
+    })
+}
+
+fn persist_plan_request_locked(input: &ValidatedPlanInput) -> StateResult<String> {
     let paths = project_paths(&input.project_root)?;
     let request =
         canonical_plan_request(&paths.root, &input.request_text, &input.requirement_files)

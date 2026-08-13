@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
@@ -9,7 +10,7 @@ use std::{
 
 use delivery_core::{
     apply_delivery_index, DeliveryIndex, DeliveryLifecycleStatus, OperationLease,
-    PlanConflictRecord, PlanConflictStatus, ProjectStatus, TransitionStore,
+    PlanConflictRecord, PlanConflictStatus, ProjectStatus,
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,9 @@ const LOCK_WAIT: Duration = Duration::from_secs(2);
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 
 static PROCESS_PROJECT_LOCKS: OnceLock<(Mutex<HashMap<PathBuf, bool>>, Condvar)> = OnceLock::new();
+thread_local! {
+    static LIFECYCLE_LOCK_ROOTS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
 
 struct ProcessProjectGuard {
     key: PathBuf,
@@ -55,6 +59,10 @@ struct LifecycleCommitGuard {
 impl Drop for LifecycleCommitGuard {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
+        LIFECYCLE_LOCK_ROOTS.with(|roots| {
+            let key = self._process_guard.key.clone();
+            roots.borrow_mut().retain(|root| root != &key);
+        });
     }
 }
 
@@ -122,6 +130,10 @@ impl Drop for StagedProject {
 }
 
 impl StagedProject {
+    pub fn cleanup_root(&self) -> PathBuf {
+        self.cleanup_root.clone()
+    }
+
     pub fn into_commit_cleanup(mut self) -> PathBuf {
         let cleanup_root = self.cleanup_root.clone();
         self.committed = true;
@@ -180,7 +192,9 @@ fn collect_prepared_artifacts_inner(
                 ))
             })?
             .to_path_buf();
-        if relative == Path::new(".loom/config.json") || relative == Path::new(".loom/status.json")
+        if relative == Path::new(".loom/config.json")
+            || relative == Path::new(".loom/status.json")
+            || !is_allowed_staged_artifact(&relative)
         {
             continue;
         }
@@ -192,11 +206,88 @@ fn collect_prepared_artifacts_inner(
     Ok(())
 }
 
+fn is_allowed_staged_artifact(relative: &Path) -> bool {
+    let mut components = relative.components();
+    if components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        != Some(".loom")
+    {
+        return false;
+    }
+    match components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    {
+        Some("deliveries") | Some("requests") | Some("metrics") | Some("verification") => true,
+        Some("refs") => {
+            components
+                .next()
+                .and_then(|component| component.as_os_str().to_str())
+                == Some("requests")
+        }
+        _ => false,
+    }
+}
+
+fn validate_prepared_artifact(root: &Path, artifact: &PreparedArtifact) -> StateResult<()> {
+    let relative = artifact.target.strip_prefix(root).map_err(|_| {
+        StateError::InvalidArgument(format!(
+            "prepared artifact target is outside the project root: {}",
+            artifact.target.display()
+        ))
+    })?;
+    if !is_allowed_staged_artifact(relative) {
+        return Err(StateError::InvalidArgument(format!(
+            "prepared artifact target is outside the lifecycle allowlist: {}",
+            relative.display()
+        )));
+    }
+    let staged_relative = artifact.staged.strip_prefix(root).map_err(|_| {
+        StateError::InvalidArgument(format!(
+            "prepared artifact staging path is outside the project root: {}",
+            artifact.staged.display()
+        ))
+    })?;
+    if !staged_relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|component| component == ".loom")
+        || staged_relative
+            .components()
+            .nth(1)
+            .and_then(|component| component.as_os_str().to_str())
+            != Some("tmp")
+    {
+        return Err(StateError::InvalidArgument(format!(
+            "prepared artifact staging path is outside .loom/tmp: {}",
+            artifact.staged.display()
+        )));
+    }
+    Ok(())
+}
+
 pub fn commit_lifecycle(
     project_root: &str,
     commit: LifecycleCommit,
 ) -> StateResult<LifecycleCommitResult> {
     commit_lifecycle_with_artifacts(project_root, commit, Vec::new(), None)
+}
+
+/// Run a short state operation under the project OS lock. Long-running agent,
+/// review, and verification work must stay outside this closure.
+pub fn with_lifecycle_lock<T>(
+    project_root: &str,
+    operation: impl FnOnce() -> StateResult<T>,
+) -> StateResult<T> {
+    let root = project_paths(project_root)?.root;
+    if lifecycle_lock_held_for(&root) {
+        return operation();
+    }
+    let _guard = acquire_lifecycle_lock(&root)?;
+    recover_pending_transactions_locked(&root)?;
+    operation()
 }
 
 pub fn commit_lifecycle_with_artifacts(
@@ -206,12 +297,24 @@ pub fn commit_lifecycle_with_artifacts(
     cleanup_root: Option<PathBuf>,
 ) -> StateResult<LifecycleCommitResult> {
     let root = project_paths(project_root)?.root;
+    for artifact in &artifacts {
+        validate_prepared_artifact(&root, artifact)?;
+    }
+    if lifecycle_lock_held_for(&root) {
+        return commit_lifecycle_with_artifacts_locked(&root, commit, artifacts, cleanup_root);
+    }
     let _guard = acquire_lifecycle_lock(&root)?;
-    recover_lifecycle_transaction_locked(&root)?;
-    let store = FileTransitionStore;
-    let mut status = store
-        .load_status(project_root)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    commit_lifecycle_with_artifacts_locked(&root, commit, artifacts, cleanup_root)
+}
+
+fn commit_lifecycle_with_artifacts_locked(
+    root: &Path,
+    commit: LifecycleCommit,
+    artifacts: Vec<PreparedArtifact>,
+    cleanup_root: Option<PathBuf>,
+) -> StateResult<LifecycleCommitResult> {
+    recover_pending_transactions_locked(&root)?;
+    let mut status: ProjectStatus = read_json(&root.join(".loom/status.json"))?;
 
     if let Some(expected) = commit.expected_revision {
         if status.revision != expected {
@@ -235,9 +338,7 @@ pub fn commit_lifecycle_with_artifacts(
                 "STALE_DELIVERY_REQUEST: no active delivery is available".to_string(),
             )
         })?;
-        let active = store
-            .load_delivery_index(project_root, active_id)
-            .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+        let active: DeliveryIndex = read_json(&delivery_index_file(&root, active_id))?;
         if active.active_phase_id != expected_phase {
             return Err(StateError::StateCorrupted(format!(
                 "STALE_SUBMIT_PHASE: expected {expected_phase}, current {}",
@@ -262,8 +363,26 @@ pub fn commit_lifecycle_with_artifacts(
 
 pub fn recover_lifecycle_transaction(project_root: &str) -> StateResult<()> {
     let root = project_paths(project_root)?.root;
+    if lifecycle_lock_held_for(&root) {
+        return recover_pending_transactions_locked(&root);
+    }
     let _guard = acquire_lifecycle_lock(&root)?;
-    recover_lifecycle_transaction_locked(&root)
+    recover_pending_transactions_locked(&root)
+}
+
+pub fn recover_pending_transactions(project_root: &str) -> StateResult<()> {
+    let root = project_paths(project_root)?.root;
+    if lifecycle_lock_held_for(&root) {
+        recover_pending_transactions_locked(&root)
+    } else {
+        let _guard = acquire_lifecycle_lock(&root)?;
+        recover_pending_transactions_locked(&root)
+    }
+}
+
+pub fn lifecycle_lock_held_for(root: &Path) -> bool {
+    let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    LIFECYCLE_LOCK_ROOTS.with(|locked| locked.borrow().iter().any(|root| root == &key))
 }
 
 pub fn commit_delivery(
@@ -291,20 +410,27 @@ pub fn mutate_active_delivery<T>(
     mutate: impl FnOnce(&mut DeliveryIndex, &mut ProjectStatus) -> StateResult<T>,
 ) -> StateResult<T> {
     let root = project_paths(project_root)?.root;
+    if lifecycle_lock_held_for(&root) {
+        return mutate_active_delivery_locked(&root, delivery_id, phase_id, mutate);
+    }
     let _guard = acquire_lifecycle_lock(&root)?;
-    recover_lifecycle_transaction_locked(&root)?;
-    let store = FileTransitionStore;
-    let mut status = store
-        .load_status(project_root)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    mutate_active_delivery_locked(&root, delivery_id, phase_id, mutate)
+}
+
+fn mutate_active_delivery_locked<T>(
+    root: &Path,
+    delivery_id: &str,
+    phase_id: Option<&str>,
+    mutate: impl FnOnce(&mut DeliveryIndex, &mut ProjectStatus) -> StateResult<T>,
+) -> StateResult<T> {
+    recover_pending_transactions_locked(&root)?;
+    let mut status: ProjectStatus = read_json(&root.join(".loom/status.json"))?;
     if status.active_delivery_id.as_deref() != Some(delivery_id) {
         return Err(StateError::StateCorrupted(format!(
             "STALE_DELIVERY_REQUEST: delivery {delivery_id} is not the active Loom delivery"
         )));
     }
-    let mut delivery = store
-        .load_delivery_index(project_root, delivery_id)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    let mut delivery: DeliveryIndex = read_json(&delivery_index_file(&root, delivery_id))?;
     if let Some(expected_phase) = phase_id {
         if delivery.active_phase_id != expected_phase {
             return Err(StateError::StateCorrupted(format!(
@@ -349,12 +475,28 @@ pub fn mutate_lifecycle<T>(
     )>,
 ) -> StateResult<T> {
     let root = project_paths(project_root)?.root;
+    if lifecycle_lock_held_for(&root) {
+        return mutate_lifecycle_locked(&root, mutate);
+    }
     let _guard = acquire_lifecycle_lock(&root)?;
-    recover_lifecycle_transaction_locked(&root)?;
+    mutate_lifecycle_locked(&root, mutate)
+}
+
+fn mutate_lifecycle_locked<T>(
+    root: &Path,
+    mutate: impl FnOnce(
+        &mut ProjectStatus,
+        &FileTransitionStore,
+    ) -> StateResult<(
+        T,
+        Vec<DeliveryIndex>,
+        Vec<PlanConflictRecord>,
+        Vec<OperationLease>,
+    )>,
+) -> StateResult<T> {
+    recover_pending_transactions_locked(&root)?;
     let store = FileTransitionStore;
-    let mut status = store
-        .load_status(project_root)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+    let mut status: ProjectStatus = read_json(&root.join(".loom/status.json"))?;
     let (value, deliveries, conflicts, leases) = mutate(&mut status, &store)?;
     persist_locked(
         &root,
@@ -380,7 +522,7 @@ fn acquire_lifecycle_lock(root: &Path) -> StateResult<LifecycleCommitGuard> {
     while active.contains_key(&key) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(StateError::StateCorrupted(
+            return Err(StateError::Busy(
                 "LIFECYCLE_COMMIT_BUSY: another in-process lifecycle commit is in progress"
                     .to_string(),
             ));
@@ -392,7 +534,7 @@ fn acquire_lifecycle_lock(root: &Path) -> StateResult<LifecycleCommitGuard> {
             })?;
         active = next;
         if timeout.timed_out() && Instant::now() >= deadline {
-            return Err(StateError::StateCorrupted(
+            return Err(StateError::Busy(
                 "LIFECYCLE_COMMIT_BUSY: another in-process lifecycle commit is in progress"
                     .to_string(),
             ));
@@ -400,7 +542,7 @@ fn acquire_lifecycle_lock(root: &Path) -> StateResult<LifecycleCommitGuard> {
     }
     active.insert(key.clone(), true);
     drop(active);
-    let process_guard = ProcessProjectGuard { key };
+    let process_guard = ProcessProjectGuard { key: key.clone() };
     let file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -412,7 +554,7 @@ fn acquire_lifecycle_lock(root: &Path) -> StateResult<LifecycleCommitGuard> {
             Ok(()) => break,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err(StateError::StateCorrupted(
+                    return Err(StateError::Busy(
                         "LIFECYCLE_COMMIT_BUSY: another lifecycle commit is in progress"
                             .to_string(),
                     ));
@@ -422,10 +564,15 @@ fn acquire_lifecycle_lock(root: &Path) -> StateResult<LifecycleCommitGuard> {
             Err(error) => return Err(StateError::Io(error)),
         }
     }
+    LIFECYCLE_LOCK_ROOTS.with(|locked| locked.borrow_mut().push(key));
     Ok(LifecycleCommitGuard {
         _process_guard: process_guard,
         file,
     })
+}
+
+fn recover_pending_transactions_locked(root: &Path) -> StateResult<()> {
+    recover_lifecycle_transaction_locked(root)
 }
 
 fn recover_lifecycle_transaction_locked(root: &Path) -> StateResult<()> {
@@ -434,8 +581,36 @@ fn recover_lifecycle_transaction_locked(root: &Path) -> StateResult<()> {
         return Ok(());
     }
     let transaction: LifecycleTransaction = read_json(&file)?;
-    apply_transaction(root, &transaction)?;
-    crate::store::remove_file_if_exists(&file)
+    let status: ProjectStatus = read_json(&root.join(".loom/status.json"))?;
+    match status.revision.cmp(&transaction.expected_revision) {
+        std::cmp::Ordering::Equal => {
+            apply_transaction(root, &transaction)?;
+            crate::store::remove_file_if_exists(&file)
+        }
+        std::cmp::Ordering::Greater if status.revision == transaction.target_revision => {
+            if status != transaction.project_status {
+                return Err(StateError::StateCorrupted(format!(
+                    "lifecycle transaction {} reached target revision with different state",
+                    transaction.transaction_id
+                )));
+            }
+            apply_transaction(root, &transaction)?;
+            crate::store::remove_file_if_exists(&file)
+        }
+        std::cmp::Ordering::Greater => {
+            crate::store::remove_file_if_exists(&file)?;
+            if let Some(cleanup_root) = transaction.cleanup_root.as_ref() {
+                if cleanup_root.exists() {
+                    fs::remove_dir_all(cleanup_root)?;
+                }
+            }
+            Ok(())
+        }
+        std::cmp::Ordering::Less => Err(StateError::StateCorrupted(format!(
+            "lifecycle transaction {} has current revision {} below expected {}",
+            transaction.transaction_id, status.revision, transaction.expected_revision
+        ))),
+    }
 }
 
 fn persist_locked(
@@ -487,8 +662,29 @@ fn persist_locked(
 }
 
 fn apply_transaction(root: &Path, transaction: &LifecycleTransaction) -> StateResult<()> {
+    apply_artifacts(root, &transaction.artifacts)?;
+    for delivery in &transaction.deliveries {
+        write_json_atomic(&delivery_index_file(root, &delivery.delivery_id), delivery)?;
+    }
+    for conflict in &transaction.conflicts {
+        write_json_atomic(&plan_conflict_file(root, &conflict.conflict_id), conflict)?;
+    }
+    for lease in &transaction.leases {
+        write_json_atomic(&operation_lease_file(root, &lease.delivery_id), lease)?;
+    }
+    write_json_atomic(&root.join(".loom/status.json"), &transaction.project_status)?;
+    if let Some(cleanup_root) = transaction.cleanup_root.as_ref() {
+        if cleanup_root.exists() {
+            fs::remove_dir_all(cleanup_root)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_artifacts(root: &Path, artifacts: &[PreparedArtifact]) -> StateResult<()> {
     let request_index_target = project_paths(&root.to_string_lossy())?.request_index_file;
-    for artifact in &transaction.artifacts {
+    for artifact in artifacts {
+        validate_prepared_artifact(root, artifact)?;
         if let Some(parent) = artifact.target.parent() {
             ensure_dir(parent)?;
         }
@@ -516,21 +712,6 @@ fn apply_transaction(root: &Path, transaction: &LifecycleTransaction) -> StateRe
                 }
             }
             fs::rename(&artifact.staged, &artifact.target)?;
-        }
-    }
-    for delivery in &transaction.deliveries {
-        write_json_atomic(&delivery_index_file(root, &delivery.delivery_id), delivery)?;
-    }
-    for conflict in &transaction.conflicts {
-        write_json_atomic(&plan_conflict_file(root, &conflict.conflict_id), conflict)?;
-    }
-    for lease in &transaction.leases {
-        write_json_atomic(&operation_lease_file(root, &lease.delivery_id), lease)?;
-    }
-    write_json_atomic(&root.join(".loom/status.json"), &transaction.project_status)?;
-    if let Some(cleanup_root) = transaction.cleanup_root.as_ref() {
-        if cleanup_root.exists() {
-            fs::remove_dir_all(cleanup_root)?;
         }
     }
     Ok(())
@@ -660,4 +841,91 @@ fn validate_lifecycle_invariants(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use delivery_core::TransitionStore;
+    use std::sync::{Mutex, OnceLock};
+
+    fn fixture(name: &str) -> PathBuf {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "loom-lifecycle-state-{name}-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        crate::lifecycle_store::init_project_state(root.to_str().unwrap()).unwrap();
+        root
+    }
+
+    #[test]
+    fn stale_revision_cannot_overwrite_newer_status() {
+        let root = fixture("stale-revision");
+        let root_str = root.to_str().unwrap();
+        let first = commit_lifecycle(root_str, LifecycleCommit::default()).unwrap();
+        let error = commit_lifecycle(
+            root_str,
+            LifecycleCommit {
+                expected_revision: Some(0),
+                ..LifecycleCommit::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("STALE_LIFECYCLE_REVISION"));
+        assert_eq!(
+            FileTransitionStore.load_status(root_str).unwrap().revision,
+            first.revision
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transaction_at_expected_revision_is_recovered() {
+        let root = fixture("recover-transaction");
+        let root_str = root.to_str().unwrap();
+        let status = FileTransitionStore.load_status(root_str).unwrap();
+        let transaction = LifecycleTransaction {
+            schema_version: 1,
+            transaction_id: "tx-recover".to_string(),
+            expected_revision: status.revision,
+            target_revision: status.revision + 1,
+            status: LifecycleTransactionStatus::Prepared,
+            project_status: ProjectStatus {
+                revision: status.revision + 1,
+                ..status.clone()
+            },
+            deliveries: vec![],
+            conflicts: vec![],
+            leases: vec![],
+            artifacts: vec![],
+            cleanup_root: None,
+            created_at: now_string(),
+        };
+        write_json_atomic(&lifecycle_transaction_file(&root), &transaction).unwrap();
+        recover_lifecycle_transaction(root_str).unwrap();
+        assert_eq!(
+            FileTransitionStore.load_status(root_str).unwrap().revision,
+            1
+        );
+        assert!(!lifecycle_transaction_file(&root).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn artifact_allowlist_rejects_project_and_private_loom_paths() {
+        assert!(is_allowed_staged_artifact(Path::new(
+            ".loom/deliveries/d/index.json"
+        )));
+        assert!(!is_allowed_staged_artifact(Path::new("src/main.rs")));
+        assert!(!is_allowed_staged_artifact(Path::new(".loom/status.json")));
+        assert!(!is_allowed_staged_artifact(Path::new(".loom/config.json")));
+        assert!(!is_allowed_staged_artifact(Path::new(
+            ".loom/agent-writable/result.json"
+        )));
+    }
 }

@@ -138,14 +138,18 @@ pub fn write_native_request(
     project_root: &str,
     input: NativeRequestInput,
 ) -> StateResult<StoredRequest> {
-    write_native_request_inner(project_root, input, true)
+    crate::lifecycle::with_lifecycle_lock(project_root, || {
+        write_native_request_inner(project_root, input, true)
+    })
 }
 
 pub fn write_native_request_staged(
     project_root: &str,
     input: NativeRequestInput,
 ) -> StateResult<StoredRequest> {
-    write_native_request_inner(project_root, input, false)
+    crate::lifecycle::with_lifecycle_lock(project_root, || {
+        write_native_request_inner(project_root, input, false)
+    })
 }
 
 fn write_native_request_inner(

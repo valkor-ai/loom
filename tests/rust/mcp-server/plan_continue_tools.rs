@@ -1,4 +1,4 @@
-use delivery_core::{InspectRequestInput, ReadRequestFieldsInput};
+use delivery_core::{InspectRequestInput, ReadRequestFieldsInput, TransitionStore};
 use mcp_server::LoomMcpServer;
 use serde_json::{json, Value};
 use state::{paths::from_project_relative, store::write_json_atomic};
@@ -1228,6 +1228,149 @@ fn repeated_conflicting_plan_returns_the_same_pending_gate() {
     );
     assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 1);
     assert_eq!(count_entries(&fixture.root.join(".loom/plan-conflicts")), 1);
+}
+
+#[test]
+fn different_plan_request_does_not_replace_an_existing_pending_conflict() {
+    let fixture = Fixture::new("plan-conflict-pending-request");
+    let server = LoomMcpServer::default();
+    server
+        .invoke_tool(
+            "loom.plan",
+            Some(args(json!({
+                "projectRoot": fixture.root_str(),
+                "requestText": "实现证券账户开户流程"
+            }))),
+        )
+        .expect("first plan");
+
+    let first_conflict = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现订单查询与导出"
+                }))),
+            )
+            .expect("first conflict"),
+    );
+    let conflict_ref = first_conflict["gate"]["conflictRef"]
+        .as_str()
+        .expect("conflict ref")
+        .to_string();
+    let conflict_file = fixture
+        .root
+        .join(".loom/plan-conflicts")
+        .join(conflict_ref.rsplit('/').next().expect("conflict file"));
+    let first_record: Value = serde_json::from_str(
+        &std::fs::read_to_string(&conflict_file).expect("read first pending conflict"),
+    )
+    .expect("parse first pending conflict");
+
+    let second_conflict = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现客户资料批量导入"
+                }))),
+            )
+            .expect("second conflicting plan"),
+    );
+
+    assert_eq!(second_conflict["state"], "user_gate");
+    assert_eq!(second_conflict["gate"]["kind"], "plan_conflict_pending");
+    assert_eq!(second_conflict["gate"]["conflictRef"], conflict_ref);
+    assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 1);
+    assert_eq!(count_entries(&fixture.root.join(".loom/plan-conflicts")), 1);
+
+    let conflict: Value = serde_json::from_str(
+        &std::fs::read_to_string(&conflict_file).expect("read pending conflict"),
+    )
+    .expect("parse pending conflict");
+    assert_eq!(
+        conflict["incomingRequestFingerprint"],
+        first_record["incomingRequestFingerprint"]
+    );
+    assert_eq!(
+        conflict["incomingRequestRef"],
+        first_record["incomingRequestRef"]
+    );
+}
+
+#[test]
+fn pending_plan_conflict_is_not_replaced_after_current_delivery_revision_changes() {
+    let fixture = Fixture::new("plan-conflict-pending-revision");
+    let server = LoomMcpServer::default();
+    server
+        .invoke_tool(
+            "loom.plan",
+            Some(args(json!({
+                "projectRoot": fixture.root_str(),
+                "requestText": "实现证券账户开户流程"
+            }))),
+        )
+        .expect("first plan");
+    let first_conflict = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现订单查询与导出"
+                }))),
+            )
+            .expect("first conflict"),
+    );
+    let conflict_ref = first_conflict["gate"]["conflictRef"]
+        .as_str()
+        .expect("conflict ref")
+        .to_string();
+    let status = state::lifecycle_store::FileTransitionStore
+        .load_status(fixture.root_str())
+        .expect("read status");
+    state::commit_lifecycle(
+        fixture.root_str(),
+        state::LifecycleCommit {
+            expected_revision: Some(status.revision),
+            ..state::LifecycleCommit::default()
+        },
+    )
+    .expect("advance current delivery revision");
+
+    let second_conflict = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现客户资料批量导入"
+                }))),
+            )
+            .expect("second conflicting plan"),
+    );
+
+    assert_eq!(second_conflict["state"], "user_gate");
+    assert_eq!(second_conflict["gate"]["kind"], "plan_conflict_pending");
+    assert_eq!(second_conflict["gate"]["conflictRef"], conflict_ref);
+    assert_eq!(count_entries(&fixture.root.join(".loom/plan-conflicts")), 1);
+
+    let resolved = structured(
+        server
+            .invoke_tool(
+                "loom.planConflictResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "conflictRef": conflict_ref,
+                    "choice": "start_new"
+                }))),
+            )
+            .expect("resolve pending conflict after revision change"),
+    );
+    assert_eq!(resolved["state"], "user_gate");
+    assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 2);
 }
 
 #[test]

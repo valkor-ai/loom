@@ -108,10 +108,14 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
 }
 
 pub fn ensure_active_delivery(project_root: &str, delivery_id: &str) -> StateResult<()> {
+    let paths = project_paths(project_root)?;
+    if !path_exists(&paths.status_file) {
+        return Ok(());
+    }
     let store = FileTransitionStore;
     let status = store
         .load_status(project_root)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+        .map_err(crate::store::from_core_error)?;
     if status.active_delivery_id.as_deref() != Some(delivery_id) {
         return Err(StateError::StateCorrupted(format!(
             "STALE_DELIVERY_REQUEST: delivery {delivery_id} is not the active Loom delivery"
@@ -119,7 +123,7 @@ pub fn ensure_active_delivery(project_root: &str, delivery_id: &str) -> StateRes
     }
     let delivery = store
         .load_delivery_index(project_root, delivery_id)
-        .map_err(|error| StateError::StateCorrupted(error.to_string()))?;
+        .map_err(crate::store::from_core_error)?;
     if matches!(
         delivery.status,
         DeliveryLifecycleStatus::Completed
@@ -143,6 +147,10 @@ impl TransitionStore for FileTransitionStore {
                 format!("Loom is not initialized for {}.", paths.root.display()),
             ));
         }
+        if !crate::lifecycle_lock_held_for(&paths.root) {
+            crate::recover_pending_transactions(&paths.root.to_string_lossy())
+                .map_err(crate::store::to_core_error)?;
+        }
         read_json(&paths.status_file)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
     }
@@ -161,6 +169,10 @@ impl TransitionStore for FileTransitionStore {
     ) -> LoomResult<DeliveryIndex> {
         let paths = project_paths(project_root)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        if !crate::lifecycle_lock_held_for(&paths.root) {
+            crate::recover_pending_transactions(&paths.root.to_string_lossy())
+                .map_err(crate::store::to_core_error)?;
+        }
         let file = crate::paths::delivery_index_file(&paths.root, delivery_id);
         if !path_exists(&file) {
             return Err(LoomCoreError::failure(
@@ -268,7 +280,7 @@ impl TransitionStore for FileTransitionStore {
         status: &mut ProjectStatus,
     ) -> LoomResult<()> {
         let result = crate::commit_delivery(project_root, delivery.clone(), Some(status.revision))
-            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+            .map_err(crate::store::to_core_error)?;
         *status = result.status;
         Ok(())
     }
@@ -289,7 +301,7 @@ impl TransitionStore for FileTransitionStore {
                 ..crate::LifecycleCommit::default()
             },
         )
-        .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        .map_err(crate::store::to_core_error)?;
         Ok(result.revision)
     }
 

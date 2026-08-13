@@ -1166,5 +1166,5 @@ fn read_technical_baseline(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }

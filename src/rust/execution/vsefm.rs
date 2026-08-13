@@ -34,30 +34,30 @@ pub struct VsefmVerificationResolveInput {
 }
 
 fn verify_session_lifecycle_revision(project_root: &str, session: &Value) -> Result<(), String> {
-    let Some(expected) = session.get("lifecycleRevision").and_then(Value::as_u64) else {
+    let Some(delivery_id) = session.get("deliveryId").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let Some(phase_id) = session.get("phaseId").and_then(Value::as_str) else {
         return Ok(());
     };
     let current = FileTransitionStore
         .load_status(project_root)
         .map_err(|error| error.to_string())?;
-    if current.revision != expected {
+    if current.active_delivery_id.as_deref() != Some(delivery_id) {
         return Err(format!(
-            "V-SEFM session is stale: expected lifecycle revision {expected}, current {}",
-            current.revision
+            "V-SEFM session belongs to delivery {delivery_id}, which is no longer active"
+        ));
+    }
+    let delivery = FileTransitionStore
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(|error| error.to_string())?;
+    if delivery.active_phase_id != phase_id {
+        return Err(format!(
+            "V-SEFM session belongs to phase {phase_id}, while active phase is {}",
+            delivery.active_phase_id
         ));
     }
     Ok(())
-}
-
-fn attach_session_lifecycle_revision(project_root: &str, session: &mut Value) {
-    let Some(delivery_id) = session.get("deliveryId").and_then(Value::as_str) else {
-        return;
-    };
-    if let Ok(status) = FileTransitionStore.load_status(project_root) {
-        if status.active_delivery_id.as_deref() == Some(delivery_id) {
-            session["lifecycleRevision"] = json!(status.revision);
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -908,25 +908,18 @@ fn start_local_verification(
     ) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
     }
-    let lifecycle_revision =
-        if let (Some(delivery_id), Some(phase_id)) = (effective_delivery_id.as_deref(), phase_id) {
-            match persist_vsefm_verification_action(
-                project_root,
-                delivery_id,
-                phase_id,
-                &verification_id,
-                &stored.request_ref,
-                &trigger,
-            ) {
-                Ok(revision) => Some(revision),
-                Err(error) => return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error),
-            }
-        } else {
-            attach_session_lifecycle_revision(project_root, &mut session);
-            None
-        };
-    if let Some(revision) = lifecycle_revision {
-        session["lifecycleRevision"] = json!(revision);
+    if let (Some(delivery_id), Some(phase_id)) = (effective_delivery_id.as_deref(), phase_id) {
+        match persist_vsefm_verification_action(
+            project_root,
+            delivery_id,
+            phase_id,
+            &verification_id,
+            &stored.request_ref,
+            &trigger,
+        ) {
+            Ok(_) => (),
+            Err(error) => return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error),
+        }
     }
     if let Err(error) = state::store::write_json_atomic(&session_dir.join("state.json"), &session) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
@@ -3213,7 +3206,6 @@ where
         .join(verification_id)
         .join("state.json");
     let mut updated = session.clone();
-    attach_session_lifecycle_revision(project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert("status".to_string(), json!(status));
         object.insert("updatedAt".to_string(), json!(state::store::now_string()));
@@ -4139,7 +4131,6 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
         }
     };
     let mut updated = session.clone();
-    attach_session_lifecycle_revision(project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert("status".to_string(), json!("repairing"));
         object.insert("repairId".to_string(), json!(repair_id));
@@ -4352,7 +4343,6 @@ pub fn accept_vsefm_repair_file<D: DomainDispatcher>(
     }
     let changed_files = repair_changed_files(root, &session);
     let mut updated = session.clone();
-    attach_session_lifecycle_revision(&input.project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert(
             "status".to_string(),

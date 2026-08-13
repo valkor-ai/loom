@@ -697,5 +697,5 @@ fn normalize_next_phase_id(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> StateError {
-    StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }
