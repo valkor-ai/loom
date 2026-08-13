@@ -604,8 +604,15 @@ fn confirm_block_inner(
     };
 
     delivery.updated_at = state::store::now_string();
+    let mut status = store
+        .load_status(&project_root)
+        .map_err(|error| ConfirmError {
+            project_root: project_root.clone(),
+            code: "DELIVERY_SAVE_FAILED".to_string(),
+            message: error.to_string(),
+        })?;
     store
-        .save_delivery_index(&project_root, &delivery)
+        .commit_delivery_state(&project_root, &delivery, &mut status)
         .map_err(|error| ConfirmError {
             project_root,
             code: "DELIVERY_SAVE_FAILED".to_string(),

@@ -57,6 +57,8 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
         &paths.tmp_dir,
         &paths.requests_dir,
         &paths.metrics_dir,
+        &crate::paths::lifecycle_dir(&paths.root),
+        &crate::paths::plan_requests_dir(&paths.root),
         &paths
             .root
             .join(crate::paths::LOOM_DIR)
@@ -257,6 +259,38 @@ impl TransitionStore for FileTransitionStore {
             }),
         )
         .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
+    }
+
+    fn commit_delivery_state(
+        &self,
+        project_root: &str,
+        delivery: &DeliveryIndex,
+        status: &mut ProjectStatus,
+    ) -> LoomResult<()> {
+        let result = crate::commit_delivery(project_root, delivery.clone(), Some(status.revision))
+            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        *status = result.status;
+        Ok(())
+    }
+
+    fn commit_operation_lease(
+        &self,
+        project_root: &str,
+        delivery_id: &str,
+        lease: &OperationLease,
+        expected_revision: u64,
+    ) -> LoomResult<u64> {
+        let result = crate::commit_lifecycle(
+            project_root,
+            crate::LifecycleCommit {
+                expected_revision: Some(expected_revision),
+                expected_active_delivery_id: Some(Some(delivery_id.to_string())),
+                leases: vec![lease.clone()],
+                ..crate::LifecycleCommit::default()
+            },
+        )
+        .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        Ok(result.revision)
     }
 
     fn now_millis(&self) -> u128 {

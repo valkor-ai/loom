@@ -12,9 +12,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use contracts::{BrainstormContract, ClarificationBlockName, NextPhasePreview};
 use delivery_core::{
-    apply_delivery_index, read_selectors_value_from_paths, DeliveryIndex, DeliveryLifecycleStatus,
-    DeliveryPhaseState, DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind,
-    TransitionStore, ValidatedPlanInput,
+    read_selectors_value_from_paths, DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState,
+    DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, TransitionStore,
+    ValidatedPlanInput,
 };
 use serde_json::{json, Value};
 use state::{
@@ -191,11 +191,7 @@ pub fn materialize_next_phase_from_preview(
     delivery.status = DeliveryLifecycleStatus::Planning;
     delivery.updated_at = now;
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     Ok(Some(handoff))
 }
@@ -477,11 +473,7 @@ pub fn materialize_phase_brainstorm_from_preview(
     delivery.status = DeliveryLifecycleStatus::Planning;
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     Ok(Some(PhaseBrainstormRequest {
         phase_id: phase_id.to_string(),

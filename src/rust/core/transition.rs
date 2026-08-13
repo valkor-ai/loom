@@ -32,6 +32,29 @@ pub trait TransitionStore {
         project_root: &str,
         diagnostic: &TransitionDiagnostic,
     ) -> LoomResult<()>;
+    /// Commit a delivery index and its project-status projection as one
+    /// lifecycle mutation. File-backed stores override this with the
+    /// lifecycle coordinator; in-memory stores can use the default sequence.
+    fn commit_delivery_state(
+        &self,
+        project_root: &str,
+        delivery: &DeliveryIndex,
+        status: &mut ProjectStatus,
+    ) -> LoomResult<()> {
+        self.save_delivery_index(project_root, delivery)?;
+        apply_delivery_index(status, delivery);
+        self.save_status(project_root, status)
+    }
+    fn commit_operation_lease(
+        &self,
+        project_root: &str,
+        delivery_id: &str,
+        lease: &OperationLease,
+        expected_revision: u64,
+    ) -> LoomResult<u64> {
+        self.write_operation_lease(project_root, delivery_id, lease)?;
+        Ok(expected_revision)
+    }
     fn now_millis(&self) -> u128;
     fn now_string(&self) -> String;
 }
@@ -168,8 +191,12 @@ where
                 ));
             }
             existing.mark_stale_recovered(self.store.now_string());
-            self.store
-                .write_operation_lease(&ctx.project_root, &active_delivery_id, existing)?;
+            status.revision = self.store.commit_operation_lease(
+                &ctx.project_root,
+                &active_delivery_id,
+                existing,
+                status.revision,
+            )?;
         }
 
         if active_phase
@@ -222,9 +249,7 @@ where
             }
             delivery.active_phase_id = target_phase_id;
             self.store
-                .save_delivery_index(&ctx.project_root, &delivery)?;
-            apply_delivery_index(&mut status, &delivery);
-            self.store.save_status(&ctx.project_root, &status)?;
+                .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
             active_phase = current_phase(&delivery).cloned().ok_or_else(|| {
                 LoomCoreError::failure(
                     "PHASE_NOT_FOUND",
@@ -352,9 +377,7 @@ where
         phase.pending_repair = None;
         delivery.updated_at = self.store.now_string();
         self.store
-            .save_delivery_index(&ctx.project_root, &delivery)?;
-        apply_delivery_index(&mut status, &delivery);
-        self.store.save_status(&ctx.project_root, &status)?;
+            .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
         self.continue_current(ctx)
     }
 }

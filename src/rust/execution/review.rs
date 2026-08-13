@@ -11,11 +11,11 @@ use contracts::{
     TaskResult, TaskResultStatus, TaskRunStatus,
 };
 use delivery_core::{
-    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
-    DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
-    LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
+    FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure,
+    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
+    OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
+    TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -188,8 +188,9 @@ fn materialize_review_request_inner(
         });
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     write_review_result(project_root, &stored.request_ref)
 }
@@ -3312,11 +3313,7 @@ fn update_delivery_after_review(
     }
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -3365,11 +3362,7 @@ fn update_delivery_after_manual_review_request(
     }
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -3421,11 +3414,7 @@ fn update_delivery_after_manual_review_resolution(
     }
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.to_string(),

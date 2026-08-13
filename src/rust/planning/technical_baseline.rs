@@ -196,8 +196,9 @@ fn materialize_request_inner(
         );
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     if matches!(project_kind, ProjectKind::NewProject) && previous_baseline.is_none() {
         Ok(technical_baseline_recommendation_gate(
@@ -1560,8 +1561,11 @@ where
             .insert("technicalBaseline".to_string(), baseline_ref.clone());
     }
     delivery.updated_at = now;
+    let mut status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
     store
-        .save_delivery_index(&input.project_root, &delivery)
+        .commit_delivery_state(&input.project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
 
     let next_action = if matches!(persisted.project_kind, ProjectKind::ExistingProject)

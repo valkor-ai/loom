@@ -398,16 +398,8 @@ fn status_tool(input: ProjectToolInput) -> LoomMcpActionResult {
         Ok(root) => root,
         Err(message) => return LoomMcpActionResult::invalid_project_root(message),
     };
-    let has_plan_switch = state::paths::project_paths(&normalized.display)
-        .ok()
-        .is_some_and(|paths| state::paths::plan_switch_journal_file(&paths.root).exists());
-    if has_plan_switch {
-        let recovery = state::with_plan_transition_lock(&normalized.display, || {
-            state::recover_plan_switch(&normalized.display)
-        });
-        if let Err(error) = recovery {
-            return state_failure(normalized.display, error.to_string());
-        }
+    if let Err(error) = state::recover_lifecycle_transaction(&normalized.display) {
+        return state_failure(normalized.display, error.to_string());
     }
     let store = FileTransitionStore;
     let status = match store.load_status(&normalized.display) {
@@ -505,12 +497,11 @@ fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
             });
         }
     };
-    match state::with_plan_transition_lock(&validated.project_root, || {
-        init_project_state(&validated.project_root)
-            .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-        state::recover_plan_switch(&validated.project_root)?;
-        route_plan_request(&validated)
-    }) {
+    let result = init_project_state(&validated.project_root)
+        .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))
+        .and_then(|_| state::persist_plan_request(&validated).map(|_| ()))
+        .and_then(|_| route_plan_request(&validated));
+    match result {
         Ok(result) => result,
         Err(error) => state_failure(validated.project_root, error.to_string()),
     }
@@ -520,14 +511,16 @@ fn route_plan_request(
     input: &delivery_core::ValidatedPlanInput,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let store = FileTransitionStore;
-    state::recover_plan_switch(&input.project_root)?;
-    let mut status = store
+    state::recover_lifecycle_transaction(&input.project_root)?;
+    let status = store
         .load_status(&input.project_root)
         .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
 
     let Some(active_delivery_id) = status.active_delivery_id.clone() else {
-        expire_stale_plan_conflict(&input.project_root, &mut status, store)?;
-        return Ok(WorkflowDomainDispatcher.start_brainstorm(input));
+        let mut prepared = input.clone();
+        prepared.expected_lifecycle_revision = Some(status.revision);
+        prepared.supersede_active_delivery_id = None;
+        return Ok(WorkflowDomainDispatcher.start_brainstorm(&prepared));
     };
     let active_delivery = store
         .load_delivery_index(&input.project_root, &active_delivery_id)
@@ -538,32 +531,25 @@ fn route_plan_request(
             | delivery_core::DeliveryLifecycleStatus::CompletedWithOverride
             | delivery_core::DeliveryLifecycleStatus::Superseded
     ) {
-        status.active_delivery_id = None;
-        expire_stale_plan_conflict(&input.project_root, &mut status, store)?;
-        store
-            .save_status(&input.project_root, &status)
+        let result = state::mutate_lifecycle(&input.project_root, |current, _| {
+            if current.active_delivery_id.as_deref() == Some(active_delivery_id.as_str()) {
+                current.active_delivery_id = None;
+            }
+            Ok(((), Vec::new(), Vec::new(), Vec::new()))
+        });
+        result?;
+        let refreshed = store
+            .load_status(&input.project_root)
             .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-        return Ok(WorkflowDomainDispatcher.start_brainstorm(input));
+        let mut prepared = input.clone();
+        prepared.expected_lifecycle_revision = Some(refreshed.revision);
+        return Ok(WorkflowDomainDispatcher.start_brainstorm(&prepared));
     }
 
-    let mut active_delivery = active_delivery;
-    if active_delivery.request_identity.is_none() {
-        if let Some(identity) =
-            derive_legacy_delivery_identity(&input.project_root, &active_delivery)?
-        {
-            active_delivery.request_identity = Some(identity);
-            store
-                .save_delivery_index(&input.project_root, &active_delivery)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-        }
-    }
-
-    if active_delivery
-        .request_identity
-        .as_ref()
-        .is_some_and(|identity| identity == &input.request_identity)
+    if active_delivery.request_fingerprint.as_deref()
+        == Some(input.request_identity.fingerprint.as_str())
     {
-        resolve_pending_plan_conflict_as_continue(&input.project_root, &mut status, store)?;
+        resolve_pending_plan_conflict_as_continue(&input.project_root, &status)?;
         return Ok(continue_tool_inner(ProjectToolInput {
             project_root: input.project_root.clone(),
         }));
@@ -576,100 +562,94 @@ fn route_plan_request(
                     "pending plan conflict {conflict_id} cannot be read: {error}"
                 ))
             })?;
-        if conflict.status == delivery_core::PlanConflictStatus::Pending {
+        if conflict.status == delivery_core::PlanConflictStatus::Pending
+            && conflict.active_delivery_id == active_delivery_id
+            && conflict.incoming_request_fingerprint == input.request_identity.fingerprint
+        {
             return Ok(plan_conflict_gate(&input.project_root, &conflict));
         }
-        status.pending_plan_conflict_id = None;
-        store
-            .save_status(&input.project_root, &status)
-            .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
     }
 
-    let conflict =
-        state::create_or_load_plan_conflict(&input.project_root, &active_delivery_id, input)
-            .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-    status.pending_plan_conflict_id = Some(conflict.conflict_id.clone());
-    store
-        .save_status(&input.project_root, &status)
-        .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
+    let mut conflict = state::create_or_load_plan_conflict(
+        &input.project_root,
+        &active_delivery_id,
+        status.revision.saturating_add(1),
+        input,
+    )
+    .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
+    conflict.active_revision = status.revision.saturating_add(1);
+    conflict.status = delivery_core::PlanConflictStatus::Pending;
+    conflict.updated_at = state::store::now_string();
+    let replacement = conflict.clone();
+    state::commit_lifecycle(
+        &input.project_root,
+        state::LifecycleCommit {
+            expected_revision: Some(status.revision),
+            expected_active_delivery_id: Some(Some(active_delivery_id)),
+            conflicts: pending_conflict_replacement(&input.project_root, &status, replacement)?,
+            pending_plan_conflict_id: Some(Some(conflict.conflict_id.clone())),
+            ..state::LifecycleCommit::default()
+        },
+    )?;
     Ok(plan_conflict_gate(&input.project_root, &conflict))
-}
-
-fn expire_stale_plan_conflict(
-    project_root: &str,
-    status: &mut delivery_core::ProjectStatus,
-    store: FileTransitionStore,
-) -> Result<(), state::store::StateError> {
-    if let Some(conflict_id) = status.pending_plan_conflict_id.take() {
-        state::expire_plan_conflict(project_root, &conflict_id)?;
-        store
-            .save_status(project_root, status)
-            .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-    }
-    Ok(())
 }
 
 fn resolve_pending_plan_conflict_as_continue(
     project_root: &str,
-    status: &mut delivery_core::ProjectStatus,
-    store: FileTransitionStore,
+    status: &delivery_core::ProjectStatus,
 ) -> Result<(), state::store::StateError> {
-    let Some(conflict_id) = status.pending_plan_conflict_id.take() else {
+    let Some(conflict_id) = status.pending_plan_conflict_id.as_deref() else {
         return Ok(());
     };
-    if let Ok(mut conflict) = state::load_plan_conflict(project_root, &conflict_id) {
-        if conflict.status == delivery_core::PlanConflictStatus::Pending {
-            conflict.status = delivery_core::PlanConflictStatus::ResolvedContinue;
-            conflict.updated_at = state::store::now_string();
-            state::save_plan_conflict(project_root, &conflict)?;
-        }
+    let mut conflict = state::load_plan_conflict(project_root, conflict_id)?;
+    if conflict.status == delivery_core::PlanConflictStatus::Pending {
+        conflict.status = delivery_core::PlanConflictStatus::ResolvedContinue;
+        conflict.updated_at = state::store::now_string();
     }
-    store
-        .save_status(project_root, status)
-        .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))
+    state::commit_lifecycle(
+        project_root,
+        state::LifecycleCommit {
+            expected_revision: Some(status.revision),
+            conflicts: vec![conflict],
+            pending_plan_conflict_id: Some(None),
+            ..state::LifecycleCommit::default()
+        },
+    )?;
+    Ok(())
 }
 
-fn derive_legacy_delivery_identity(
+fn pending_conflict_replacement(
     project_root: &str,
-    delivery: &delivery_core::DeliveryIndex,
-) -> Result<Option<delivery_core::PlanRequestIdentity>, state::store::StateError> {
-    let paths = state::paths::project_paths(project_root)?;
-    let contract_file = state::paths::delivery_dir(&paths.root, &delivery.delivery_id)
-        .join("brainstorm")
-        .join("contract.json");
-    if !contract_file.exists() {
-        return Ok(None);
+    status: &delivery_core::ProjectStatus,
+    replacement: delivery_core::PlanConflictRecord,
+) -> Result<Vec<delivery_core::PlanConflictRecord>, state::store::StateError> {
+    let mut records = Vec::new();
+    if let Some(conflict_id) = status.pending_plan_conflict_id.as_deref() {
+        if conflict_id != replacement.conflict_id {
+            let mut previous = state::load_plan_conflict(project_root, conflict_id)?;
+            if previous.status == delivery_core::PlanConflictStatus::Pending {
+                previous.status = delivery_core::PlanConflictStatus::Expired;
+                previous.updated_at = state::store::now_string();
+            }
+            records.push(previous);
+        }
     }
-    let contract = state::store::read_json_value(&contract_file)?;
-    let Some(request_text) = contract
-        .pointer("/deliveryContext/originalRequest/text")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return Ok(None);
-    };
-    let requirement_files = contract
-        .pointer("/deliveryContext/originalRequest/inputRefs")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    delivery_core::build_plan_request_identity(&paths.root, request_text, &requirement_files)
-        .map(Some)
-        .map_err(state::store::StateError::InvalidArgument)
+    records.push(replacement);
+    Ok(records)
 }
 
 fn plan_conflict_gate(
     project_root: &str,
     conflict: &delivery_core::PlanConflictRecord,
 ) -> LoomMcpActionResult {
+    let request = state::load_plan_request(project_root, &conflict.incoming_request_ref).ok();
+    let request_text = request
+        .as_ref()
+        .map(|request| request.request_text.as_str())
+        .unwrap_or("待处理的新需求");
     let prompt = format!(
         "当前已有一个 Loom 交付正在进行，本次请求与当前交付不同。\n\n当前交付：{}\n本次新请求：{}\n\n请选择：\n\n1. 继续当前交付：继续执行原需求，本次新请求暂不创建交付\n2. 开始新的需求：关闭当前交付并开始本次新需求",
-        conflict.active_delivery_id, conflict.request_text
+        conflict.active_delivery_id, request_text
     );
     LoomMcpActionResult::UserGate(
         delivery_core::LoomMcpUserGateResult::new(
@@ -681,9 +661,8 @@ fn plan_conflict_gate(
             None,
             Some(json!({
                 "kind": "plan_conflict",
-                "conflictRef": format!(".loom/plan-conflicts/{}.json", conflict.conflict_id),
-                "incomingRequestText": conflict.request_text,
-                "incomingRequirementFiles": conflict.requirement_files,
+                "conflictRef": state::conflict_ref(conflict),
+                "incomingRequestText": request_text,
                 "choices": [
                     {"number": "1", "choice": "continue_current", "label": "继续当前交付"},
                     {"number": "2", "choice": "start_new", "label": "开始新的需求"}
@@ -701,20 +680,18 @@ fn resolve_plan_conflict(input: PlanConflictResolveInput) -> LoomMcpActionResult
         Ok(root) => root,
         Err(message) => return LoomMcpActionResult::invalid_project_root(message),
     };
-    let result = state::with_plan_transition_lock(&normalized.display, || {
-        resolve_plan_conflict_locked(&normalized.display, input)
-    });
+    let result = resolve_plan_conflict_inner(&normalized.display, input);
     match result {
         Ok(result) => result,
         Err(error) => state_failure(normalized.display, error.to_string()),
     }
 }
 
-fn resolve_plan_conflict_locked(
+fn resolve_plan_conflict_inner(
     project_root: &str,
     input: PlanConflictResolveInput,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
-    state::recover_plan_switch(project_root)?;
+    state::recover_lifecycle_transaction(project_root)?;
     let conflict_id = state::conflict_id_from_ref(&input.conflict_ref)?;
     let mut conflict = state::load_plan_conflict(project_root, &conflict_id)?;
     if conflict.status != delivery_core::PlanConflictStatus::Pending {
@@ -723,10 +700,12 @@ fn resolve_plan_conflict_locked(
         ));
     }
     let store = FileTransitionStore;
-    let mut status = store
+    let status = store
         .load_status(project_root)
         .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-    if status.active_delivery_id.as_deref() != Some(conflict.active_delivery_id.as_str()) {
+    if status.active_delivery_id.as_deref() != Some(conflict.active_delivery_id.as_str())
+        || status.revision != conflict.active_revision
+    {
         return Err(state::store::StateError::StateCorrupted(
             "the active delivery changed before the plan conflict was resolved".to_string(),
         ));
@@ -736,83 +715,39 @@ fn resolve_plan_conflict_locked(
         PlanConflictChoice::ContinueCurrent => {
             conflict.status = delivery_core::PlanConflictStatus::ResolvedContinue;
             conflict.updated_at = state::store::now_string();
-            state::save_plan_conflict(project_root, &conflict)?;
-            status.pending_plan_conflict_id = None;
-            store
-                .save_status(project_root, &status)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
+            state::commit_lifecycle(
+                project_root,
+                state::LifecycleCommit {
+                    expected_revision: Some(status.revision),
+                    expected_active_delivery_id: Some(Some(conflict.active_delivery_id.clone())),
+                    conflicts: vec![conflict],
+                    pending_plan_conflict_id: Some(None),
+                    ..state::LifecycleCommit::default()
+                },
+            )?;
             Ok(continue_tool_inner(ProjectToolInput {
                 project_root: project_root.to_string(),
             }))
         }
         PlanConflictChoice::StartNew => {
+            let request = state::load_plan_request(project_root, &conflict.incoming_request_ref)?;
             let mut validated = validate_plan_input(PlanToolInput {
                 project_root: project_root.to_string(),
-                request_text: conflict.request_text.clone(),
-                requirement_files: conflict.requirement_files.clone(),
+                request_text: request.request_text,
+                requirement_files: request.requirement_file_refs,
             })
             .map_err(state::store::StateError::InvalidArgument)?;
-            if validated.request_identity != conflict.incoming_request {
+            if validated.request_identity.fingerprint != conflict.incoming_request_fingerprint
+                || validated.request_identity.request_ref != conflict.incoming_request_ref
+            {
                 return Err(state::store::StateError::InvalidArgument(
                     "the pending plan request changed; start a new loom.plan request".to_string(),
                 ));
             }
             validated.supersede_active_delivery_id = Some(conflict.active_delivery_id.clone());
-            state::begin_plan_switch(
-                project_root,
-                &conflict.conflict_id,
-                &conflict.active_delivery_id,
-                &conflict.incoming_request,
-            )?;
-            let mut old_delivery = store
-                .load_delivery_index(project_root, &conflict.active_delivery_id)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-            let result = WorkflowDomainDispatcher.start_brainstorm(&validated);
-            if matches!(result, LoomMcpActionResult::Failed(_)) {
-                // Keep the journal so the next Loom status/continue call can
-                // reconcile a partially-created delivery before retrying.
-                return Ok(result);
-            }
-            let Some(new_delivery_id) = (match &result {
-                LoomMcpActionResult::UserGate(gate) => gate.delivery_id.clone(),
-                _ => None,
-            }) else {
-                return Err(state::store::StateError::StateCorrupted(
-                    "new plan did not return a delivery id".to_string(),
-                ));
-            };
-            state::mark_plan_switch_new_delivery(project_root, &new_delivery_id)?;
-            old_delivery.status = delivery_core::DeliveryLifecycleStatus::Superseded;
-            old_delivery.updated_at = state::store::now_string();
-            store
-                .save_delivery_index(project_root, &old_delivery)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-            if let Some(mut lease) = store
-                .read_operation_lease(project_root, &conflict.active_delivery_id)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?
-            {
-                lease.close(state::store::now_string());
-                store
-                    .write_operation_lease(project_root, &conflict.active_delivery_id, &lease)
-                    .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-            }
-            status = store
-                .load_status(project_root)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-            delivery_core::mark_delivery_superseded(
-                &mut status,
-                &conflict.active_delivery_id,
-                state::store::now_string(),
-            );
-            status.pending_plan_conflict_id = None;
-            store
-                .save_status(project_root, &status)
-                .map_err(|error| state::store::StateError::StateCorrupted(error.to_string()))?;
-            conflict.status = delivery_core::PlanConflictStatus::ResolvedStartNew;
-            conflict.updated_at = state::store::now_string();
-            state::save_plan_conflict(project_root, &conflict)?;
-            state::complete_plan_switch(project_root)?;
-            Ok(result)
+            validated.expected_lifecycle_revision = Some(status.revision);
+            validated.plan_conflict_id = Some(conflict.conflict_id);
+            Ok(WorkflowDomainDispatcher.start_brainstorm(&validated))
         }
     }
 }
@@ -822,24 +757,12 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
         Ok(root) => root,
         Err(message) => return LoomMcpActionResult::invalid_project_root(message),
     };
-    let project_has_state = state::paths::project_paths(&normalized.display)
-        .ok()
-        .is_some_and(|paths| paths.status_file.exists());
-    if !project_has_state {
-        return continue_tool_inner(ProjectToolInput {
-            project_root: normalized.display,
-        });
+    if let Err(error) = state::recover_lifecycle_transaction(&normalized.display) {
+        return state_failure(normalized.display, error.to_string());
     }
-    let project_root = normalized.display.clone();
-    match state::with_plan_transition_lock(&project_root, || {
-        state::recover_plan_switch(&project_root)?;
-        Ok(continue_tool_inner(ProjectToolInput {
-            project_root: project_root.clone(),
-        }))
-    }) {
-        Ok(result) => result,
-        Err(error) => state_failure(project_root, error.to_string()),
-    }
+    continue_tool_inner(ProjectToolInput {
+        project_root: normalized.display,
+    })
 }
 
 fn continue_tool_inner(input: ProjectToolInput) -> LoomMcpActionResult {
@@ -904,24 +827,11 @@ fn brainstorm_confirm_block_tool(input: BrainstormConfirmBlockInput) -> LoomMcpA
         skipped: input.skipped,
         skip_reason: input.skip_reason,
     };
-    let project_root = input.project_root.clone();
-    match state::with_plan_transition_lock(&project_root, || Ok(brainstorm::confirm_block(input))) {
-        Ok(result) => result,
-        Err(error) => state_failure(project_root, error.to_string()),
-    }
+    brainstorm::confirm_block(input)
 }
 
 fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionResult {
-    let normalized = match normalize_project_root(&input.project_root) {
-        Ok(root) => root,
-        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
-    };
-    match state::with_plan_transition_lock(&normalized.display, || {
-        Ok(submit_file_tool_locked(tool_name, input))
-    }) {
-        Ok(result) => result,
-        Err(error) => state_failure(normalized.display, error.to_string()),
-    }
+    submit_file_tool_locked(tool_name, input)
 }
 
 fn submit_file_tool_locked(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionResult {
@@ -1206,16 +1116,11 @@ fn knowledge_brainstorm_context_tool(
     };
     let project_root = normalized.display.clone();
     input.project_root = project_root.clone();
-    match state::with_plan_transition_lock(&project_root, || {
-        Ok(knowledge_action(
-            &project_root,
-            "Knowledge Brainstorm context prepared.",
-            knowledge::brainstorm_context(input),
-        ))
-    }) {
-        Ok(result) => result,
-        Err(error) => state_failure(project_root, error.to_string()),
-    }
+    knowledge_action(
+        &project_root,
+        "Knowledge Brainstorm context prepared.",
+        knowledge::brainstorm_context(input),
+    )
 }
 
 fn persist_repairable_result(

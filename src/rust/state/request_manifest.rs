@@ -20,7 +20,7 @@ use crate::{
         from_project_relative, request_file_for_id, request_storage_manifest_file,
         shared_request_refs_dir, to_project_relative,
     },
-    project::initialize_project,
+    project::{initialize_project, initialize_staged_project},
     read_audit::{now_for_audit, record_request_size_audit, ReadPlanSizeWarning, RequestSizeAudit},
     request_index::{
         upsert_request_index_entry, validate_request_id, RequestIndexEntry, RequestSourceProtocol,
@@ -138,8 +138,27 @@ pub fn write_native_request(
     project_root: &str,
     input: NativeRequestInput,
 ) -> StateResult<StoredRequest> {
+    write_native_request_inner(project_root, input, true)
+}
+
+pub fn write_native_request_staged(
+    project_root: &str,
+    input: NativeRequestInput,
+) -> StateResult<StoredRequest> {
+    write_native_request_inner(project_root, input, false)
+}
+
+fn write_native_request_inner(
+    project_root: &str,
+    input: NativeRequestInput,
+    register_project: bool,
+) -> StateResult<StoredRequest> {
     validate_request_id(&input.request_id)?;
-    let config = initialize_project(project_root)?;
+    let config = if register_project {
+        initialize_project(project_root)?
+    } else {
+        initialize_staged_project(project_root)?
+    };
     let project_paths = crate::paths::project_paths(project_root)?;
     let request_ref = request_ref(&config.project_id, &input.request_id);
     let request_file = match &input.request_file {

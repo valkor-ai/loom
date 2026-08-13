@@ -27,9 +27,19 @@ pub struct PlanRequirementFileIdentity {
 #[serde(rename_all = "camelCase")]
 pub struct PlanRequestIdentity {
     pub schema_version: u32,
+    pub fingerprint: String,
+    pub request_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalPlanRequest {
+    pub schema_version: u32,
     pub request_text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirement_files: Vec<PlanRequirementFileIdentity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirement_file_refs: Vec<String>,
     pub fingerprint: String,
 }
 
@@ -40,6 +50,8 @@ pub struct ValidatedPlanInput {
     pub requirement_files: Vec<String>,
     pub request_identity: PlanRequestIdentity,
     pub supersede_active_delivery_id: Option<String>,
+    pub expected_lifecycle_revision: Option<u64>,
+    pub plan_conflict_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -78,6 +90,8 @@ pub fn validate_plan_input(input: PlanToolInput) -> Result<ValidatedPlanInput, S
         requirement_files,
         request_identity,
         supersede_active_delivery_id: None,
+        expected_lifecycle_revision: None,
+        plan_conflict_id: None,
     })
 }
 
@@ -123,17 +137,58 @@ pub fn build_plan_request_identity(
     let request_text = normalize_request_text(request_text);
     let fingerprint_source = json!({
         "schemaVersion": 1,
-        "requestText": request_text,
-        "requirementFiles": files,
+        "requestText": &request_text,
+        "requirementFiles": &files,
     });
     let canonical = serde_json::to_string(&fingerprint_source)
         .map_err(|error| format!("request identity serialization failed: {error}"))?;
     let digest = Sha256::digest(canonical.as_bytes());
+    let fingerprint = format!("sha256:{digest:x}");
     Ok(PlanRequestIdentity {
         schema_version: 1,
-        request_text,
+        request_ref: format!(".loom/plan-requests/{}.json", fingerprint.replace(':', "-")),
+        fingerprint,
+    })
+}
+
+pub fn canonical_plan_request(
+    project_root: &Path,
+    request_text: &str,
+    requirement_files: &[String],
+) -> Result<CanonicalPlanRequest, String> {
+    let identity = build_plan_request_identity(project_root, request_text, requirement_files)?;
+    let mut files = requirement_files
+        .iter()
+        .map(|file| {
+            let canonical = Path::new(file).canonicalize().map_err(|error| {
+                format!("requirementFile cannot be canonicalized: {file}: {error}")
+            })?;
+            let display_path = canonical
+                .strip_prefix(project_root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| canonical.to_string_lossy().replace('\\', "/"));
+            let content = std::fs::read(&canonical)
+                .map_err(|error| format!("requirementFile cannot be read: {file}: {error}"))?;
+            let digest = Sha256::digest(content);
+            Ok(PlanRequirementFileIdentity {
+                path: display_path,
+                content_digest: format!("sha256:{digest:x}"),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    files.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.content_digest.cmp(&right.content_digest))
+    });
+    files.dedup();
+    let requirement_file_refs = files.iter().map(|file| file.path.clone()).collect();
+    Ok(CanonicalPlanRequest {
+        schema_version: 1,
+        request_text: normalize_request_text(request_text),
         requirement_files: files,
-        fingerprint: format!("sha256:{digest:x}"),
+        requirement_file_refs,
+        fingerprint: identity.fingerprint,
     })
 }
 

@@ -44,35 +44,14 @@ pub enum PlanConflictStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanSwitchStatus {
-    Preparing,
-    NewDeliveryCreated,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanSwitchJournal {
-    pub schema_version: u32,
-    pub conflict_id: String,
-    pub old_delivery_id: String,
-    pub incoming_request: crate::PlanRequestIdentity,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_delivery_id: Option<String>,
-    pub status: PlanSwitchStatus,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanConflictRecord {
     pub schema_version: u32,
     pub conflict_id: String,
     pub active_delivery_id: String,
-    pub incoming_request: crate::PlanRequestIdentity,
-    pub request_text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requirement_files: Vec<String>,
+    pub active_revision: u64,
+    pub incoming_request_ref: String,
+    pub incoming_request_fingerprint: String,
     pub status: PlanConflictStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -134,7 +113,9 @@ pub struct DeliveryIndex {
     pub phases: Vec<DeliveryPhaseState>,
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_identity: Option<crate::PlanRequestIdentity>,
+    pub request_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -150,6 +131,8 @@ pub struct DeliveryStatusEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatus {
     pub schema_version: u32,
+    #[serde(default)]
+    pub revision: u64,
     pub active_delivery_id: Option<String>,
     pub last_completed_delivery_id: Option<String>,
     pub deliveries: Vec<DeliveryStatusEntry>,
@@ -162,6 +145,7 @@ impl ProjectStatus {
     pub fn empty(now: impl Into<String>) -> Self {
         Self {
             schema_version: 1,
+            revision: 0,
             active_delivery_id: None,
             last_completed_delivery_id: None,
             deliveries: vec![],
@@ -189,7 +173,9 @@ pub fn apply_delivery_index(status: &mut ProjectStatus, delivery: &DeliveryIndex
     }
     match delivery.status {
         DeliveryLifecycleStatus::Completed | DeliveryLifecycleStatus::CompletedWithOverride => {
-            status.active_delivery_id = None;
+            if status.active_delivery_id.as_deref() == Some(delivery.delivery_id.as_str()) {
+                status.active_delivery_id = None;
+            }
             status.last_completed_delivery_id = Some(delivery.delivery_id.clone());
         }
         DeliveryLifecycleStatus::Superseded => {

@@ -20,11 +20,11 @@ use contracts::{
     TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
-    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
-    DomainDispatcher, ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput,
-    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction,
-    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
+    ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput, LoomMcpActionResult,
+    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
+    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, RouteAction, RouteActionKind,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -250,8 +250,9 @@ fn materialize_request_inner(
             .insert("taskPlanRequestRef".to_string(), stored.request_ref.clone());
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     write_taskplan_result(project_root, &stored.request_ref)
 }
@@ -1055,11 +1056,7 @@ where
     delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(&input.project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(&input.project_root, &status)
+        .commit_delivery_state(&input.project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
 
     let engine = TransitionEngine {

@@ -3,11 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use delivery_core::{
-    apply_delivery_index, current_phase, loom_home, loom_runtime_home, DomainDispatcher,
-    FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpDoneResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
-    ProjectStatus, RouteAction, RouteActionKind, TransitionEngine, TransitionStore,
-    VsefmVerificationNext,
+    current_phase, loom_home, loom_runtime_home, DomainDispatcher, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpDoneResult, LoomMcpFailure,
+    LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, ProjectStatus,
+    RouteAction, RouteActionKind, TransitionEngine, TransitionStore, VsefmVerificationNext,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -32,6 +31,33 @@ pub struct VsefmVerificationResolveInput {
     pub project_root: String,
     pub verification_id: String,
     pub decision: VsefmVerificationResolution,
+}
+
+fn verify_session_lifecycle_revision(project_root: &str, session: &Value) -> Result<(), String> {
+    let Some(expected) = session.get("lifecycleRevision").and_then(Value::as_u64) else {
+        return Ok(());
+    };
+    let current = FileTransitionStore
+        .load_status(project_root)
+        .map_err(|error| error.to_string())?;
+    if current.revision != expected {
+        return Err(format!(
+            "V-SEFM session is stale: expected lifecycle revision {expected}, current {}",
+            current.revision
+        ));
+    }
+    Ok(())
+}
+
+fn attach_session_lifecycle_revision(project_root: &str, session: &mut Value) {
+    let Some(delivery_id) = session.get("deliveryId").and_then(Value::as_str) else {
+        return;
+    };
+    if let Ok(status) = FileTransitionStore.load_status(project_root) {
+        if status.active_delivery_id.as_deref() == Some(delivery_id) {
+            session["lifecycleRevision"] = json!(status.revision);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -380,6 +406,11 @@ fn persist_pending_gate(
     config: &VsefmConfig,
     trigger: &str,
 ) -> Result<(), String> {
+    if let (Some(delivery_id), Some(phase_id)) = (delivery_id, phase_id) {
+        if let Some(result) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+            return Err(vsefm_failure_message(result));
+        }
+    }
     let record = VsefmRecord {
         schema_version: 1,
         delivery_id: delivery_id.map(str::to_string),
@@ -397,7 +428,6 @@ fn persist_pending_gate(
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
     };
-    write_record(project_root, &record)?;
     if let (Some(delivery_id), Some(phase_id)) = (delivery_id, phase_id) {
         let store = FileTransitionStore;
         let mut status = store
@@ -414,13 +444,10 @@ fn persist_pending_gate(
         phase.next_action = Some(action.clone());
         delivery.updated_at = state::store::now_string();
         store
-            .save_delivery_index(project_root, &delivery)
-            .map_err(|error| error.to_string())?;
-        apply_delivery_index(&mut status, &delivery);
-        store
-            .save_status(project_root, &status)
+            .commit_delivery_state(project_root, &delivery, &mut status)
             .map_err(|error| error.to_string())?;
     }
+    write_record(project_root, &record)?;
     Ok(())
 }
 
@@ -529,15 +556,14 @@ where
         created_at: now.clone(),
         updated_at: now,
     };
-    if let Err(message) = write_record(project_root, &record) {
-        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", message);
-    }
-
     let Some((delivery_id, phase_id, resume_action)) = delivery_id
         .zip(phase_id)
         .zip(resume_action)
         .map(|((d, p), a)| (d, p, a))
     else {
+        if let Err(message) = write_record(project_root, &record) {
+            return failed(project_root, "VSEFM_STATE_WRITE_FAILED", message);
+        }
         return LoomMcpActionResult::Done(LoomMcpDoneResult {
             project_root: project_root.to_string(),
             summary: "V-SEFM verification choice recorded.".to_string(),
@@ -581,12 +607,11 @@ where
         delivery.status = delivery_core::DeliveryLifecycleStatus::Executing;
     }
     delivery.updated_at = state::store::now_string();
-    if let Err(error) = store.save_delivery_index(project_root, &delivery) {
+    if let Err(error) = store.commit_delivery_state(project_root, &delivery, &mut status) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
     }
-    apply_delivery_index(&mut status, &delivery);
-    if let Err(error) = store.save_status(project_root, &status) {
-        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
+    if let Err(message) = write_record(project_root, &record) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", message);
     }
     if resume_action.kind == RouteActionKind::Done {
         return LoomMcpActionResult::Done(LoomMcpDoneResult {
@@ -860,9 +885,6 @@ fn start_local_verification(
             }
         }
     }
-    if let Err(error) = state::store::write_json_atomic(&session_dir.join("state.json"), &session) {
-        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
-    }
     let now = state::store::now_string();
     if let Err(error) = write_record(
         project_root,
@@ -886,17 +908,28 @@ fn start_local_verification(
     ) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
     }
-    if let (Some(delivery_id), Some(phase_id)) = (effective_delivery_id.as_deref(), phase_id) {
-        if let Err(error) = persist_vsefm_verification_action(
-            project_root,
-            delivery_id,
-            phase_id,
-            &verification_id,
-            &stored.request_ref,
-            &trigger,
-        ) {
-            return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error);
-        }
+    let lifecycle_revision =
+        if let (Some(delivery_id), Some(phase_id)) = (effective_delivery_id.as_deref(), phase_id) {
+            match persist_vsefm_verification_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                &verification_id,
+                &stored.request_ref,
+                &trigger,
+            ) {
+                Ok(revision) => Some(revision),
+                Err(error) => return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error),
+            }
+        } else {
+            attach_session_lifecycle_revision(project_root, &mut session);
+            None
+        };
+    if let Some(revision) = lifecycle_revision {
+        session["lifecycleRevision"] = json!(revision);
+    }
+    if let Err(error) = state::store::write_json_atomic(&session_dir.join("state.json"), &session) {
+        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
     }
     let inspected = match state::inspect_request(delivery_core::InspectRequestInput {
         project_root: project_root.to_string(),
@@ -1020,10 +1053,13 @@ fn verification_prompt_path() -> Result<String, String> {
 
 pub fn resume_vsefm_route_action(
     project_root: &str,
-    _delivery_id: &str,
-    _phase_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
     action: &RouteAction,
 ) -> LoomMcpActionResult {
+    if let Some(stale) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+        return stale;
+    }
     let verification_id = action
         .details
         .as_ref()
@@ -1045,6 +1081,16 @@ pub fn resume_vsefm_route_action(
         Ok(session) => session,
         Err(error) => return failed(project_root, "VSEFM_SESSION_NOT_FOUND", error.to_string()),
     };
+    if session.get("deliveryId").and_then(Value::as_str) != Some(delivery_id)
+        || session.get("phaseId").and_then(Value::as_str) != Some(phase_id)
+    {
+        return failed(
+            project_root,
+            "VSEFM_SESSION_STALE",
+            "V-SEFM route action does not match its persisted delivery and phase context."
+                .to_string(),
+        );
+    }
     let status = session
         .get("status")
         .and_then(Value::as_str)
@@ -1074,6 +1120,29 @@ pub fn resume_vsefm_route_action(
             format!("cannot resume V-SEFM action in session state {status}"),
         ),
     }
+}
+
+fn stale_vsefm_context_result(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Option<LoomMcpActionResult> {
+    let store = FileTransitionStore;
+    let status = store.load_status(project_root).ok()?;
+    let active_matches = status.active_delivery_id.as_deref() == Some(delivery_id)
+        && store
+            .load_delivery_index(project_root, delivery_id)
+            .ok()
+            .is_some_and(|delivery| delivery.active_phase_id == phase_id);
+    (!active_matches).then(|| {
+        failed(
+            project_root,
+            "VSEFM_SESSION_STALE",
+            format!(
+                "V-SEFM session belongs to {delivery_id}/{phase_id}, which is no longer the active Loom delivery phase."
+            ),
+        )
+    })
 }
 
 pub fn resume_unattached_vsefm(project_root: &str) -> Option<LoomMcpActionResult> {
@@ -1918,6 +1987,9 @@ pub fn accept_vsefm_verification_file<D: DomainDispatcher>(
             )
         }
     };
+    if let Err(error) = verify_session_lifecycle_revision(&input.project_root, &session) {
+        return failed(&input.project_root, "VSEFM_SESSION_STALE", error);
+    }
     if session.get("status").and_then(Value::as_str) != Some("awaiting_agent") {
         return failed(
             &input.project_root,
@@ -2489,6 +2561,9 @@ where
             )
         }
     };
+    if let Err(error) = verify_session_lifecycle_revision(&input.project_root, &session) {
+        return failed(&input.project_root, "VSEFM_SESSION_STALE", error);
+    }
     let status = session
         .get("status")
         .and_then(Value::as_str)
@@ -3138,6 +3213,7 @@ where
         .join(verification_id)
         .join("state.json");
     let mut updated = session.clone();
+    attach_session_lifecycle_revision(project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert("status".to_string(), json!(status));
         object.insert("updatedAt".to_string(), json!(state::store::now_string()));
@@ -3346,11 +3422,7 @@ where
         delivery_core::DeliveryLifecycleStatus::Executing
     };
     delivery.updated_at = state::store::now_string();
-    if let Err(error) = store.save_delivery_index(project_root, &delivery) {
-        return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
-    }
-    apply_delivery_index(&mut project_status, &delivery);
-    if let Err(error) = store.save_status(project_root, &project_status) {
+    if let Err(error) = store.commit_delivery_state(project_root, &delivery, &mut project_status) {
         return failed(project_root, "VSEFM_STATE_WRITE_FAILED", error.to_string());
     }
     if resume_action.kind == RouteActionKind::Done {
@@ -4067,6 +4139,7 @@ fn materialize_vsefm_repair(project_root: &str, session: &Value) -> LoomMcpActio
         }
     };
     let mut updated = session.clone();
+    attach_session_lifecycle_revision(project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert("status".to_string(), json!("repairing"));
         object.insert("repairId".to_string(), json!(repair_id));
@@ -4190,6 +4263,9 @@ pub fn accept_vsefm_repair_file<D: DomainDispatcher>(
         Ok(session) => session,
         Err(error) => return failed(&input.project_root, "VSEFM_SESSION_NOT_FOUND", error),
     };
+    if let Err(error) = verify_session_lifecycle_revision(&input.project_root, &session) {
+        return failed(&input.project_root, "VSEFM_SESSION_STALE", error);
+    }
     if session.get("status").and_then(Value::as_str) != Some("repairing")
         || session.get("repairId").and_then(Value::as_str) != Some(authorized.request_id.as_str())
     {
@@ -4276,6 +4352,7 @@ pub fn accept_vsefm_repair_file<D: DomainDispatcher>(
     }
     let changed_files = repair_changed_files(root, &session);
     let mut updated = session.clone();
+    attach_session_lifecycle_revision(&input.project_root, &mut updated);
     if let Some(object) = updated.as_object_mut() {
         object.insert(
             "status".to_string(),
@@ -4359,6 +4436,9 @@ fn persist_vsefm_gate(
     let LoomMcpActionResult::UserGate(gate) = gate else {
         return Ok(());
     };
+    if let Some(result) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+        return Err(vsefm_failure_message(result));
+    }
     let store = FileTransitionStore;
     let mut status = store
         .load_status(project_root)
@@ -4383,11 +4463,7 @@ fn persist_vsefm_gate(
     });
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(|error| error.to_string())?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(|error| error.to_string())
 }
 
@@ -4398,7 +4474,10 @@ fn persist_vsefm_verification_action(
     verification_id: &str,
     request_ref: &str,
     trigger: &str,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    if let Some(result) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+        return Err(vsefm_failure_message(result));
+    }
     let store = FileTransitionStore;
     let mut status = store
         .load_status(project_root)
@@ -4423,11 +4502,11 @@ fn persist_vsefm_verification_action(
     });
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(|error| error.to_string())?;
-    apply_delivery_index(&mut status, &delivery);
     store
-        .save_status(project_root, &status)
+        .load_status(project_root)
+        .map(|committed| committed.revision)
         .map_err(|error| error.to_string())
 }
 
@@ -4439,6 +4518,9 @@ fn persist_vsefm_repair_action(
     repair_id: &str,
     request_ref: &str,
 ) -> Result<(), String> {
+    if let Some(result) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+        return Err(vsefm_failure_message(result));
+    }
     let store = FileTransitionStore;
     let mut status = store
         .load_status(project_root)
@@ -4466,11 +4548,7 @@ fn persist_vsefm_repair_action(
     });
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(|error| error.to_string())?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(|error| error.to_string())
 }
 
@@ -4481,6 +4559,9 @@ fn persist_vsefm_manual_review_gate(
     verification_id: &str,
     result_ref: &str,
 ) -> Result<(), String> {
+    if let Some(result) = stale_vsefm_context_result(project_root, delivery_id, phase_id) {
+        return Err(vsefm_failure_message(result));
+    }
     let store = FileTransitionStore;
     let mut status = store
         .load_status(project_root)
@@ -4515,12 +4596,15 @@ fn persist_vsefm_manual_review_gate(
     });
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(|error| error.to_string())?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(|error| error.to_string())
+}
+
+fn vsefm_failure_message(result: LoomMcpActionResult) -> String {
+    match result {
+        LoomMcpActionResult::Failed(failure) => failure.error.message,
+        _ => "V-SEFM session is no longer active.".to_string(),
+    }
 }
 
 fn load_config() -> Result<VsefmConfig, String> {

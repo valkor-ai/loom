@@ -149,8 +149,9 @@ fn materialize_request_inner(
         );
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     write_artifact_result(
         project_root,
@@ -616,8 +617,11 @@ where
             .insert("latestRepositoryContext".to_string(), context_ref.clone());
     }
     delivery.updated_at = now;
+    let mut status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
     store
-        .save_delivery_index(&input.project_root, &delivery)
+        .commit_delivery_state(&input.project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
 
     if !current_phase_scope_confirmed(&input.project_root, &delivery_id, &phase_id)? {

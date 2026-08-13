@@ -187,8 +187,9 @@ fn materialize_request_inner(
         );
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     write_artifact_result(
         project_root,

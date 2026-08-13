@@ -258,8 +258,11 @@ where
             }
         }
     }
+    let mut status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
     store
-        .save_delivery_index(&input.project_root, &delivery)
+        .commit_delivery_state(&input.project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
 
     let engine = TransitionEngine {

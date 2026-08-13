@@ -23,7 +23,8 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
             pending_repair: None,
         }],
         updated_at: "1".to_string(),
-        request_identity: None,
+        request_ref: None,
+        request_fingerprint: None,
     };
     apply_delivery_index(&mut status, &delivery);
     let store = MemoryStore::new(status).with_delivery(delivery);
@@ -85,7 +86,8 @@ fn advance_after_submit_rejects_a_stale_phase_event() {
             },
         ],
         updated_at: "1".to_string(),
-        request_identity: None,
+        request_ref: None,
+        request_fingerprint: None,
     };
     apply_delivery_index(&mut status, &delivery);
     let store = MemoryStore::new(status).with_delivery(delivery);
@@ -137,7 +139,8 @@ fn advance_after_submit_rejects_an_event_from_a_superseded_delivery() {
             pending_repair: None,
         }],
         updated_at: "1".to_string(),
-        request_identity: None,
+        request_ref: None,
+        request_fingerprint: None,
     };
     let active_delivery = DeliveryIndex {
         schema_version: 1,
@@ -151,7 +154,8 @@ fn advance_after_submit_rejects_an_event_from_a_superseded_delivery() {
             pending_repair: None,
         }],
         updated_at: "1".to_string(),
-        request_identity: None,
+        request_ref: None,
+        request_fingerprint: None,
     };
     apply_delivery_index(&mut status, &active_delivery);
     let store = MemoryStore::new(status)
