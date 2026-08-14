@@ -269,6 +269,24 @@ where
                 action,
             ),
             Some(action) if action.kind == RouteActionKind::Done => {
+                let completion_status = if action
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.get("decision"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|decision| {
+                        matches!(decision, "approve_override" | "approve_quality_waiver")
+                    }) {
+                    crate::DeliveryLifecycleStatus::CompletedWithOverride
+                } else {
+                    crate::DeliveryLifecycleStatus::Completed
+                };
+                if delivery.status != completion_status {
+                    delivery.status = completion_status;
+                    delivery.updated_at = self.store.now_string();
+                    self.store
+                        .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
+                }
                 LoomMcpActionResult::Done(LoomMcpDoneResult {
                     project_root: ctx.project_root.clone(),
                     summary: "The current Loom delivery is complete.".to_string(),

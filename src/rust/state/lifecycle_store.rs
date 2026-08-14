@@ -279,8 +279,26 @@ impl TransitionStore for FileTransitionStore {
         delivery: &DeliveryIndex,
         status: &mut ProjectStatus,
     ) -> LoomResult<()> {
-        let result = crate::commit_delivery(project_root, delivery.clone(), Some(status.revision))
-            .map_err(crate::store::to_core_error)?;
+        // `delivery.active_phase_id` may already contain the next phase when
+        // TransitionEngine is applying a continue_to_next_phase action. The
+        // lifecycle guard must compare against the phase that was loaded
+        // before this mutation, not against the candidate being committed.
+        let expected_active_phase_id = status
+            .deliveries
+            .iter()
+            .find(|entry| entry.delivery_id == delivery.delivery_id)
+            .and_then(|entry| entry.active_phase_id.clone());
+        let result = crate::commit_lifecycle(
+            project_root,
+            crate::LifecycleCommit {
+                expected_revision: Some(status.revision),
+                expected_active_delivery_id: Some(Some(delivery.delivery_id.clone())),
+                expected_active_phase_id,
+                deliveries: vec![delivery.clone()],
+                ..crate::LifecycleCommit::default()
+            },
+        )
+        .map_err(crate::store::to_core_error)?;
         *status = result.status;
         Ok(())
     }

@@ -11,11 +11,11 @@ use contracts::{
     TaskResult, TaskResultStatus, TaskRunStatus,
 };
 use delivery_core::{
-    read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
-    FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
-    OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
-    TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -1210,13 +1210,7 @@ where
             "updatedAt": state::store::now_string()
         }),
     )?;
-    update_delivery_after_review(
-        &input.project_root,
-        &delivery_id,
-        &phase_id,
-        &result,
-        &result_ref,
-    )?;
+    update_delivery_after_review(&input.project_root, &delivery_id, &phase_id, &result_ref)?;
     route_after_review(
         input,
         authorized,
@@ -3283,7 +3277,6 @@ fn update_delivery_after_review(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
-    result: &ReviewResult,
     result_ref: &str,
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
@@ -3291,13 +3284,6 @@ fn update_delivery_after_review(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
-    let next_action = vsefm::maybe_auto_route_after_review(
-        project_root,
-        delivery_id,
-        phase_id,
-        review_route_action(result, result_ref),
-    );
-    let next_kind = next_action.kind.clone();
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -3306,10 +3292,6 @@ fn update_delivery_after_review(
         phase
             .latest_refs
             .insert("reviewResult".to_string(), result_ref.to_string());
-        phase.next_action = Some(next_action);
-    }
-    if next_kind == RouteActionKind::Done {
-        delivery.status = DeliveryLifecycleStatus::Completed;
     }
     delivery.updated_at = state::store::now_string();
     store
@@ -3379,12 +3361,6 @@ fn update_delivery_after_manual_review_resolution(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
-    let effective_action = vsefm::maybe_auto_route_after_review(
-        project_root,
-        delivery_id,
-        phase_id,
-        effective_action.clone(),
-    );
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -3394,23 +3370,10 @@ fn update_delivery_after_manual_review_resolution(
             "manualReviewResolution".to_string(),
             resolution_ref.to_string(),
         );
-        phase.next_action = Some(
-            if effective_action.kind == RouteActionKind::VsefmOnboarding {
-                effective_action.clone()
-            } else {
-                RouteAction {
-                    request_ref: Some(resolution_ref.to_string()),
-                    ..effective_action.clone()
-                }
-            },
-        );
         phase.latest_refs.insert(
             "manualReviewEffectiveDecision".to_string(),
             resolution.decision.clone(),
         );
-    }
-    if effective_action.kind == RouteActionKind::Done {
-        delivery.status = DeliveryLifecycleStatus::CompletedWithOverride;
     }
     delivery.updated_at = state::store::now_string();
     store
