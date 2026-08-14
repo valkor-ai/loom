@@ -316,7 +316,40 @@ pub fn finalize_output_contract(
             );
         }
     }
+    // Specialized request builders may provide additional MCP-derived paths.
+    // They are server-owned values, so retain them while adding the shared
+    // artifact-derived ownership projection.
+    let existing_mcp_owned_paths = contract
+        .get("mcpOwnedPaths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    mcp_owned_paths.extend(existing_mcp_owned_paths.iter().cloned());
     add_shared_write_contract_metadata(contract, &mcp_owned_paths, field_policies);
+    if !existing_mcp_owned_paths.is_empty() {
+        let mut ordered_mcp_owned_paths = existing_mcp_owned_paths.clone();
+        ordered_mcp_owned_paths.extend(
+            mcp_owned_paths
+                .iter()
+                .filter(|path| !existing_mcp_owned_paths.contains(path))
+                .cloned(),
+        );
+        contract.insert(
+            "mcpOwnedPaths".to_string(),
+            Value::Array(
+                ordered_mcp_owned_paths
+                    .into_iter()
+                    .map(|path| json!(path))
+                    .collect(),
+            ),
+        );
+    }
     let mut fingerprint_source = Value::Object(contract.clone());
     remove_volatile_contract_fields(&mut fingerprint_source);
     contract.insert(
