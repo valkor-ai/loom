@@ -2751,8 +2751,8 @@ fn architecture_coverage_submit_repairs_string_verification_hints() {
 
     assert_eq!(result["state"], "repairable_error", "{result:#}");
     assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "ACCEPTANCE_MATRIX_INVALID"
-            && issue["fieldPath"] == "content.acceptanceMatrix[0].verificationHints[0]"
+        issue["code"] == "WRITE_CONTRACT_TYPE_INVALID"
+            && issue["fieldPath"] == "candidate.content.acceptanceMatrix.0.verificationHints.0"
     }));
 }
 
@@ -2777,16 +2777,16 @@ fn architecture_coverage_submit_repairs_schema_shape_before_assembly() {
     assert_eq!(result["state"], "repairable_error", "{result:#}");
     let issues = result["issues"].as_array().unwrap();
     assert!(issues.iter().any(|issue| {
-        issue["code"] == "DETAIL_COVERAGE_INVALID"
-            && issue["fieldPath"] == "content.detailCoverage[0].artifactRefs.modules[1]"
+        issue["code"] == "WRITE_CONTRACT_TYPE_INVALID"
+            && issue["fieldPath"] == "candidate.content.detailCoverage.0.artifactRefs.modules.1"
     }));
     assert!(issues.iter().any(|issue| {
-        issue["code"] == "ACCEPTANCE_MATRIX_INVALID"
-            && issue["fieldPath"] == "content.acceptanceMatrix[0].coverage[0].type"
+        issue["code"] == "WRITE_CONTRACT_TYPE_INVALID"
+            && issue["fieldPath"] == "candidate.content.acceptanceMatrix.0.coverage.0"
     }));
     assert!(issues.iter().any(|issue| {
-        issue["code"] == "COVERAGE_HANDOFF_INVALID"
-            && issue["fieldPath"] == "content.handoff.readyForTaskPlan"
+        issue["code"] == "WRITE_CONTRACT_TYPE_INVALID"
+            && issue["fieldPath"] == "candidate.content.handoff.readyForTaskPlan"
     }));
 }
 
@@ -12376,7 +12376,6 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
             "modules": [{
                 "moduleId": "module.account-service",
                 "name": "account-service",
-                "summary": "Handles the current phase account workflow.",
                 "responsibility": "Owns account lifecycle behavior and its current-phase persistence boundary.",
                 "scopeRefs": [scope_id.clone()],
                 "acceptanceRefs": [acceptance_id.clone()]
@@ -12664,18 +12663,36 @@ fn frontend_surface_decision_candidate_json() -> Value {
             "productMode": "internal_business_product"
         },
         "layoutModel": {
+            "layoutBaseline": "sidebar_topbar_table_detail",
             "density": "workbench_dense",
-            "shell": "sidebar_topbar_content_detail",
             "primaryWorkRegionId": "region_account_results",
-            "responsiveModel": "desktop_split_mobile_list_detail"
+            "desktop": {
+                "layoutIntent": "Keep navigation, filters, results, and the primary action visible in the work region.",
+                "allowedPresentations": ["table", "detail_panel", "form_sections"],
+                "forbiddenPresentations": ["no_marketing_hero"]
+            },
+            "tablet": {
+                "layoutIntent": "Keep record scanning first and move secondary detail into a supporting region.",
+                "allowedPresentations": ["record_cards", "drawer"]
+            },
+            "mobile": {
+                "layoutIntent": "Stack records and use drill-down detail when comparison is not required.",
+                "allowedPresentations": ["record_cards", "route_detail"]
+            },
+            "customLayoutIntent": ""
         },
         "regionModel": [{
             "regionId": "region_account_results",
             "role": "record_results",
             "purpose": "Show account records and current status.",
-            "presentation": "table",
+            "desktopPlacement": "Main content column below topbar and beside navigation.",
+            "mobilePlacement": "First stacked region after compact page context.",
+            "requiredContent": ["record identity", "status", "primary action"],
+            "forbiddenContent": ["decorative filler"],
+            "dataViewRefs": ["view_account_list"],
+            "actionRefs": ["action_open_account"],
             "stateRefs": ["loading", "empty", "error", "success"],
-            "actionRefs": ["action_open_account"]
+            "evidenceRefs": ["surface_account_admin"]
         }],
         "informationModel": {
             "primaryObjects": ["account"],
@@ -12686,26 +12703,39 @@ fn frontend_surface_decision_candidate_json() -> Value {
             "actionId": "action_open_account",
             "kind": "create_update",
             "label": "新建证券账户",
-            "placement": "page_actions",
-            "risk": "business_blocking",
-            "feedbackStates": ["loading", "success", "error", "business_blocking"]
+            "riskFactors": ["business_blocking"],
+            "placementRegionId": "region_account_results",
+            "pendingFeedback": "Show progress next to the account action.",
+            "successFeedback": "Confirm the account was created and update the affected view.",
+            "errorFeedback": "Show the failure and the retry path near the account action.",
+            "businessBlockingFeedback": "Explain why account creation cannot continue.",
+            "postSuccessUpdate": "Refresh the account list and show the new account status.",
+            "evidenceRefs": ["action_open_account"]
         }],
         "stateModel": [{
             "state": "loading",
-            "regionRefs": ["region_account_results"],
-            "expectation": "Scoped loading appears in the account results region."
+            "placementRegionId": "region_account_results",
+            "placementRule": "Show scoped loading in the account results region.",
+            "recoveryPath": "Wait for the request or show the retry path if it fails.",
+            "evidenceRefs": ["surface_account_admin"]
         }, {
             "state": "empty",
-            "regionRefs": ["region_account_results"],
-            "expectation": "Empty state explains the account list has no records and keeps the create action available."
+            "placementRegionId": "region_account_results",
+            "placementRule": "Explain that the account list has no records while keeping the create action available.",
+            "recoveryPath": "Use the create account action.",
+            "evidenceRefs": ["surface_account_admin"]
         }, {
             "state": "error",
-            "regionRefs": ["region_account_results"],
-            "expectation": "Recoverable error appears near the affected account region."
+            "placementRegionId": "region_account_results",
+            "placementRule": "Show the recoverable error near the affected account region.",
+            "recoveryPath": "Retry the failed account operation.",
+            "evidenceRefs": ["surface_account_admin"]
         }, {
             "state": "business_blocking",
-            "regionRefs": ["region_account_results"],
-            "expectation": "Business block explains why an account action cannot continue."
+            "placementRegionId": "region_account_results",
+            "placementRule": "Explain why the account action cannot continue near the affected workflow.",
+            "recoveryPath": "Resolve the blocking business condition and retry.",
+            "evidenceRefs": ["surface_account_admin"]
         }],
         "compositionConstraints": {
             "requiredComposition": ["navigation", "primary_work_region", "feedback_area"],

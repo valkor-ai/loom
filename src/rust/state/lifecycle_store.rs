@@ -1,6 +1,6 @@
 use delivery_core::{
-    DeliveryIndex, LoomCoreError, LoomResult, OperationLease, ProjectStatus, TransitionDiagnostic,
-    TransitionStore,
+    DeliveryIndex, DeliveryLifecycleStatus, LoomCoreError, LoomResult, OperationLease,
+    ProjectStatus, TransitionDiagnostic, TransitionStore,
 };
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     project::initialize_project,
     store::{
         ensure_dir, now_millis, now_string, path_exists, read_json, write_json_atomic,
-        write_text_atomic, StateResult,
+        write_text_atomic, StateError, StateResult,
     },
 };
 
@@ -57,6 +57,12 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
         &paths.tmp_dir,
         &paths.requests_dir,
         &paths.metrics_dir,
+        &crate::paths::lifecycle_dir(&paths.root),
+        &crate::paths::plan_requests_dir(&paths.root),
+        &paths
+            .root
+            .join(crate::paths::LOOM_DIR)
+            .join("plan-conflicts"),
         &paths.config_file,
         &paths.status_file,
         &paths.gitignore_file,
@@ -101,6 +107,36 @@ pub fn init_project_state(project_root: &str) -> StateResult<InitProjectStateRes
     })
 }
 
+pub fn ensure_active_delivery(project_root: &str, delivery_id: &str) -> StateResult<()> {
+    let paths = project_paths(project_root)?;
+    if !path_exists(&paths.status_file) {
+        return Ok(());
+    }
+    let store = FileTransitionStore;
+    let status = store
+        .load_status(project_root)
+        .map_err(crate::store::from_core_error)?;
+    if status.active_delivery_id.as_deref() != Some(delivery_id) {
+        return Err(StateError::StateCorrupted(format!(
+            "STALE_DELIVERY_REQUEST: delivery {delivery_id} is not the active Loom delivery"
+        )));
+    }
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(crate::store::from_core_error)?;
+    if matches!(
+        delivery.status,
+        DeliveryLifecycleStatus::Completed
+            | DeliveryLifecycleStatus::CompletedWithOverride
+            | DeliveryLifecycleStatus::Superseded
+    ) {
+        return Err(StateError::StateCorrupted(format!(
+            "STALE_DELIVERY_REQUEST: delivery {delivery_id} is no longer active"
+        )));
+    }
+    Ok(())
+}
+
 impl TransitionStore for FileTransitionStore {
     fn load_status(&self, project_root: &str) -> LoomResult<ProjectStatus> {
         let paths = project_paths(project_root)
@@ -110,6 +146,10 @@ impl TransitionStore for FileTransitionStore {
                 "STATE_NOT_INITIALIZED",
                 format!("Loom is not initialized for {}.", paths.root.display()),
             ));
+        }
+        if !crate::lifecycle_lock_held_for(&paths.root) {
+            crate::recover_pending_transactions(&paths.root.to_string_lossy())
+                .map_err(crate::store::to_core_error)?;
         }
         read_json(&paths.status_file)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
@@ -129,6 +169,10 @@ impl TransitionStore for FileTransitionStore {
     ) -> LoomResult<DeliveryIndex> {
         let paths = project_paths(project_root)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        if !crate::lifecycle_lock_held_for(&paths.root) {
+            crate::recover_pending_transactions(&paths.root.to_string_lossy())
+                .map_err(crate::store::to_core_error)?;
+        }
         let file = crate::paths::delivery_index_file(&paths.root, delivery_id);
         if !path_exists(&file) {
             return Err(LoomCoreError::failure(
@@ -227,6 +271,56 @@ impl TransitionStore for FileTransitionStore {
             }),
         )
         .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
+    }
+
+    fn commit_delivery_state(
+        &self,
+        project_root: &str,
+        delivery: &DeliveryIndex,
+        status: &mut ProjectStatus,
+    ) -> LoomResult<()> {
+        // `delivery.active_phase_id` may already contain the next phase when
+        // TransitionEngine is applying a continue_to_next_phase action. The
+        // lifecycle guard must compare against the phase that was loaded
+        // before this mutation, not against the candidate being committed.
+        let expected_active_phase_id = status
+            .deliveries
+            .iter()
+            .find(|entry| entry.delivery_id == delivery.delivery_id)
+            .and_then(|entry| entry.active_phase_id.clone());
+        let result = crate::commit_lifecycle(
+            project_root,
+            crate::LifecycleCommit {
+                expected_revision: Some(status.revision),
+                expected_active_delivery_id: Some(Some(delivery.delivery_id.clone())),
+                expected_active_phase_id,
+                deliveries: vec![delivery.clone()],
+                ..crate::LifecycleCommit::default()
+            },
+        )
+        .map_err(crate::store::to_core_error)?;
+        *status = result.status;
+        Ok(())
+    }
+
+    fn commit_operation_lease(
+        &self,
+        project_root: &str,
+        delivery_id: &str,
+        lease: &OperationLease,
+        expected_revision: u64,
+    ) -> LoomResult<u64> {
+        let result = crate::commit_lifecycle(
+            project_root,
+            crate::LifecycleCommit {
+                expected_revision: Some(expected_revision),
+                expected_active_delivery_id: Some(Some(delivery_id.to_string())),
+                leases: vec![lease.clone()],
+                ..crate::LifecycleCommit::default()
+            },
+        )
+        .map_err(crate::store::to_core_error)?;
+        Ok(result.revision)
     }
 
     fn now_millis(&self) -> u128 {

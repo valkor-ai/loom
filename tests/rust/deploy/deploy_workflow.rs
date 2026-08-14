@@ -4703,6 +4703,8 @@ impl Fixture {
                     pending_repair: None,
                 }],
                 updated_at: now_string(),
+                request_ref: None,
+                request_fingerprint: None,
             },
         )
         .expect("write delivery index");
@@ -4710,6 +4712,7 @@ impl Fixture {
             &self.root.join(".loom/status.json"),
             &ProjectStatus {
                 schema_version: 1,
+                revision: 0,
                 active_delivery_id: Some(delivery_id.to_string()),
                 last_completed_delivery_id: None,
                 deliveries: vec![DeliveryStatusEntry {
@@ -4719,6 +4722,7 @@ impl Fixture {
                     updated_at: now_string(),
                 }],
                 updated_at: now_string(),
+                pending_plan_conflict_id: None,
             },
         )
         .expect("write status");

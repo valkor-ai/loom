@@ -74,4 +74,11 @@ impl OperationLease {
         self.status = OperationLeaseStatus::StaleRecovered;
         self.heartbeat_at = now;
     }
+
+    pub fn close(&mut self, now: impl Into<String>) {
+        let now = now.into();
+        self.status = OperationLeaseStatus::Closed;
+        self.heartbeat_at = now;
+        self.expires_at = "0".to_string();
+    }
 }

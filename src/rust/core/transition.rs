@@ -32,6 +32,29 @@ pub trait TransitionStore {
         project_root: &str,
         diagnostic: &TransitionDiagnostic,
     ) -> LoomResult<()>;
+    /// Commit a delivery index and its project-status projection as one
+    /// lifecycle mutation. File-backed stores override this with the
+    /// lifecycle coordinator; in-memory stores can use the default sequence.
+    fn commit_delivery_state(
+        &self,
+        project_root: &str,
+        delivery: &DeliveryIndex,
+        status: &mut ProjectStatus,
+    ) -> LoomResult<()> {
+        self.save_delivery_index(project_root, delivery)?;
+        apply_delivery_index(status, delivery);
+        self.save_status(project_root, status)
+    }
+    fn commit_operation_lease(
+        &self,
+        project_root: &str,
+        delivery_id: &str,
+        lease: &OperationLease,
+        expected_revision: u64,
+    ) -> LoomResult<u64> {
+        self.write_operation_lease(project_root, delivery_id, lease)?;
+        Ok(expected_revision)
+    }
     fn now_millis(&self) -> u128;
     fn now_string(&self) -> String;
 }
@@ -168,8 +191,12 @@ where
                 ));
             }
             existing.mark_stale_recovered(self.store.now_string());
-            self.store
-                .write_operation_lease(&ctx.project_root, &active_delivery_id, existing)?;
+            status.revision = self.store.commit_operation_lease(
+                &ctx.project_root,
+                &active_delivery_id,
+                existing,
+                status.revision,
+            )?;
         }
 
         if active_phase
@@ -222,9 +249,7 @@ where
             }
             delivery.active_phase_id = target_phase_id;
             self.store
-                .save_delivery_index(&ctx.project_root, &delivery)?;
-            apply_delivery_index(&mut status, &delivery);
-            self.store.save_status(&ctx.project_root, &status)?;
+                .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
             active_phase = current_phase(&delivery).cloned().ok_or_else(|| {
                 LoomCoreError::failure(
                     "PHASE_NOT_FOUND",
@@ -244,6 +269,24 @@ where
                 action,
             ),
             Some(action) if action.kind == RouteActionKind::Done => {
+                let completion_status = if action
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.get("decision"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|decision| {
+                        matches!(decision, "approve_override" | "approve_quality_waiver")
+                    }) {
+                    crate::DeliveryLifecycleStatus::CompletedWithOverride
+                } else {
+                    crate::DeliveryLifecycleStatus::Completed
+                };
+                if delivery.status != completion_status {
+                    delivery.status = completion_status;
+                    delivery.updated_at = self.store.now_string();
+                    self.store
+                        .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
+                }
                 LoomMcpActionResult::Done(LoomMcpDoneResult {
                     project_root: ctx.project_root.clone(),
                     summary: "The current Loom delivery is complete.".to_string(),
@@ -297,9 +340,32 @@ where
         event: SubmitAcceptedEvent,
     ) -> LoomResult<LoomMcpActionResult> {
         let mut status = self.store.load_status(&ctx.project_root)?;
+        if status.active_delivery_id.as_deref() != Some(event.delivery_id.as_str()) {
+            return Err(LoomCoreError::failure(
+                "STALE_SUBMIT_DELIVERY",
+                format!(
+                    "Accepted submit event belongs to delivery {}, but the active delivery is {:?}.",
+                    event.delivery_id, status.active_delivery_id
+                ),
+            ));
+        }
         let mut delivery = self
             .store
             .load_delivery_index(&ctx.project_root, &event.delivery_id)?;
+        if matches!(
+            delivery.status,
+            crate::DeliveryLifecycleStatus::Completed
+                | crate::DeliveryLifecycleStatus::CompletedWithOverride
+                | crate::DeliveryLifecycleStatus::Superseded
+        ) {
+            return Err(LoomCoreError::failure(
+                "STALE_SUBMIT_DELIVERY",
+                format!(
+                    "Accepted submit event belongs to delivery {}, which is no longer active.",
+                    event.delivery_id
+                ),
+            ));
+        }
         if delivery.active_phase_id != event.phase_id {
             return Err(LoomCoreError::failure(
                 "STALE_SUBMIT_PHASE",
@@ -329,9 +395,7 @@ where
         phase.pending_repair = None;
         delivery.updated_at = self.store.now_string();
         self.store
-            .save_delivery_index(&ctx.project_root, &delivery)?;
-        apply_delivery_index(&mut status, &delivery);
-        self.store.save_status(&ctx.project_root, &status)?;
+            .commit_delivery_state(&ctx.project_root, &delivery, &mut status)?;
         self.continue_current(ctx)
     }
 }

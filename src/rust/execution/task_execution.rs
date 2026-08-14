@@ -7,9 +7,9 @@ use contracts::{
     TaskPlanRunStatus, TaskResult, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
-    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, RouteAction, RouteActionKind, RunLoomToolNext, TransitionStore,
+    read_selectors_value_from_paths, DeliveryLifecycleStatus, LoomMcpActionResult,
+    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
+    RouteAction, RouteActionKind, RunLoomToolNext, TransitionStore,
 };
 use serde_json::{json, Value};
 use state::{
@@ -3149,11 +3149,7 @@ fn update_route_for_execution(
     delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     Ok(())
 }
@@ -3195,11 +3191,7 @@ fn update_route_for_browser_runtime_prepare(
     delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -3232,11 +3224,7 @@ fn update_route_for_review(
     delivery.status = DeliveryLifecycleStatus::Reviewing;
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     Ok(())
 }
@@ -3257,7 +3245,7 @@ fn read_project_json<T: serde::de::DeserializeOwned>(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }
 
 #[cfg(test)]

@@ -187,8 +187,9 @@ fn materialize_request_inner(
         );
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
     write_artifact_result(
         project_root,
@@ -285,6 +286,10 @@ fn build_request_root(
                 "description": format!("Write the {} Architecture section candidate JSON.", section_name(current_output.section))
             }],
             "schemaShape": current_output.schema_shape.clone(),
+            "schemaRef": current_output.schema_ref,
+            "resultTemplate": current_output.result_template.clone(),
+            "enumRefs": current_output.enum_refs.clone(),
+            "generationRules": current_output.generation_rules.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "section",
@@ -1362,8 +1367,16 @@ fn section_content_shape(
             "userFlows": [{
                 "flowId": "string",
                 "name": "string",
+                "kind": "string",
+                "moduleRefs": ["string"],
+                "entityRefs": ["string"],
+                "interfaceRefs": ["string"],
                 "trigger": "string",
                 "actorRef": "string",
+                "entry": {
+                    "type": "string",
+                    "ref": "string"
+                },
                 "happyPath": [{
                     "stepId": "string",
                     "action": "string",
@@ -1390,6 +1403,9 @@ fn section_content_shape(
             "stateMachines": [{
                 "machineId": "string",
                 "name": "string",
+                "entityRef": "string",
+                "entityRefs": ["string"],
+                "moduleRefs": ["string"],
                 "states": ["object"],
                 "transitions": [{
                     "from": "state identifier",
@@ -1399,6 +1415,7 @@ fn section_content_shape(
                     "effects": ["state or durable-data effect; empty when none"],
                     "failureBehavior": "state retained and observable response when blocked or failed"
                 }],
+                "rules": ["object"],
                 "scopeRefs": ["string"],
                 "acceptanceRefs": ["string"]
             }]
@@ -1406,75 +1423,12 @@ fn section_content_shape(
         ArchitectureSectionGroup::FrontendExperience => json!({
             "frontendExperience": {
                 "required": "boolean",
+                "kind": "string",
                 "experienceLevel": "string",
                 "surfaces": ["object"],
                 "dataViews": ["object"],
                 "actions": ["object"],
                 "operationPaths": ["object"],
-                "uiSurfaceRegistry": {
-                    "registryId": "string",
-                    "selectionRule": "string",
-                    "surfaces": [{
-                        "surfaceId": "string",
-                        "surfaceRole": "app_shell | page | panel | drawer | modal | table | form | detail | widget | navigation | feedback_area",
-                        "businessPurpose": "string",
-                        "productIntent": {
-                            "userRole": "string",
-                            "businessObject": "string",
-                            "primaryJob": "string",
-                            "successOutcome": "string"
-                        },
-                        "compositionModel": {
-                            "requiredRegions": ["string"],
-                            "forbiddenRegions": ["string"],
-                            "primaryRegion": "string",
-                            "supportingRegions": ["string"]
-                        },
-                        "informationModel": {
-                            "mustShow": ["string"],
-                            "scanPriority": ["string"],
-                            "identityFields": ["string"],
-                            "statusFields": ["string"],
-                            "longContentPolicy": "string"
-                        },
-                        "actionModel": {
-                            "primaryActions": ["string"],
-                            "contextualActions": ["string"],
-                            "dangerousActions": ["string"],
-                            "placementRule": "string",
-                            "postSuccessUpdate": "string"
-                        },
-                        "statePlacementModel": {
-                            "loading": "string",
-                            "empty": "string",
-                            "error": "string",
-                            "success": "string",
-                            "business_blocking": "string",
-                            "validation": "string",
-                            "disabled": "string"
-                        },
-                        "visualModel": {
-                            "layoutBaseline": "string",
-                            "density": "string",
-                            "tokenPolicy": "string",
-                            "componentPolicy": "string",
-                            "antiDemoRules": ["string"]
-                        },
-                        "responsiveModel": {
-                            "desktop": "string",
-                            "tablet": "string",
-                            "mobile": "string"
-                        },
-                        "requiredComposition": ["string"],
-                        "forbiddenComposition": ["string"],
-                        "stateRefs": ["loading | success | error | empty | business_blocking"],
-                        "dataViewRefs": ["string"],
-                        "actionRefs": ["string"],
-                        "operationPathRefs": ["string"],
-                        "workflowRefs": ["string"],
-                        "interfaceRefs": ["string"]
-                    }]
-                },
                 "surfaceDecisionCandidate": ui_surface_decision_candidate_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
@@ -1614,30 +1568,31 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
     json!({
         "runtimeDelivery": {
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
+            "reason": "string",
             "runtimeKind": "string",
             "basis": Value::Object(basis),
             "commands": {
                 "development": {
                     "build": {"command": "string", "workingDirectory": "string"},
-                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number or null"}
                 },
                 "verification": {
                     "build": {"command": "string", "workingDirectory": "string"},
-                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number or null"}
                 },
                 "deployment": {
                     "build": {"command": "string", "workingDirectory": "string"},
-                    "start": {"command": "string", "workingDirectory": "string", "port": "number"}
+                    "start": {"command": "string", "workingDirectory": "string", "port": "number or null"}
                 }
             },
             "runtimeSurfaces": ["object"],
             "httpProbes": {
                 "previewPath": "string",
-                "healthPath": "optional string; only when the repository exposes this probe",
+                "healthPath": "string or null",
                 "expectedStatus": "2xx_or_3xx"
             },
-            "frontend": "optional object when a separate frontend surface exists",
-            "api": "optional object when a separate API/backend surface exists",
+            "frontend": "object",
+            "api": "object",
             "environment": {
                 "required": ["string"],
                 "optional": ["string"]
@@ -1660,17 +1615,14 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
         "interfaceId": "string",
         "name": "string",
         "type": "http_api | service_method | external_adapter | event | job | cli_command",
+        "role": "string",
+        "moduleRefs": ["string"],
+        "entityRefs": ["string"],
         "resource": "string when type=http_api",
         "operationKind": "create | read_list | read_detail | replace | update | delete | state_transition | domain_action | search | export",
         "method": "GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS when type=http_api",
         "path": "string when type=http_api",
-        "requestSchema": [{
-            "field": "string",
-            "required": "boolean",
-            "kind": "string",
-            "validation": "business validation rule",
-            "normalization": "optional object; state trim-before-validation or another explicit canonicalization rule"
-        }],
+        "requestSchema": ["object"],
         "responseSchema": ["object"],
         "statusCodes": {
             "success": ["number"],
@@ -1800,8 +1752,16 @@ fn section_content_template(
             "userFlows": [{
                 "flowId": "flow_1",
                 "name": "",
+                "kind": "user_interaction",
+                "moduleRefs": [],
+                "entityRefs": [],
+                "interfaceRefs": [],
                 "trigger": "",
                 "actorRef": "",
+                "entry": {
+                    "type": "",
+                    "ref": ""
+                },
                 "happyPath": [{
                     "stepId": "step_1",
                     "action": "",
@@ -1828,6 +1788,9 @@ fn section_content_template(
             "stateMachines": [{
                 "machineId": "state_machine_1",
                 "name": "",
+                "entityRef": "",
+                "entityRefs": [],
+                "moduleRefs": [],
                 "states": [],
                 "transitions": [{
                     "from": "",
@@ -1837,6 +1800,7 @@ fn section_content_template(
                     "effects": [],
                     "failureBehavior": ""
                 }],
+                "rules": [],
                 "scopeRefs": [],
                 "acceptanceRefs": []
             }]
@@ -1844,6 +1808,7 @@ fn section_content_template(
         ArchitectureSectionGroup::FrontendExperience => json!({
             "frontendExperience": {
                 "required": true,
+                "kind": "",
                 "experienceLevel": "usable_internal_product",
                 "surfaces": [{
                     "surfaceId": "surface_1",
@@ -1871,102 +1836,6 @@ fn section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
-                "uiSurfaceRegistry": {
-                    "registryId": "ui-registry-1",
-                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
-                    "surfaces": [{
-                        "surfaceId": "surface_1",
-                        "surfaceRole": "page",
-                        "businessPurpose": "",
-                        "productIntent": {
-                            "userRole": "",
-                            "businessObject": "",
-                            "primaryJob": "",
-                            "successOutcome": ""
-                        },
-                        "compositionModel": {
-                            "requiredRegions": [
-                                "business navigation or local context",
-                                "task-relevant data region",
-                                "task-relevant action region",
-                                "scoped feedback region"
-                            ],
-                            "forbiddenRegions": [
-                                "decorative or explanatory region that displaces the task workflow"
-                            ],
-                            "primaryRegion": "task-relevant data or form region",
-                            "supportingRegions": [
-                                "navigation/context",
-                                "detail/summary",
-                                "feedback"
-                            ]
-                        },
-                        "informationModel": {
-                            "mustShow": [
-                                "business object identity",
-                                "business object status",
-                                "fields required to complete the task"
-                            ],
-                            "scanPriority": [
-                                "identity",
-                                "status",
-                                "decision fields",
-                                "available actions"
-                            ],
-                            "identityFields": [],
-                            "statusFields": [],
-                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
-                        },
-                        "actionModel": {
-                            "primaryActions": ["task-owned primary action"],
-                            "contextualActions": [],
-                            "dangerousActions": [],
-                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
-                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
-                        },
-                        "statePlacementModel": {
-                            "loading": "Near the region or control waiting for data or mutation.",
-                            "empty": "In the data/form region with business next action when applicable.",
-                            "error": "Near the affected region with recovery path.",
-                            "success": "Inline object update plus short confirmation when useful.",
-                            "business_blocking": "Near the blocked field, row, detail, or action.",
-                            "validation": "Near the field and summary for longer forms.",
-                            "disabled": "On or near disabled controls with unlock reason when actionable."
-                        },
-                        "visualModel": {
-                            "layoutBaseline": "custom_product_layout",
-                            "density": "balanced",
-                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
-                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
-                            "antiDemoRules": [
-                                "no runtime commands or delivery notes in product UI",
-                                "no marketing hero for operational surfaces",
-                                "no decorative filler before required workflow content"
-                            ]
-                        },
-                        "responsiveModel": {
-                            "desktop": "Keep primary task surface and action path visible without layout shift.",
-                            "tablet": "Preserve task order while reducing secondary regions.",
-                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
-                        },
-                        "requiredComposition": [
-                            "business navigation or context",
-                            "task-relevant data view",
-                            "task-relevant action area",
-                            "local loading, empty, error, success, and business-blocking feedback"
-                        ],
-                        "forbiddenComposition": [
-                            "surface composition unrelated to the task-owned business workflow",
-                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
-                        ],
-                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
-                        "dataViewRefs": ["view_1"],
-                        "actionRefs": ["action_1"],
-                        "operationPathRefs": ["path_1"],
-                        "workflowRefs": [],
-                        "interfaceRefs": []
-                    }]
-                },
                 "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
@@ -2226,6 +2095,7 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
     json!({
         "runtimeDelivery": {
             "status": "modified",
+            "reason": "",
             "runtimeKind": "",
             "basis": Value::Object(basis),
             "commands": {
@@ -2523,11 +2393,12 @@ pub fn section_generation_rules(
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
             "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.".to_string(),
+            "When selectedPattern.mode=hybrid, provide primaryKnownPattern plus at least one valid secondaryKnownPatterns entry from the known pattern enum. An empty secondaryKnownPatterns array is invalid; for known mode use knownPattern, and for custom mode use customPattern plus nearestKnownPatterns.".to_string(),
             "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.".to_string(),
             "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.".to_string(),
-            "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
-            "For each uiSurfaceRegistry surface, state the business purpose plus productIntent, compositionModel, informationModel, actionModel, statePlacementModel, visualModel, and responsiveModel only when those details are not already better represented by surfaceDecisionCandidate model objects.".to_string(),
-            "Use requiredComposition/forbiddenComposition/stateRefs/dataViewRefs/actionRefs/operationPathRefs/workflowRefs/interfaceRefs as compact linking fields. Put product quality meaning in the model objects, not in repeated prose.".to_string(),
+            "Write only the Agent-owned surfaces, dataViews, actions, and operationPaths. Do not write uiSurfaceRegistry: MCP derives the canonical registry from these four source collections and the accepted UI decision candidate after submit.".to_string(),
+            "Keep each source collection concise and link it with stable ids. Put cross-object links in operationPaths and use surfaceRef, dataViewRefs, actionRefs, workflowRef, and interfaceRefs instead of copying the same business description into multiple objects.".to_string(),
+            "The canonical uiSurfaceRegistry is MCP-owned. TaskPlan and TaskExecute consume that single derived projection; never try to repair or manually synchronize it in the candidate.".to_string(),
             "Business UI surfaces must directly serve the selected scenario and task workflow; honor uiQualitySeed.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
@@ -2593,7 +2464,7 @@ fn read_technical_baseline(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }
 
 #[cfg(test)]

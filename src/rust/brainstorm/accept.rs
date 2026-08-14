@@ -258,8 +258,11 @@ where
             }
         }
     }
+    let mut status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
     store
-        .save_delivery_index(&input.project_root, &delivery)
+        .commit_delivery_state(&input.project_root, &delivery, &mut status)
         .map_err(to_state_error)?;
 
     let engine = TransitionEngine {
@@ -424,7 +427,7 @@ fn normalize_machine_owned_candidate_fields(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }
 
 struct AcceptRequestContext {

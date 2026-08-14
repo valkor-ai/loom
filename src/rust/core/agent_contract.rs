@@ -226,7 +226,7 @@ pub fn finalize_output_contract(
     );
     let mut projection = contract
         .remove("schemaProjection")
-        .filter(Value::is_object)
+        .filter(|value| value.is_object())
         .unwrap_or_else(|| json!({}));
     if let Some(projection_object) = projection.as_object_mut() {
         projection_object.remove("fieldContract");
@@ -291,27 +291,23 @@ pub fn finalize_output_contract(
         .expect("schemaProjection is an object")
         .remove("objectShapeRules");
     contract.insert("schemaProjection".to_string(), projection);
+    let mut mcp_owned_paths = BTreeSet::new();
+    mcp_owned_paths.extend(
+        field_policies
+            .iter()
+            .filter(|(_, policy)| policy.owner == AgentFieldOwner::Mcp)
+            .map(|(path, _)| path.clone()),
+    );
     if let Some(artifact_kind) = contract
         .get("artifactKind")
         .and_then(Value::as_str)
         .map(str::to_string)
     {
-        let mut normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind)
-            .iter()
-            .map(|field| (*field).to_string())
-            .collect::<BTreeSet<_>>();
-        normalized_fields.extend(
-            field_policies
+        mcp_owned_paths.extend(
+            mcp_owned_paths_for_artifact(&artifact_kind)
                 .iter()
-                .filter(|(_, policy)| policy.owner == AgentFieldOwner::Mcp)
-                .map(|(path, _)| path.clone()),
+                .map(|field| (*field).to_string()),
         );
-        if !normalized_fields.is_empty() {
-            contract.insert(
-                "mcpNormalizedFields".to_string(),
-                Value::Array(normalized_fields.iter().map(|field| json!(field)).collect()),
-            );
-        }
         let delegated_paths = domain_validation_paths_for_artifact(&artifact_kind);
         if !delegated_paths.is_empty() {
             contract.insert(
@@ -320,12 +316,174 @@ pub fn finalize_output_contract(
             );
         }
     }
+    // Specialized request builders may provide additional MCP-derived paths.
+    // They are server-owned values, so retain them while adding the shared
+    // artifact-derived ownership projection.
+    let existing_mcp_owned_paths = contract
+        .get("mcpOwnedPaths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    mcp_owned_paths.extend(existing_mcp_owned_paths.iter().cloned());
+    add_shared_write_contract_metadata(contract, &mcp_owned_paths, field_policies);
+    if !existing_mcp_owned_paths.is_empty() {
+        let mut ordered_mcp_owned_paths = existing_mcp_owned_paths.clone();
+        ordered_mcp_owned_paths.extend(
+            mcp_owned_paths
+                .iter()
+                .filter(|path| !existing_mcp_owned_paths.contains(path))
+                .cloned(),
+        );
+        contract.insert(
+            "mcpOwnedPaths".to_string(),
+            Value::Array(
+                ordered_mcp_owned_paths
+                    .into_iter()
+                    .map(|path| json!(path))
+                    .collect(),
+            ),
+        );
+    }
     let mut fingerprint_source = Value::Object(contract.clone());
     remove_volatile_contract_fields(&mut fingerprint_source);
     contract.insert(
         "contractFingerprint".to_string(),
         json!(contract_fingerprint(&fingerprint_source)),
     );
+}
+
+fn add_shared_write_contract_metadata(
+    contract: &mut Map<String, Value>,
+    mcp_owned_paths: &BTreeSet<String>,
+    field_policies: &BTreeMap<String, AgentFieldPolicy>,
+) {
+    let mut agent_owned = BTreeSet::new();
+    let mut required = BTreeSet::new();
+    let mut not_applicable = BTreeSet::new();
+    let mut preserve_on_repair = BTreeSet::new();
+    if let Some(field_contract) = contract
+        .get("schemaProjection")
+        .and_then(Value::as_object)
+        .and_then(|projection| projection.get("fieldContract"))
+        .filter(|value| value.is_object())
+    {
+        collect_contract_paths(
+            field_contract,
+            "",
+            &mut agent_owned,
+            &mut required,
+            &mut not_applicable,
+            &mut preserve_on_repair,
+        );
+    }
+    agent_owned.retain(|path| !mcp_owned_paths.contains(path));
+    for (path, policy) in field_policies {
+        if policy.owner == AgentFieldOwner::Mcp
+            || policy.applicability == AgentFieldApplicability::NotApplicable
+        {
+            agent_owned.remove(path);
+        } else {
+            agent_owned.insert(path.clone());
+        }
+        if policy.applicability == AgentFieldApplicability::NotApplicable {
+            not_applicable.insert(path.clone());
+        }
+        if policy.preserve_on_repair {
+            preserve_on_repair.insert(path.clone());
+        } else {
+            preserve_on_repair.remove(path);
+        }
+    }
+    contract.insert(
+        "agentOwnedPaths".to_string(),
+        Value::Array(agent_owned.iter().map(|path| json!(path)).collect()),
+    );
+    contract.insert(
+        "mcpOwnedPaths".to_string(),
+        Value::Array(mcp_owned_paths.iter().map(|path| json!(path)).collect()),
+    );
+    contract.insert(
+        "requiredPaths".to_string(),
+        Value::Array(required.iter().map(|path| json!(path)).collect()),
+    );
+    contract.insert(
+        "notApplicablePaths".to_string(),
+        Value::Array(not_applicable.iter().map(|path| json!(path)).collect()),
+    );
+    contract.insert(
+        "preserveOnRepair".to_string(),
+        Value::Array(preserve_on_repair.iter().map(|path| json!(path)).collect()),
+    );
+    contract.insert(
+        "semanticRules".to_string(),
+        json!({
+            "schemaAuthority": "outputContract.schemaProjection.fieldContract",
+            "agentOwnedRule": "Agent writes only agentOwnedPaths and omits notApplicablePaths.",
+            "mcpOwnedRule": "MCP derives and persists mcpOwnedPaths after structural validation.",
+            "repairRule": "Repair preserves preserveOnRepair paths and changes only the returned target and failed paths."
+        }),
+    );
+}
+
+fn collect_contract_paths(
+    node: &Value,
+    prefix: &str,
+    agent_owned: &mut BTreeSet<String>,
+    required: &mut BTreeSet<String>,
+    not_applicable: &mut BTreeSet<String>,
+    preserve_on_repair: &mut BTreeSet<String>,
+) {
+    let Some(object) = node.as_object() else {
+        return;
+    };
+    let path = prefix.strip_prefix("candidate.").unwrap_or(prefix);
+    if !path.is_empty() && object.get("owner").and_then(Value::as_str) != Some("mcp") {
+        agent_owned.insert(path.to_string());
+    }
+    if object.get("required").and_then(Value::as_bool) == Some(true) && !path.is_empty() {
+        required.insert(path.to_string());
+    }
+    if object.get("applicability").and_then(Value::as_str) == Some("not_applicable")
+        && !path.is_empty()
+    {
+        not_applicable.insert(path.to_string());
+    }
+    if object.get("preserveOnRepair").and_then(Value::as_bool) != Some(false) && !path.is_empty() {
+        preserve_on_repair.insert(path.to_string());
+    }
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        for (name, child) in properties {
+            let child_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}.{name}")
+            };
+            collect_contract_paths(
+                child,
+                &child_path,
+                agent_owned,
+                required,
+                not_applicable,
+                preserve_on_repair,
+            );
+        }
+    }
+    if let Some(items) = object.get("items") {
+        collect_contract_paths(
+            items,
+            &format!("{path}[]"),
+            agent_owned,
+            required,
+            not_applicable,
+            preserve_on_repair,
+        );
+    }
 }
 
 fn schema_target_name(key: &str) -> String {
@@ -367,7 +525,15 @@ pub fn derive_agent_field_policies(root: &Value) -> BTreeMap<String, AgentFieldP
     );
     derive_architecture_field_policies(root, &mut policies);
 
-    let task = root.get("task").unwrap_or(&Value::Null);
+    // TaskResult replacement requests expose the same task facts under
+    // `taskProjection`. Resolve that projection here so a repair request keeps
+    // the original evidence applicability instead of treating every optional
+    // evidence field as not applicable.
+    let task = root
+        .get("task")
+        .filter(|value| value.is_object())
+        .or_else(|| root.get("taskProjection"))
+        .unwrap_or(&Value::Null);
     let applicability = task_evidence_applicability_from_value(task);
     policies.insert(
         "frontendExperienceSelfCheck".to_string(),
@@ -511,8 +677,8 @@ pub fn validate_agent_write_contract(
             field_path: None,
         }];
     };
-    let mcp_normalized_fields = output_contract
-        .get("mcpNormalizedFields")
+    let mcp_owned_paths = output_contract
+        .get("mcpOwnedPaths")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -534,14 +700,14 @@ pub fn validate_agent_write_contract(
         "candidate",
         true,
         target_id,
-        &mcp_normalized_fields,
+        &mcp_owned_paths,
         &domain_validation_paths,
         &mut issues,
     );
     issues
 }
 
-fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static str] {
+fn mcp_owned_paths_for_artifact(artifact_kind: &str) -> &'static [&'static str] {
     match artifact_kind {
         "brainstorm_candidate" => &[
             "userConfirmation",
@@ -567,7 +733,12 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "section",
             "createdAt",
             "content.source",
+            "content.frontendExperience.uiSurfaceRegistry",
+            "content.frontendExperience.uiSurfaceDecisionContract",
             "content.runtimeDelivery.runtimeDependencies",
+            "content.runtimeDelivery.deploymentShape",
+            "content.runtimeDelivery.httpProbes.apiPaths",
+            "content.runtimeDelivery.api.probePaths",
             "content.architectureQuality.decisions[].decisionId",
             "content.architectureQuality.decisions[].category",
             "content.architectureQuality.decisions[].sourceRefs",
@@ -648,7 +819,12 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
 
 fn domain_validation_paths_for_artifact(artifact_kind: &str) -> &'static [&'static str] {
     match artifact_kind {
-        "architecture_section_candidate" => &["content"],
+        // Architecture content is described by the same pseudo-schema that is
+        // exposed in outputContract.schemaProjection. Let the shared
+        // contract validator check its nested types before the architecture
+        // domain validator runs; delegating the whole content tree here made
+        // the agent-facing contract and submit-time errors disagree.
+        "architecture_section_candidate" => &[],
         "task_plan_candidate"
         | "task_result"
         | "task_result_repair"
@@ -745,6 +921,13 @@ fn merge_contract_nodes(base: &mut Value, supplement: &Value) {
         base_object.insert("nullable".to_string(), Value::Bool(true));
     }
 
+    // A manual `object` shape is intentionally open. The domain validator owns
+    // its semantic fields; merging a concrete result template into it would
+    // turn a valid structured variant into an unknown-field repair loop.
+    if base_object.get("open").and_then(Value::as_bool) == Some(true) {
+        return;
+    }
+
     if let Some(supplement_properties) = supplement_object
         .get("properties")
         .and_then(Value::as_object)
@@ -781,11 +964,11 @@ fn validate_contract_node(
     path: &str,
     root: bool,
     target_id: &str,
-    mcp_normalized_fields: &BTreeSet<String>,
+    mcp_owned_paths: &BTreeSet<String>,
     domain_validation_paths: &BTreeSet<String>,
     issues: &mut Vec<RepairIssue>,
 ) {
-    if is_mcp_normalized_field(path, mcp_normalized_fields) {
+    if is_mcp_owned_path(path, mcp_owned_paths) {
         return;
     }
     if contract
@@ -845,6 +1028,9 @@ fn validate_contract_node(
             });
         }
     }
+    if contract.get("open").and_then(Value::as_bool) == Some(true) {
+        return;
+    }
     if is_domain_validation_path(path, domain_validation_paths) {
         return;
     }
@@ -870,7 +1056,7 @@ fn validate_contract_node(
             let child_path = format!("{path}.{field}");
             let Some(child_contract) = properties.get(field) else {
                 if (root && crate::MACHINE_OWNED_FIELDS.contains(&field.as_str()))
-                    || is_mcp_normalized_field(&child_path, mcp_normalized_fields)
+                    || is_mcp_owned_path(&child_path, mcp_owned_paths)
                 {
                     continue;
                 }
@@ -888,7 +1074,7 @@ fn validate_contract_node(
                 &child_path,
                 false,
                 target_id,
-                mcp_normalized_fields,
+                mcp_owned_paths,
                 domain_validation_paths,
                 issues,
             );
@@ -902,7 +1088,7 @@ fn validate_contract_node(
                 &format!("{path}.{index}"),
                 false,
                 target_id,
-                mcp_normalized_fields,
+                mcp_owned_paths,
                 domain_validation_paths,
                 issues,
             );
@@ -910,7 +1096,7 @@ fn validate_contract_node(
     }
 }
 
-fn is_mcp_normalized_field(path: &str, fields: &BTreeSet<String>) -> bool {
+fn is_mcp_owned_path(path: &str, fields: &BTreeSet<String>) -> bool {
     let mut normalized: Vec<String> = Vec::new();
     for part in path.strip_prefix("candidate.").unwrap_or(path).split('.') {
         if part.parse::<usize>().is_ok() {
@@ -1119,6 +1305,14 @@ fn compact_manual_node(
                 description.trim(),
                 "object" | "string" | "boolean" | "number" | "array"
             ) {
+                if description.trim() == "object" {
+                    return add_policy(
+                        json!({"type": "object", "open": true, "required": required}),
+                        path,
+                        required,
+                        policies,
+                    );
+                }
                 return add_policy(
                     json!({"type": description.trim(), "required": required}),
                     path,

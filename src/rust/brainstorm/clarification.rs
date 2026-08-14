@@ -316,6 +316,12 @@ fn confirm_block_inner(
         message: "Brainstorm request is missing phaseId.".to_string(),
     })?;
 
+    state::ensure_active_delivery(&project_root, &delivery_id).map_err(|error| ConfirmError {
+        project_root: project_root.clone(),
+        code: "STALE_DELIVERY_REQUEST".to_string(),
+        message: error.to_string(),
+    })?;
+
     let store = FileTransitionStore;
     let mut delivery = store
         .load_delivery_index(&project_root, &delivery_id)
@@ -598,8 +604,15 @@ fn confirm_block_inner(
     };
 
     delivery.updated_at = state::store::now_string();
+    let mut status = store
+        .load_status(&project_root)
+        .map_err(|error| ConfirmError {
+            project_root: project_root.clone(),
+            code: "DELIVERY_SAVE_FAILED".to_string(),
+            message: error.to_string(),
+        })?;
     store
-        .save_delivery_index(&project_root, &delivery)
+        .commit_delivery_state(&project_root, &delivery, &mut status)
         .map_err(|error| ConfirmError {
             project_root,
             code: "DELIVERY_SAVE_FAILED".to_string(),
@@ -942,7 +955,7 @@ fn parse_request_id(request_ref: &str) -> Result<String, String> {
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> StateError {
-    StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }
 
 #[derive(Debug)]

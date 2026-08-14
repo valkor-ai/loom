@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "algorithm-client"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde_json",
 ]
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "architecture"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "contracts",
  "delivery-core",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "brainstorm"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "algorithm-client",
  "contracts",
@@ -228,7 +228,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "contracts"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "delivery-core",
  "schemars",
@@ -327,7 +327,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "delivery-core"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "schemars",
  "serde",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "deploy"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "contracts",
  "delivery-core",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "execution"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "architecture",
  "brainstorm",
@@ -460,6 +460,16 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
  "zlib-rs",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -666,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "knowledge"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "algorithm-client",
  "chrono",
@@ -739,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-server"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "architecture",
@@ -883,7 +893,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "planning"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "brainstorm",
  "contracts",
@@ -1017,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "release-tests"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "algorithm-client",
  "anyhow",
@@ -1199,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "setup"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "chrono",
  "delivery-core",
@@ -1263,9 +1273,10 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "state"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "delivery-core",
+ "fs2",
  "schemars",
  "serde",
  "serde_json",
@@ -1518,7 +1529,7 @@ checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "verification"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "delivery-core",
@@ -1600,6 +1611,28 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
@@ -1686,7 +1719,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workflow"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "architecture",
  "brainstorm",

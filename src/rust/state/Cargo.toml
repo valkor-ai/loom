@@ -11,6 +11,7 @@ path = "lib.rs"
 
 [dependencies]
 delivery-core = { path = "../core" }
+fs2.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -45,6 +45,14 @@ pub fn initialize_project(project_root: &str) -> StateResult<ProjectConfig> {
     ensure_dir(&paths.tmp_dir)?;
     ensure_dir(&paths.requests_dir)?;
     ensure_dir(&paths.metrics_dir)?;
+    ensure_dir(&crate::paths::lifecycle_dir(&paths.root))?;
+    ensure_dir(&crate::paths::plan_requests_dir(&paths.root))?;
+    ensure_dir(
+        &paths
+            .root
+            .join(crate::paths::LOOM_DIR)
+            .join("plan-conflicts"),
+    )?;
     let config = if path_exists(&paths.config_file) {
         read_project_config(project_root)?
     } else {
@@ -59,6 +67,28 @@ pub fn initialize_project(project_root: &str) -> StateResult<ProjectConfig> {
     validate_project_id(&config.project_id)?;
     register_user_project(&config.project_id, paths.root.to_string_lossy().as_ref())?;
     Ok(config)
+}
+
+/// Initialize a temporary project view without changing the user project
+/// registry. Staged lifecycle preparation uses the real project's config so
+/// request refs keep the same project identity while all generated files stay
+/// outside the live `.loom` tree until the lifecycle commit publishes them.
+pub fn initialize_staged_project(project_root: &str) -> StateResult<ProjectConfig> {
+    let paths = project_paths(project_root)?;
+    ensure_dir(&paths.loom_dir)?;
+    ensure_dir(&paths.deliveries_dir)?;
+    ensure_dir(&paths.tmp_dir)?;
+    ensure_dir(&paths.requests_dir)?;
+    ensure_dir(&paths.metrics_dir)?;
+    ensure_dir(&crate::paths::lifecycle_dir(&paths.root))?;
+    ensure_dir(&crate::paths::plan_requests_dir(&paths.root))?;
+    ensure_dir(
+        &paths
+            .root
+            .join(crate::paths::LOOM_DIR)
+            .join("plan-conflicts"),
+    )?;
+    read_project_config(project_root)
 }
 
 pub fn read_project_config(project_root: &str) -> StateResult<ProjectConfig> {

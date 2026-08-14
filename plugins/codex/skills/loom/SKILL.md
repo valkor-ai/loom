@@ -16,6 +16,7 @@ Use the current workspace directory as `projectRoot`.
 - `@loom <request>` -> call `loom.plan` with the full request text.
 - `@loom plan <request>` -> call `loom.plan` with `<request>`.
 - `@loom continue`, `@loom resume`, `@loom proceed`, or `@loom next` -> call `loom.continue`.
+- If `loom.plan` returns a plan-conflict user gate, present its numbered choices and descriptions exactly. Choice 1 must call `loom.planConflictResolve` with `continue_current`; choice 2 must call it with `start_new`. Do not call `loom.plan` again to resolve the conflict.
 - `@loom verify` -> call `loom.verify` without a decision to show the V-SEFM onboarding gate.
 - `@loom status` -> call `loom.status`.
 - `@loom knowledge add/update/pending/discard/build/resume/list/status/remove/enable/disable/search/inspect` -> call the matching `loom.knowledge*` tool.

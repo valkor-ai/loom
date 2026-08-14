@@ -6,9 +6,9 @@ use contracts::{
     UserConfirmation,
 };
 use delivery_core::{
-    apply_delivery_index, DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState,
-    LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpUserGateResult, RouteAction,
-    RouteActionKind, TransitionStore, ValidatedPlanInput,
+    DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, LoomMcpActionResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpUserGateResult, RouteAction, RouteActionKind,
+    TransitionStore, ValidatedPlanInput,
 };
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -45,15 +45,37 @@ fn start_brainstorm_inner(
     input: &ValidatedPlanInput,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let project_root = Path::new(&input.project_root);
+    let transaction_id = format!("lifecycle-tx-{}", state::store::now_millis());
+    let staged = state::prepare_staged_project(project_root, &transaction_id)?;
+    let staged_root = staged.root.as_path();
+    let store = FileTransitionStore;
+    let status = store
+        .load_status(&input.project_root)
+        .map_err(to_state_error)?;
+    if let Some(active_delivery_id) = status.active_delivery_id.as_deref() {
+        let active_delivery = store
+            .load_delivery_index(&input.project_root, active_delivery_id)
+            .map_err(to_state_error)?;
+        let active = !matches!(
+            active_delivery.status,
+            DeliveryLifecycleStatus::Completed
+                | DeliveryLifecycleStatus::CompletedWithOverride
+                | DeliveryLifecycleStatus::Superseded
+        );
+        if active && input.supersede_active_delivery_id.as_deref() != Some(active_delivery_id) {
+            return Err(state::store::StateError::StateCorrupted(
+                "an active Loom delivery already exists; resolve the plan conflict before starting another delivery".to_string(),
+            ));
+        }
+    }
     let now = state::store::now_string();
     let delivery_id = format!("delivery-{}", state::store::now_millis());
     let phase_id = "phase-1".to_string();
     let brainstorm_run_id = format!("brainstorm-run-{}", state::store::now_millis());
     let request_id = format!("brainstorm-session-{}", state::store::now_millis());
     let contract_id = format!("brainstorm-contract-{}", state::store::now_millis());
-
     let requirement = build_requirement_artifacts(
-        project_root,
+        staged_root,
         &delivery_id,
         &input.request_text,
         &input.requirement_files,
@@ -76,15 +98,15 @@ fn start_brainstorm_inner(
         &input.requirement_files,
         &now,
     );
-    let contract_file = brainstorm_contract_file(project_root, &delivery_id);
+    let contract_file = brainstorm_contract_file(staged_root, &delivery_id);
     write_json_atomic(&contract_file, &contract)?;
-    let contract_ref = to_project_relative(project_root, &contract_file)?;
+    let contract_ref = to_project_relative(staged_root, &contract_file)?;
     let clarification_state = initial_state(&delivery_id, &phase_id, &brainstorm_run_id);
     let clarification_state_ref =
-        write_initial_state_file(project_root, &delivery_id, &phase_id, &clarification_state)?;
+        write_initial_state_file(staged_root, &delivery_id, &phase_id, &clarification_state)?;
 
     let request_root = build_brainstorm_request_root(
-        project_root,
+        staged_root,
         &request_id,
         &delivery_id,
         &phase_id,
@@ -92,8 +114,8 @@ fn start_brainstorm_inner(
         &requirement.user_facing_language,
         context_refs,
     );
-    let stored = state::write_native_request(
-        &input.project_root,
+    let stored = state::write_native_request_staged(
+        &staged_root.to_string_lossy(),
         state::NativeRequestInput {
             request_id: request_id.clone(),
             request_kind: "brainstorm_clarification_block".to_string(),
@@ -109,7 +131,7 @@ fn start_brainstorm_inner(
         phase_id: phase_id.clone(),
     };
     ensure_dir(
-        &paths::workspace_dir(project_root, &locator)
+        &paths::workspace_dir(staged_root, &locator)
             .join("brainstorm-knowledge")
             .join(&request_id),
     )?;
@@ -121,7 +143,7 @@ fn start_brainstorm_inner(
     );
 
     let mut latest_refs = BTreeMap::new();
-    latest_refs.insert("brainstormRequestId".to_string(), request_id);
+    latest_refs.insert("brainstormRequestId".to_string(), request_id.clone());
     latest_refs.insert(
         "brainstormRequestRef".to_string(),
         stored.request_ref.clone(),
@@ -169,19 +191,71 @@ fn start_brainstorm_inner(
             pending_repair: None,
         }],
         updated_at: now.clone(),
+        request_ref: Some(input.request_identity.request_ref.clone()),
+        request_fingerprint: Some(input.request_identity.fingerprint.clone()),
     };
-    let store = FileTransitionStore;
-    store
-        .save_delivery_index(&input.project_root, &delivery)
-        .map_err(to_state_error)?;
-    let mut status = store
-        .load_status(&input.project_root)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(&input.project_root, &status)
-        .map_err(to_state_error)?;
-
+    state::persist_plan_request(input)?;
+    let mut lifecycle = state::LifecycleCommit {
+        expected_revision: input.expected_lifecycle_revision,
+        expected_active_delivery_id: Some(input.supersede_active_delivery_id.clone()),
+        deliveries: vec![delivery],
+        pending_plan_conflict_id: Some(None),
+        ..state::LifecycleCommit::default()
+    };
+    if input.plan_conflict_id.is_none() {
+        if let Some(conflict_id) = status.pending_plan_conflict_id.as_deref() {
+            let mut conflict = state::load_plan_conflict(&input.project_root, conflict_id)?;
+            if conflict.status == delivery_core::PlanConflictStatus::Pending {
+                conflict.status = delivery_core::PlanConflictStatus::Expired;
+                conflict.updated_at = state::store::now_string();
+                lifecycle.conflicts.push(conflict);
+            }
+        }
+    }
+    if let Some(conflict_id) = input.plan_conflict_id.as_deref() {
+        let mut conflict = state::load_plan_conflict(&input.project_root, conflict_id)?;
+        if conflict.status != delivery_core::PlanConflictStatus::Pending
+            || conflict.active_delivery_id
+                != input
+                    .supersede_active_delivery_id
+                    .as_deref()
+                    .unwrap_or_default()
+            || status.pending_plan_conflict_id.as_deref() != Some(conflict_id)
+        {
+            return Err(state::store::StateError::StateCorrupted(
+                "STALE_PLAN_CONFLICT: the plan conflict changed before the new delivery was committed"
+                    .to_string(),
+            ));
+        }
+        conflict.status = delivery_core::PlanConflictStatus::ResolvedStartNew;
+        conflict.updated_at = state::store::now_string();
+        lifecycle.conflicts.push(conflict);
+    }
+    if let Some(old_delivery_id) = input.supersede_active_delivery_id.as_deref() {
+        let mut old_delivery = store
+            .load_delivery_index(&input.project_root, old_delivery_id)
+            .map_err(to_state_error)?;
+        old_delivery.status = DeliveryLifecycleStatus::Superseded;
+        old_delivery.updated_at = state::store::now_string();
+        lifecycle.deliveries.insert(0, old_delivery);
+        if let Some(mut lease) = store
+            .read_operation_lease(&input.project_root, old_delivery_id)
+            .map_err(to_state_error)?
+        {
+            lease.close(state::store::now_string());
+            lifecycle.leases.push(lease);
+        }
+    }
+    let artifacts = state::collect_prepared_artifacts(staged_root, project_root)?;
+    let commit_result = state::commit_lifecycle_with_artifacts(
+        &input.project_root,
+        lifecycle,
+        artifacts,
+        Some(staged.into_commit_cleanup()),
+    );
+    if let Err(error) = commit_result {
+        return Err(error);
+    }
     Ok(LoomMcpActionResult::UserGate(
         LoomMcpUserGateResult::new(
             input.project_root.clone(),
@@ -332,5 +406,5 @@ fn summarize_request(request_text: &str, file_count: usize) -> RequestSummary {
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }

@@ -1,7 +1,6 @@
 use std::{
     fs,
     sync::{Mutex, MutexGuard},
-    time::Duration,
 };
 
 use mcp_server::LoomMcpServer;
@@ -82,8 +81,7 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
     })
     .expect("read phase two group");
 
-    std::thread::sleep(Duration::from_millis(2));
-    let second = structured(
+    let second_conflict = structured(
         server
             .invoke_tool(
                 "loom.plan",
@@ -93,6 +91,21 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
                 }))),
             )
             .expect("second plan"),
+    );
+    let conflict_ref = second_conflict["gate"]["conflictRef"]
+        .as_str()
+        .expect("second plan conflict ref");
+    let second = structured(
+        server
+            .invoke_tool(
+                "loom.planConflictResolve",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "conflictRef": conflict_ref,
+                    "choice": "start_new"
+                }))),
+            )
+            .expect("start second delivery"),
     );
     let second_delivery = second["deliveryId"].as_str().expect("second delivery");
     assert_ne!(first_delivery, second_delivery);

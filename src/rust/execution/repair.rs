@@ -2532,8 +2532,9 @@ fn update_latest_execution_request(
     }
     delivery.status = delivery_core::DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -2678,8 +2679,9 @@ fn update_latest_repair_action(
         });
     }
     delivery.updated_at = state::store::now_string();
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     store
-        .save_delivery_index(project_root, &delivery)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -2849,11 +2851,7 @@ fn update_delivery_after_repair_submit(
     }
     delivery.updated_at = state::store::now_string();
     store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    delivery_core::apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
+        .commit_delivery_state(project_root, &delivery, &mut status)
         .map_err(to_state_error)
 }
 
@@ -2980,5 +2978,5 @@ fn failed(
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
-    state::store::StateError::StateCorrupted(error.to_string())
+    state::store::from_core_error(error)
 }

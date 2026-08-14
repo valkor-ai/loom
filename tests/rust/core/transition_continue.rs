@@ -169,6 +169,8 @@ fn continue_activates_next_phase_before_dispatching() {
             },
         ],
         updated_at: "1".to_string(),
+        request_ref: None,
+        request_fingerprint: None,
     };
     apply_delivery_index(&mut status, &delivery);
     let store = MemoryStore::new(status).with_delivery(delivery);
@@ -282,6 +284,8 @@ fn sample_delivery(next_action: RouteAction) -> DeliveryIndex {
             pending_repair: None,
         }],
         updated_at: "1".to_string(),
+        request_ref: None,
+        request_fingerprint: None,
     }
 }
 

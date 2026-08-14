@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/valkor-ai/loom"
@@ -36,6 +36,7 @@ sha2 = "0.10"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
 chrono = "0.4"
+fs2 = "0.4"
 quick-xml = "0.38"
 zip = "6.0"
 pdf-extract = "0.9"
