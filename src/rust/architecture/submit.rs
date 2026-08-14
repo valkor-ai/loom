@@ -5,10 +5,11 @@ use std::{
 
 use contracts::{
     build_api_quality_seed_from_foundation, normalize_ui_surface_decision_contract_for_persist,
-    validate_ui_surface_decision_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
-    ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
-    ArchitectureHandoff, ArchitectureQuality, ArchitectureSectionCandidateAgentWritable,
-    ArchitectureSectionGroup, ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
+    normalize_ui_surface_registry_for_persist, validate_ui_surface_decision_contract,
+    AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
+    ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
+    ArchitectureQuality, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -614,6 +615,29 @@ fn normalize_architecture_candidate_envelope(
             object.get_mut("content"),
             request_root.pointer("/runtimeDependencySeed/candidates"),
         );
+        normalize_runtime_delivery_machine_owned_fields(object.get_mut("content"));
+    }
+}
+
+fn normalize_runtime_delivery_machine_owned_fields(content: Option<&mut Value>) {
+    let Some(runtime_delivery) = content
+        .and_then(Value::as_object_mut)
+        .and_then(|object| object.get_mut("runtimeDelivery"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(http_probes) = runtime_delivery
+        .get_mut("httpProbes")
+        .and_then(Value::as_object_mut)
+    {
+        http_probes.remove("apiPaths");
+    }
+    if let Some(api) = runtime_delivery
+        .get_mut("api")
+        .and_then(Value::as_object_mut)
+    {
+        api.remove("probePaths");
     }
 }
 
@@ -1919,7 +1943,10 @@ fn normalize_frontend_ui_surface_decision_contract(
         return false;
     };
     let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
-    normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed)
+    let mut changed = normalize_ui_surface_registry_for_persist(frontend_experience);
+    changed |=
+        normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed);
+    changed
 }
 
 fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {

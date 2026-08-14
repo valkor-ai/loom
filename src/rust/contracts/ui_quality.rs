@@ -330,7 +330,7 @@ pub fn ui_surface_decision_candidate_shape() -> Value {
     json!({
         "patternRankings": [{
             "kind": UI_KNOWN_SURFACE_PATTERNS.join(" | "),
-            "score": "0.0-1.0",
+            "score": "number",
             "matchedSignals": ["string"],
             "missingSignals": ["string"],
             "mismatchSignals": ["string"],
@@ -338,10 +338,10 @@ pub fn ui_surface_decision_candidate_shape() -> Value {
         }],
         "selectedPattern": {
             "mode": UI_SURFACE_PATTERN_MODES.join(" | "),
-            "knownPattern": "known pattern when mode=known, otherwise null",
-            "primaryKnownPattern": "known pattern when mode=hybrid, otherwise null",
+            "knownPattern": "string or null",
+            "primaryKnownPattern": "string or null",
             "secondaryKnownPatterns": ["known patterns when mode=hybrid"],
-            "customPattern": "agent-defined short pattern name when mode=custom, otherwise null",
+            "customPattern": "string or null",
             "nearestKnownPatterns": ["required when mode=custom"],
             "confidence": UI_SURFACE_CONFIDENCE_LEVELS.join(" | "),
             "rationale": "string",
@@ -488,17 +488,17 @@ pub fn ui_surface_decision_contract_shape() -> Value {
         "contractKind": "ui_surface_decision_contract",
         "patternDecision": {
             "mode": UI_SURFACE_PATTERN_MODES.join(" | "),
-            "knownPattern": "known pattern when mode=known, otherwise null",
-            "primaryKnownPattern": "known pattern when mode=hybrid, otherwise null",
+            "knownPattern": "string or null",
+            "primaryKnownPattern": "string or null",
             "secondaryKnownPatterns": ["known pattern"],
-            "customPattern": "custom pattern name when mode=custom, otherwise null",
+            "customPattern": "string or null",
             "nearestKnownPatterns": ["known pattern"],
             "confidence": UI_SURFACE_CONFIDENCE_LEVELS.join(" | "),
             "rationale": "string",
             "evidenceRefs": ["refs proving the selected pattern"],
             "rankings": [{
                 "kind": UI_KNOWN_SURFACE_PATTERNS.join(" | "),
-                "score": "0.0-1.0",
+                "score": "number",
                 "matchedSignals": ["string"],
                 "missingSignals": ["string"],
                 "mismatchSignals": ["string"],
@@ -575,10 +575,7 @@ fn ui_surface_layout_model_shape() -> Value {
         "desktop": {
             "layoutIntent": "string",
             "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")],
-            "forbiddenPresentations": [format!(
-                "{} | composition constraint",
-                UI_PRESENTATION_KINDS.join(" | ")
-            )]
+            "forbiddenPresentations": ["string"]
         },
         "tablet": {
             "layoutIntent": "string",
@@ -653,14 +650,8 @@ fn ui_surface_state_model_shape() -> Value {
 fn ui_surface_composition_constraints_shape() -> Value {
     json!({
         "requiredComposition": ["string"],
-        "forbiddenComposition": [format!(
-            "{} | custom composition constraint",
-            UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")
-        )],
-        "antiDemoRules": [format!(
-            "{} | custom anti-demo rule",
-            UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")
-        )],
+        "forbiddenComposition": ["string"],
+        "antiDemoRules": ["string"],
         "customRules": ["required when known constraints do not cover the product surface"]
     })
 }
@@ -676,10 +667,7 @@ fn ui_surface_content_boundary_shape() -> Value {
             "business_feedback",
             "help_entry"
         ],
-        "forbiddenUserVisibleContent": [format!(
-            "{} | feature_explanation | custom forbidden copy class",
-            UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | ")
-        )],
+        "forbiddenUserVisibleContent": ["string"],
         "customForbiddenContent": ["required when product-specific content must be blocked"],
         "copyRule": "Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."
     })
@@ -718,6 +706,269 @@ pub fn build_ui_quality_seed(
         "requiredUiStates": UI_REQUIRED_STATES,
         "selectionRule": "Use these candidates only as read-only hints while writing surfaceDecisionCandidate. Do not write requiredReferenceGroups, referenceLoadPlan, referenceProfile, or derived rule lists inside the candidate; MCP recomputes uiSurfaceDecisionContract.referencePlan and qualityRules during submit from the selected surface decision and stack signals."
     })
+}
+
+/// Build the one canonical surface ownership projection consumed by TaskPlan
+/// and TaskExecute. The Agent owns the compact business collections
+/// (`surfaces`, `dataViews`, `actions`, and `operationPaths`); this registry is
+/// deliberately reconstructed from those collections so it cannot become a
+/// second Agent-authored source of truth.
+pub fn normalize_ui_surface_registry_for_persist(frontend_experience: &mut Value) -> bool {
+    let required = frontend_experience
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !required {
+        return frontend_experience
+            .as_object_mut()
+            .and_then(|object| object.remove("uiSurfaceRegistry"))
+            .is_some();
+    }
+    let surfaces = frontend_experience
+        .get("surfaces")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let operation_paths = frontend_experience
+        .get("operationPaths")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let registry_surfaces = surfaces
+        .iter()
+        .filter_map(|surface| {
+            let surface_id = surface_string(surface, &["surfaceId"])?;
+            let path_matches = operation_paths
+                .iter()
+                .filter(|path| {
+                    surface_string(path, &["surfaceRef"]).as_deref() == Some(surface_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let mut data_view_refs = surface_string_array(surface, "dataViewRefs");
+            let mut action_refs = surface_string_array(surface, "actionRefs");
+            let mut operation_path_refs = surface_string_array(surface, "operationPathRefs");
+            let mut workflow_refs = surface_string_array(surface, "workflowRefs");
+            let mut interface_refs = surface_string_array(surface, "interfaceRefs");
+            for path in path_matches {
+                append_unique_string(
+                    &mut operation_path_refs,
+                    surface_string(path, &["pathId"]),
+                );
+                extend_unique_strings(&mut data_view_refs, surface_string_array(path, "dataViewRefs"));
+                extend_unique_strings(&mut action_refs, surface_string_array(path, "actionRefs"));
+                append_unique_string(
+                    &mut workflow_refs,
+                    surface_string(path, &["workflowRef"]),
+                );
+                extend_unique_strings(&mut interface_refs, surface_string_array(path, "interfaceRefs"));
+            }
+            let mut registry_surface = serde_json::Map::new();
+            registry_surface.insert("surfaceId".to_string(), json!(surface_id));
+            registry_surface.insert(
+                "surfaceRole".to_string(),
+                json!(surface_string(surface, &["surfaceRole", "role"])
+                    .unwrap_or_else(|| "page".to_string())),
+            );
+            registry_surface.insert(
+                "businessPurpose".to_string(),
+                json!(surface_string(surface, &["businessPurpose", "purpose", "name"])
+                    .unwrap_or_default()),
+            );
+            registry_surface.insert(
+                "productIntent".to_string(),
+                structured_surface_model(
+                    surface,
+                    "productIntent",
+                    json!({
+                        "userRole": surface_string(surface, &["userRole"]).unwrap_or_default(),
+                        "businessObject": surface_string(surface, &["businessObject"]).unwrap_or_default(),
+                        "primaryJob": surface_string(surface, &["primaryJob", "purpose", "name"]).unwrap_or_default(),
+                        "successOutcome": surface_string(surface, &["successOutcome"]).unwrap_or_default()
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "compositionModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "compositionModel",
+                    json!({
+                        "requiredRegions": ["business navigation or local context", "task-relevant data or form region", "scoped feedback region"],
+                        "forbiddenRegions": ["decorative or explanatory region that displaces the task workflow"],
+                        "primaryRegion": "task-relevant data or form region",
+                        "supportingRegions": ["navigation/context", "detail/summary", "feedback"]
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "informationModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "informationModel",
+                    json!({
+                        "mustShow": ["business object identity", "business object status", "fields required to complete the task"],
+                        "scanPriority": ["identity", "status", "decision fields", "available actions"],
+                        "identityFields": [],
+                        "statusFields": [],
+                        "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow."
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "actionModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "actionModel",
+                    json!({
+                        "primaryActions": action_refs,
+                        "contextualActions": [],
+                        "dangerousActions": [],
+                        "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
+                        "postSuccessUpdate": "Update the affected object, count, state, or route; do not rely only on a toast."
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "statePlacementModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "statePlacementModel",
+                    json!({
+                        "loading": "Near the region or control waiting for data or mutation.",
+                        "empty": "In the data/form region with the business next action when applicable.",
+                        "error": "Near the affected region with a recovery path.",
+                        "success": "Inline object update plus short confirmation when useful.",
+                        "business_blocking": "Near the blocked field, row, detail, or action.",
+                        "validation": "Near the field and summary for longer forms.",
+                        "disabled": "On or near disabled controls with an actionable unlock reason."
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "visualModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "visualModel",
+                    json!({
+                        "layoutBaseline": "custom_product_layout",
+                        "density": "balanced",
+                        "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
+                        "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
+                        "antiDemoRules": ["no runtime commands or delivery notes in product UI", "no decorative filler before workflow content"]
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "responsiveModel".to_string(),
+                structured_surface_model(
+                    surface,
+                    "responsiveModel",
+                    json!({
+                        "desktop": "Keep the primary task surface and action path visible without layout shift.",
+                        "tablet": "Preserve task order while reducing secondary regions.",
+                        "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
+                    }),
+                ),
+            );
+            registry_surface.insert(
+                "requiredComposition".to_string(),
+                Value::Array(vec![
+                    json!("business navigation or context"),
+                    json!("task-relevant data view, form, table, detail, or action area"),
+                    json!("local loading, empty, error, success, and business-blocking states where applicable"),
+                ]),
+            );
+            registry_surface.insert(
+                "forbiddenComposition".to_string(),
+                Value::Array(vec![
+                    json!("surface composition unrelated to the task-owned business workflow"),
+                    json!("decorative or explanatory sections that displace required workflow content"),
+                ]),
+            );
+            registry_surface.insert(
+                "stateRefs".to_string(),
+                Value::Array(
+                    ["loading", "success", "error", "empty", "business_blocking"]
+                        .into_iter()
+                        .map(|value| json!(value))
+                        .collect(),
+                ),
+            );
+            registry_surface.insert(
+                "dataViewRefs".to_string(),
+                Value::Array(data_view_refs.iter().map(|value| json!(value)).collect()),
+            );
+            registry_surface.insert(
+                "actionRefs".to_string(),
+                Value::Array(action_refs.iter().map(|value| json!(value)).collect()),
+            );
+            registry_surface.insert(
+                "operationPathRefs".to_string(),
+                Value::Array(operation_path_refs.iter().map(|value| json!(value)).collect()),
+            );
+            registry_surface.insert(
+                "workflowRefs".to_string(),
+                Value::Array(workflow_refs.iter().map(|value| json!(value)).collect()),
+            );
+            registry_surface.insert(
+                "interfaceRefs".to_string(),
+                Value::Array(interface_refs.iter().map(|value| json!(value)).collect()),
+            );
+            Some(Value::Object(registry_surface))
+        })
+        .collect::<Vec<_>>();
+    let registry = json!({
+        "registryId": "ui-registry-v1",
+        "selectionRule": "MCP-derived canonical UI ownership projection. TaskPlan selects only the surfaces and linked objects owned by each task.",
+        "surfaces": registry_surfaces
+    });
+    let Some(object) = frontend_experience.as_object_mut() else {
+        return false;
+    };
+    let changed = object.get("uiSurfaceRegistry") != Some(&registry);
+    object.insert("uiSurfaceRegistry".to_string(), registry);
+    changed
+}
+
+fn structured_surface_model(source: &Value, key: &str, fallback: Value) -> Value {
+    source
+        .get(key)
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or(fallback)
+}
+
+fn surface_string(source: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| source.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn surface_string_array(source: &Value, key: &str) -> Vec<String> {
+    source
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn append_unique_string(values: &mut Vec<String>, value: Option<String>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        if !values.contains(&value) {
+            values.push(value);
+        }
+    }
+}
+
+fn extend_unique_strings(values: &mut Vec<String>, additions: Vec<String>) {
+    for value in additions {
+        append_unique_string(values, Some(value));
+    }
 }
 
 pub fn normalize_ui_surface_decision_contract_for_persist(

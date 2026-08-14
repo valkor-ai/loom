@@ -145,6 +145,16 @@ fn finalize_output_contract_adds_version_fingerprint_and_compact_projection() {
         output["schemaProjection"]["fieldContract"]["properties"]["summary"]["type"],
         "string"
     );
+    assert!(output["agentOwnedPaths"]
+        .as_array()
+        .is_some_and(|paths| paths.contains(&json!("summary"))));
+    assert!(output["requiredPaths"]
+        .as_array()
+        .is_some_and(|paths| paths.contains(&json!("summary"))));
+    assert_eq!(
+        output["semanticRules"]["schemaAuthority"],
+        "outputContract.schemaProjection.fieldContract"
+    );
 }
 
 #[test]
@@ -182,7 +192,7 @@ fn write_contract_validation_uses_result_template_for_sparse_nested_fields() {
 }
 
 #[test]
-fn write_contract_allows_only_declared_mcp_normalized_fields() {
+fn write_contract_allows_only_declared_mcp_owned_paths() {
     let mut output = json!({
         "artifactKind": "brainstorm_candidate",
         "schemaShape": {
@@ -196,10 +206,11 @@ fn write_contract_allows_only_declared_mcp_normalized_fields() {
     });
     finalize_output_contract(&mut output, &BTreeMap::new());
 
-    assert!(output["mcpNormalizedFields"]
+    assert!(output["mcpOwnedPaths"]
         .as_array()
-        .expect("normalized fields")
+        .expect("MCP-owned paths")
         .contains(&json!("clarificationProgress")));
+    assert!(output.get("mcpNormalizedFields").is_none());
     let accepted = validate_agent_write_contract(
         &output,
         "candidate",
@@ -297,10 +308,18 @@ fn not_applicable_policy_rejects_agent_authored_values() {
     let issues = validate_agent_write_contract(&output, "candidate", &json!({"summary": "wrong"}));
     assert!(!issues.is_empty(), "contract={output:#}");
     assert_eq!(issues[0].code, "WRITE_CONTRACT_FIELD_NOT_APPLICABLE");
+    assert!(!output["agentOwnedPaths"]
+        .as_array()
+        .expect("agent-owned paths")
+        .contains(&json!("summary")));
+    assert!(output["notApplicablePaths"]
+        .as_array()
+        .expect("not-applicable paths")
+        .contains(&json!("summary")));
 }
 
 #[test]
-fn architecture_content_is_validated_by_the_architecture_domain() {
+fn architecture_content_is_validated_by_the_shared_contract_before_domain_submit() {
     let mut output = json!({
         "artifactKind": "architecture_section_candidate",
         "schemaShape": {
@@ -323,16 +342,16 @@ fn architecture_content_is_validated_by_the_architecture_domain() {
     let accepted = validate_agent_write_contract(
         &output,
         "candidate",
-        &json!({"status": "ready", "content": {"sectionSpecificModel": {"owner": "architecture"}}}),
+        &json!({"status": "ready", "content": {"modules": []}}),
     );
     assert!(accepted.is_empty(), "{accepted:#?}");
 
     let rejected = validate_agent_write_contract(
         &output,
         "candidate",
-        &json!({"status": "ready", "content": {}, "unexpectedEnvelopeField": true}),
+        &json!({"status": "ready", "content": {"modules": true}}),
     );
-    assert_eq!(rejected[0].code, "WRITE_CONTRACT_FIELD_UNKNOWN");
+    assert_eq!(rejected[0].code, "WRITE_CONTRACT_TYPE_INVALID");
 }
 
 #[test]
@@ -406,6 +425,37 @@ fn applicability_uses_structured_contract_facts_without_api_keyword_matching() {
         policies["runtimeDeliveryEvidence"].applicability,
         AgentFieldApplicability::NotApplicable
     );
+}
+
+#[test]
+fn task_result_repair_reuses_original_task_projection_for_evidence_applicability() {
+    let policies = derive_agent_field_policies(&json!({
+        "requestType": "task_result_repair",
+        "taskProjection": {
+            "frontendExperienceRequirement": {
+                "uiSurfaceDecisionContractRef": "ui-contract"
+            },
+            "runtimeDeliveryRequirement": {"appliesToThisTask": true},
+            "architectureQualityRequirementRefs": ["arch-quality-1"],
+            "apiContractRequirementRefs": ["api-contract-1"],
+            "codeQualityRequirementRefs": ["code-quality-1"]
+        }
+    }));
+
+    for field in [
+        "frontendExperienceSelfCheck",
+        "frontendQualitySelfCheck",
+        "runtimeDeliveryEvidence",
+        "architectureQualityEvidence",
+        "apiContractEvidence",
+        "codeQualityEvidence",
+    ] {
+        assert_eq!(
+            policies[field].applicability,
+            AgentFieldApplicability::CurrentRequest,
+            "repair applicability must preserve {field}"
+        );
+    }
 }
 
 #[derive(Debug, Serialize)]

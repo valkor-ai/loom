@@ -566,6 +566,12 @@ fn augment_write_contract_fields(group: &mut ReadGroupRef) {
     fields.insert("outputContract.contractVersion".to_string());
     fields.insert("outputContract.contractFingerprint".to_string());
     fields.insert("outputContract.schemaProjection".to_string());
+    fields.insert("outputContract.agentOwnedPaths".to_string());
+    fields.insert("outputContract.mcpOwnedPaths".to_string());
+    fields.insert("outputContract.requiredPaths".to_string());
+    fields.insert("outputContract.notApplicablePaths".to_string());
+    fields.insert("outputContract.preserveOnRepair".to_string());
+    fields.insert("outputContract.semanticRules".to_string());
     group.selectors = read_selectors_from_paths(fields);
 }
 
