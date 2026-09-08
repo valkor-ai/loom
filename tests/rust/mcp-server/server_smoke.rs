@@ -143,6 +143,7 @@ fn stdio_server_persists_and_reads_a_delivery_request() {
         .is_some_and(|groups| !groups.is_empty()));
     let first_group = &inspection["readGroups"][0];
     assert!(first_group["fieldCount"].is_u64());
+    assert_eq!(first_group["requestRef"], request_ref);
     assert!(first_group.get("selectors").is_none());
 
     let read = client.call_tool(

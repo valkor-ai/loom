@@ -621,6 +621,7 @@ fn read_group_ref_from_value(
     }
     let selectors = read_selectors_from_paths(fields);
     Ok(ReadGroupRef {
+        request_ref: Some(request_ref(project_id, request_id)),
         group_id: group_id.clone(),
         required: object
             .get("required")

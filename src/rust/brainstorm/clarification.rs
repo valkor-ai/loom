@@ -26,6 +26,14 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClarificationProfile {
+    #[default]
+    Full,
+    ExplicitMaintenance,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainstormConfirmBlockInput {
@@ -49,6 +57,10 @@ pub struct ClarificationState {
     pub phase_id: String,
     pub brainstorm_run_id: String,
     pub current_block: ClarificationBlockName,
+    #[serde(default)]
+    pub clarification_profile: ClarificationProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clarification_profile_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<ConfirmedClarificationBlock>,
     pub final_summary_confirmed: bool,
@@ -74,6 +86,8 @@ pub fn initial_state(
     delivery_id: &str,
     phase_id: &str,
     brainstorm_run_id: &str,
+    clarification_profile: ClarificationProfile,
+    clarification_profile_reason: Option<String>,
 ) -> ClarificationState {
     ClarificationState {
         schema_version: "1.0".to_string(),
@@ -81,6 +95,8 @@ pub fn initial_state(
         phase_id: phase_id.to_string(),
         brainstorm_run_id: brainstorm_run_id.to_string(),
         current_block: ClarificationBlockName::PhaseScope,
+        clarification_profile,
+        clarification_profile_reason,
         blocks: vec![],
         final_summary_confirmed: false,
         updated_at: state::store::now_string(),
@@ -404,14 +420,17 @@ fn confirm_block_inner(
             message: "Only the page operation path block can be skipped.".to_string(),
         });
     }
-    ensure_block_knowledge_context(
-        &project_root,
-        &delivery_id,
-        &phase_id,
-        &request_id,
-        &input.request_ref,
-        &input.block,
-    )?;
+    if !(input.skipped && input.block == ClarificationBlockName::FrontendExperience) {
+        ensure_block_knowledge_context(
+            &project_root,
+            &delivery_id,
+            &phase_id,
+            &request_id,
+            &input.request_ref,
+            &input.block,
+            &state.clarification_profile,
+        )?;
+    }
 
     let now = state::store::now_string();
     upsert_confirmed_block(
@@ -474,6 +493,7 @@ fn confirm_block_inner(
             &brainstorm_run_id,
             &user_facing_language,
             context_refs,
+            &state.clarification_profile,
         );
         if phase.latest_refs.contains_key("latestRepositoryContext") {
             request_root["postSubmit"]["nextAction"] = json!(RouteAction {
@@ -553,6 +573,7 @@ fn confirm_block_inner(
             &user_facing_language,
             context_refs,
             next.clone(),
+            &state.clarification_profile,
         );
         let stored = state::write_native_request(
             &project_root,
@@ -628,8 +649,9 @@ fn ensure_block_knowledge_context(
     request_id: &str,
     request_ref: &str,
     block: &ClarificationBlockName,
+    profile: &ClarificationProfile,
 ) -> Result<(), ConfirmError> {
-    let required_steps = required_knowledge_step_ids(block);
+    let required_steps = required_knowledge_step_ids(block, profile);
     if required_steps.is_empty() {
         return Ok(());
     }
@@ -850,7 +872,12 @@ fn gate_for_state(block: ClarificationBlockName, state: &ClarificationState) -> 
                 .unwrap_or_else(|| "User confirmed this block is not applicable.".to_string()),
         })
         .collect();
-    gate_for_block(block, already_confirmed_blocks, skipped_blocks)
+    gate_for_block(
+        block,
+        already_confirmed_blocks,
+        skipped_blocks,
+        &state.clarification_profile,
+    )
 }
 
 fn clean_confirmed_value(value: Value) -> Value {

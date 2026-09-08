@@ -384,6 +384,19 @@ fn add_shared_write_contract_metadata(
     }
     agent_owned.retain(|path| !mcp_owned_paths.contains(path));
     for (path, policy) in field_policies {
+        // Field policies are shared by several artifact kinds. Only surface a
+        // policy when the current candidate schema actually declares the path.
+        // Otherwise an unrelated policy can instruct an agent to write a field
+        // that this artifact will correctly reject.
+        if !field_contract_declares_path(
+            contract
+                .get("schemaProjection")
+                .and_then(Value::as_object)
+                .and_then(|projection| projection.get("fieldContract")),
+            path,
+        ) {
+            continue;
+        }
         if policy.owner == AgentFieldOwner::Mcp
             || policy.applicability == AgentFieldApplicability::NotApplicable
         {
@@ -429,6 +442,31 @@ fn add_shared_write_contract_metadata(
             "repairRule": "Repair preserves preserveOnRepair paths and changes only the returned target and failed paths."
         }),
     );
+}
+
+fn field_contract_declares_path(field_contract: Option<&Value>, path: &str) -> bool {
+    let Some(mut node) = field_contract else {
+        return false;
+    };
+    for segment in path.split('.') {
+        let segment = segment.trim_end_matches("[]");
+        let Some(properties) = node.get("properties").and_then(Value::as_object) else {
+            return false;
+        };
+        let Some(next) = properties.get(segment) else {
+            return false;
+        };
+        node = if path_segment_is_array(segment, path) {
+            next.get("items").unwrap_or(next)
+        } else {
+            next
+        };
+    }
+    true
+}
+
+fn path_segment_is_array(segment: &str, path: &str) -> bool {
+    path.split('.').any(|part| part == format!("{segment}[]"))
 }
 
 fn collect_contract_paths(
@@ -1633,5 +1671,41 @@ mod tests {
             .expect("no-change contract");
         assert_eq!(reason_contract["type"], json!("object"));
         assert_eq!(reason_contract["nullable"], json!(true));
+    }
+
+    #[test]
+    fn shared_policies_do_not_expose_fields_outside_the_candidate_schema() {
+        let schema = json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+                "status": {"type": "string"}
+            }
+        });
+        let mut contract = Map::new();
+        contract.insert(
+            "schemaProjection".to_string(),
+            json!({
+                "fieldContract": compact_agent_field_contract(&schema, &BTreeMap::new())
+            }),
+        );
+        let policies = BTreeMap::from([
+            ("status".to_string(), AgentFieldPolicy::default()),
+            (
+                "content.architectureQuality".to_string(),
+                AgentFieldPolicy::default(),
+            ),
+        ]);
+
+        add_shared_write_contract_metadata(&mut contract, &BTreeSet::new(), &policies);
+
+        let owned = contract["agentOwnedPaths"]
+            .as_array()
+            .expect("agent-owned paths")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(owned.contains(&"status"));
+        assert!(!owned.contains(&"content.architectureQuality"));
     }
 }
