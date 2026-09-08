@@ -452,7 +452,8 @@ fn build_review_request(
                     "continue_to_next_phase",
                     "done"
                 ],
-                "manualReviewPriorityRule": "manual_review outranks automatic repair only for blocking review limitations or environment blockers that prevent reliable review."
+                "manualReviewPriorityRule": "manual_review outranks automatic repair only for blocking review limitations or environment blockers that prevent reliable review.",
+                "nextPhaseRule": "A next-phase preview is optional future scope. Choose continue_to_next_phase only when the user has approved that work for this delivery; otherwise use done and preserve it as deferred context."
             },
             "validatorRules": review_validator_rules(&change_context_mode)
         },
@@ -728,7 +729,7 @@ fn review_result_schema_shape() -> Value {
 fn review_result_template(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
-    next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
+    _next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Value {
     let first_task_result_ref = run
         .task_states
@@ -749,17 +750,10 @@ fn review_result_template(
             })
         })
         .collect::<Vec<_>>();
-    let next_action = if let Some(handoff) = next_phase_handoff {
-        json!({
-            "type": "continue_to_next_phase",
-            "reason": handoff.reason
-        })
-    } else {
-        json!({
-            "type": "done",
-            "reason": ""
-        })
-    };
+    let next_action = json!({
+        "type": "done",
+        "reason": ""
+    });
     json!({
         "decision": "approved",
         "findings": [{
@@ -2106,10 +2100,7 @@ fn normalize_approved_next_phase(
     result: &ReviewResult,
 ) -> Result<Option<brainstorm::NextPhaseHandoff>, state::store::StateError> {
     if !matches!(result.decision.as_str(), "approved" | "approved_with_notes")
-        || !matches!(
-            result.next_action.r#type.as_str(),
-            "done" | "continue_to_next_phase"
-        )
+        || result.next_action.r#type != "continue_to_next_phase"
     {
         return Ok(None);
     }
@@ -2127,7 +2118,7 @@ fn materialize_approved_next_phase_from_preview(
     phase_id: &str,
     action_type: &str,
 ) -> Result<Option<brainstorm::NextPhaseHandoff>, state::store::StateError> {
-    if !matches!(action_type, "done" | "continue_to_next_phase") {
+    if action_type != "continue_to_next_phase" {
         return Ok(None);
     }
     // The accepted phase preview is the source of truth for the handoff. The
@@ -5721,7 +5712,10 @@ fn expected_top_action(
         .get("reviewScope.nextPhasePreview.kind")
         .and_then(|field| field.value.as_str())
         == Some("candidate");
-    if matches!(result.decision.as_str(), "approved" | "approved_with_notes") && has_next_phase {
+    if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
+        && result.next_action.r#type == "continue_to_next_phase"
+        && has_next_phase
+    {
         "continue_to_next_phase".to_string()
     } else if result.decision == "approved" || result.decision == "approved_with_notes" {
         "done".to_string()
