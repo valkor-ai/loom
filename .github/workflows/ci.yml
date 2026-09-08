@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust format, check, test, and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: src/python/algorithms/pyproject.toml
+
+      - name: Install algorithm dependencies
+        run: python -m pip install --upgrade pip -e src/python/algorithms
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src/rust/Cargo.toml --all --check
+
+      - name: Check workspace
+        run: cargo check --manifest-path src/rust/Cargo.toml --workspace
+
+      - name: Test workspace libraries
+        run: cargo test --manifest-path src/rust/Cargo.toml --workspace --lib
+
+      - name: Build release binaries
+        run: cargo build --release --manifest-path src/rust/Cargo.toml -p mcp-server -p setup
+
+  python:
+    name: Python algorithm tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: src/python/algorithms/pyproject.toml
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pytest -e src/python/algorithms
+
+      - name: Test algorithm worker
+        run: python -m pytest tests/python

@@ -4,9 +4,10 @@ use std::{
 };
 
 use contracts::{
-    forbidden_jvm_package_prefixes, BrowserCheckStatus, BrowserVerificationProfile,
-    CodeQualityEvidence, CodeQualityRequirement, TaskDefinition, TaskKind, TaskPlanRunNextAction,
-    TaskPlanRunStatus, TaskResult, TaskResultStatus, TaskRunStatus, VerificationEvidence,
+    forbidden_jvm_package_prefixes, AnalysisCompleteness, BrowserCheckStatus,
+    BrowserVerificationProfile, CodeQualityEvidence, CodeQualityRequirement, TaskDefinition,
+    TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult, TaskResultStatus,
+    TaskRunStatus, VerificationAnalysisSummary, VerificationEvidence,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
@@ -495,6 +496,7 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
+    validate_verification_analysis(result, &mut issues);
     validate_verification_provenance(project_root, result, &mut issues);
     validate_implementation_obligation_results(project_root, result, task, &mut issues);
     validate_stack_conformance(
@@ -552,6 +554,98 @@ fn validate_result(
         ));
     }
     issues
+}
+
+fn validate_verification_analysis(
+    result: &TaskResult,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let has_verification_state = result.verification_history.is_some()
+        || result.verification_attempt.is_some()
+        || result.repair_contract.is_some()
+        || result.delivery_result.is_some()
+        || result.verification_analysis.is_some();
+    if !has_verification_state {
+        return;
+    }
+
+    let Some(history) = &result.verification_history else {
+        issues.push(issue(
+            "VERIFICATION_HISTORY_REQUIRED",
+            "verificationHistory",
+            "Verification attempts, repairs, delivery references, and summaries must resolve through verificationHistory.",
+        ));
+        return;
+    };
+
+    if let Err(message) = history.validate(result.delivery_result.as_ref()) {
+        issues.push(issue(
+            "VERIFICATION_HISTORY_INVALID",
+            "verificationHistory",
+            message,
+        ));
+    }
+
+    match (
+        history.attempts.last(),
+        result.verification_attempt.as_ref(),
+    ) {
+        (Some(latest), Some(attempt)) if latest == attempt => {}
+        (Some(_), Some(_)) => issues.push(issue(
+            "VERIFICATION_HISTORY_REF_INVALID",
+            "verificationAttempt",
+            "TaskResult verificationAttempt must match verificationHistory's latest attempt.",
+        )),
+        (None, Some(_)) => issues.push(issue(
+            "VERIFICATION_HISTORY_REF_INVALID",
+            "verificationAttempt",
+            "TaskResult verificationAttempt must resolve in verificationHistory.",
+        )),
+        _ => {}
+    }
+    if let Some(repair) = &result.repair_contract {
+        if !history.repairs.iter().any(|item| item == repair) {
+            issues.push(issue(
+                "VERIFICATION_HISTORY_REF_INVALID",
+                "repairContract",
+                "TaskResult repairContract must resolve in verificationHistory.",
+            ));
+        }
+    }
+
+    let expected_summary = VerificationAnalysisSummary::from_history_with_evidence(
+        &history.attempts,
+        &history.repairs,
+        result.delivery_result.as_ref(),
+        &result.training_telemetry,
+        &result.verification_findings,
+        Some(&history.evidence),
+    );
+    let Some(analysis) = &result.verification_analysis else {
+        issues.push(issue(
+            "VERIFICATION_ANALYSIS_REQUIRED",
+            "verificationAnalysis",
+            "Verification history must provide a derived read-only analysis summary.",
+        ));
+        return;
+    };
+
+    if analysis != &expected_summary {
+        issues.push(issue(
+            "VERIFICATION_ANALYSIS_REF_INVALID",
+            "verificationAnalysis",
+            "Verification analysis must exactly match the current TaskResult verification history, delivery result, findings, and telemetry references.",
+        ));
+    }
+    if matches!(result.status, TaskResultStatus::Completed)
+        && analysis.completeness == AnalysisCompleteness::Incomplete
+    {
+        issues.push(issue(
+            "VERIFICATION_ANALYSIS_INCOMPLETE",
+            "verificationAnalysis.completeness",
+            "A completed TaskResult with verification history cannot report incomplete analysis.",
+        ));
+    }
 }
 
 fn validate_jvm_package_names(
@@ -869,6 +963,13 @@ fn project_task_result_to_canonical_fields(object: &mut serde_json::Map<String, 
             "changedFiles",
             "noChangeReason",
             "verificationResults",
+            "verificationHistory",
+            "verificationAttempt",
+            "verificationFindings",
+            "repairContract",
+            "deliveryResult",
+            "trainingTelemetry",
+            "verificationAnalysis",
             "implementationObligationResults",
             "selfRepairSummary",
             "failure",
@@ -6157,6 +6258,10 @@ fn merge_submitted_task_result_fields(
         if conflicted_fields.contains(key.as_str()) {
             continue;
         }
+        if is_verification_state_field(key) {
+            template_object.insert(key.clone(), submitted_value.clone());
+            continue;
+        }
         if !template_object.contains_key(key) {
             continue;
         }
@@ -6168,6 +6273,19 @@ fn merge_submitted_task_result_fields(
         }
         template_object.insert(key.clone(), agent_value);
     }
+}
+
+fn is_verification_state_field(key: &str) -> bool {
+    matches!(
+        key,
+        "verificationHistory"
+            | "verificationAttempt"
+            | "verificationFindings"
+            | "repairContract"
+            | "deliveryResult"
+            | "trainingTelemetry"
+            | "verificationAnalysis"
+    )
 }
 
 fn project_agent_owned_task_result_field(key: &str, value: &Value) -> Option<Value> {
@@ -7281,5 +7399,179 @@ mod tests {
         validate_browser_verification_results(&result, Some(&profile), &mut issues);
 
         assert!(issues.is_empty(), "{issues:#?}");
+    }
+
+    fn completed_result_with_verification_history() -> TaskResult {
+        let evidence = contracts::VerificationEvidenceRecord {
+            evidence_id: "evidence-1".to_string(),
+            assertion_refs: vec!["assertion-1".to_string()],
+            source: "cargo test -p contracts verification::tests".to_string(),
+            location: "src/rust/contracts/verification.rs".to_string(),
+            observed_result: "passed".to_string(),
+            captured_at: "2026-09-07T00:00:00Z".to_string(),
+        };
+        let attempt = contracts::VerificationAttempt {
+            attempt_id: "attempt-1".to_string(),
+            attempt_number: 1,
+            assertion_refs: vec!["assertion-1".to_string()],
+            evidence_refs: vec!["evidence-1".to_string()],
+            source_version: "source-1".to_string(),
+            contract_version: "contract-1".to_string(),
+            repair_ref: None,
+            status: contracts::VerificationLifecycleStatus::Passed,
+            started_at: "2026-09-07T00:00:00Z".to_string(),
+            completed_at: "2026-09-07T00:00:01Z".to_string(),
+        };
+        let history = contracts::VerificationHistory {
+            attempts: vec![attempt.clone()],
+            repairs: vec![],
+            evidence: vec![evidence],
+        };
+        let delivery = contracts::DeliveryResult {
+            delivery_result_id: "delivery-1".to_string(),
+            latest_attempt_ref: attempt.attempt_id.clone(),
+            latest_source_ref: attempt.source_version.clone(),
+            contract_version: attempt.contract_version.clone(),
+            status: contracts::VerificationLifecycleStatus::Passed,
+            finding_refs: vec![],
+            notes: vec![],
+        };
+        let analysis = VerificationAnalysisSummary::from_history_with_evidence(
+            &history.attempts,
+            &history.repairs,
+            Some(&delivery),
+            &[],
+            &[],
+            Some(&history.evidence),
+        );
+
+        serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-verification",
+            "taskId": "task-verification",
+            "taskPlanId": "taskplan",
+            "status": "completed",
+            "changedFiles": ["src/rust/contracts/verification.rs"],
+            "verificationResults": [],
+            "verificationHistory": history,
+            "verificationAttempt": attempt,
+            "deliveryResult": delivery,
+            "verificationAnalysis": analysis,
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none"
+            },
+            "createdAt": "2026-09-07T00:00:00Z",
+            "updatedAt": "2026-09-07T00:00:01Z"
+        }))
+        .expect("verification TaskResult")
+    }
+
+    #[test]
+    fn verification_analysis_requires_canonical_history() {
+        let mut result = completed_result_with_verification_history();
+        result.verification_history = None;
+        let mut issues = Vec::new();
+
+        validate_verification_analysis(&result, &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "VERIFICATION_HISTORY_REQUIRED"));
+    }
+
+    #[test]
+    fn verification_analysis_rejects_a_summary_with_wrong_references() {
+        let mut result = completed_result_with_verification_history();
+        result
+            .verification_analysis
+            .as_mut()
+            .expect("analysis")
+            .latest_attempt_ref = Some("different-attempt".to_string());
+        let mut issues = Vec::new();
+
+        validate_verification_analysis(&result, &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "VERIFICATION_ANALYSIS_REF_INVALID"));
+    }
+
+    #[test]
+    fn verification_analysis_rejects_unlinked_reverification_before_persistence() {
+        let mut result = completed_result_with_verification_history();
+        let (attempts, repairs, evidence) = {
+            let history = result
+                .verification_history
+                .as_mut()
+                .expect("verification history");
+            history
+                .attempts
+                .last_mut()
+                .expect("verification attempt")
+                .status = contracts::VerificationLifecycleStatus::Reverified;
+            (
+                history.attempts.clone(),
+                history.repairs.clone(),
+                history.evidence.clone(),
+            )
+        };
+        result.verification_attempt = attempts.last().cloned();
+        result
+            .delivery_result
+            .as_mut()
+            .expect("delivery result")
+            .status = contracts::VerificationLifecycleStatus::Reverified;
+        result.verification_analysis =
+            Some(VerificationAnalysisSummary::from_history_with_evidence(
+                &attempts,
+                &repairs,
+                result.delivery_result.as_ref(),
+                &result.training_telemetry,
+                &result.verification_findings,
+                Some(&evidence),
+            ));
+        let mut issues = Vec::new();
+
+        validate_verification_analysis(&result, &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "VERIFICATION_HISTORY_INVALID"));
+    }
+
+    #[test]
+    fn canonical_task_result_keeps_verification_state_for_readback() {
+        let result = completed_result_with_verification_history();
+        let mut value = serde_json::to_value(result).expect("serialize TaskResult");
+        let object = value.as_object_mut().expect("TaskResult object");
+
+        project_task_result_to_canonical_fields(object);
+
+        assert!(object.contains_key("verificationHistory"));
+        assert!(object.contains_key("verificationAttempt"));
+        assert!(object.contains_key("deliveryResult"));
+        assert!(object.contains_key("verificationAnalysis"));
+    }
+
+    #[test]
+    fn verification_state_survives_task_result_persistence_round_trip() {
+        let result = completed_result_with_verification_history();
+        let persisted = serde_json::to_value(&result).expect("serialize TaskResult");
+        let restored: TaskResult =
+            serde_json::from_value(persisted.clone()).expect("restore TaskResult");
+
+        assert_eq!(restored.verification_history, result.verification_history);
+        assert_eq!(restored.verification_attempt, result.verification_attempt);
+        assert_eq!(restored.delivery_result, result.delivery_result);
+        assert_eq!(restored.verification_analysis, result.verification_analysis);
+
+        let mut canonical = persisted.as_object().expect("TaskResult object").clone();
+        project_task_result_to_canonical_fields(&mut canonical);
+
+        assert!(canonical.contains_key("verificationHistory"));
+        assert!(canonical.contains_key("verificationAttempt"));
+        assert!(canonical.contains_key("deliveryResult"));
+        assert!(canonical.contains_key("verificationAnalysis"));
     }
 }

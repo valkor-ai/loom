@@ -942,6 +942,23 @@ pub struct TaskResult {
     pub no_change_reason: Option<TaskResultNoChangeReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_results: Vec<VerificationResult>,
+    /// Optional shared verification state. Older TaskResults remain valid;
+    /// new producers can attach the attempt, findings, repair, and latest
+    /// delivery result without creating a second result format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_history: Option<crate::VerificationHistory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_attempt: Option<crate::VerificationAttempt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_findings: Vec<crate::VerificationFinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_contract: Option<crate::RepairContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_result: Option<crate::DeliveryResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub training_telemetry: Vec<crate::TrainingTelemetryRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_analysis: Option<crate::VerificationAnalysisSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementation_obligation_results: Vec<TaskImplementationObligationResult>,
     #[serde(skip_serializing_if = "Option::is_none")]

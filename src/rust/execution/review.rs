@@ -5324,6 +5324,22 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                         }).collect::<Vec<_>>()
                     })
                 }).collect::<Vec<_>>(),
+                "verificationHistory": result.verification_history.as_ref().map(|history| json!({
+                    "attemptCount": history.attempts.len(),
+                    "repairCount": history.repairs.len(),
+                    "evidenceCount": history.evidence.len(),
+                    "latestAttemptRef": history.attempts.last().map(|attempt| attempt.attempt_id.clone()),
+                    "latestSourceRef": history.attempts.last().map(|attempt| attempt.source_version.clone()),
+                    "latestContractVersion": history.attempts.last().map(|attempt| attempt.contract_version.clone())
+                })),
+                "deliveryResult": result.delivery_result.as_ref().map(|delivery| json!({
+                    "deliveryResultId": delivery.delivery_result_id,
+                    "latestAttemptRef": delivery.latest_attempt_ref,
+                    "latestSourceRef": delivery.latest_source_ref,
+                    "contractVersion": delivery.contract_version,
+                    "status": delivery.status
+                })),
+                "verificationAnalysis": compact_verification_readback(result),
                 "requirementDetailEvidence": result.requirement_detail_evidence.iter().map(|evidence| {
                     json!({
                         "detailId": evidence.detail_id,
@@ -5388,6 +5404,89 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
             summary
         })
         .collect()
+}
+
+/// Build the MCP-facing verification summary from the current TaskResult.
+///
+/// The review packet is a read-only projection, so it never trusts or repairs
+/// stored analysis state. It derives completeness from the task result it was
+/// given and reports broken internal references as incomplete.
+fn compact_verification_readback(result: &TaskResult) -> Option<Value> {
+    let has_verification_state = result.verification_history.is_some()
+        || result.verification_attempt.is_some()
+        || result.repair_contract.is_some()
+        || result.delivery_result.is_some()
+        || result.verification_analysis.is_some();
+    if !has_verification_state {
+        return None;
+    }
+
+    let Some(history) = result.verification_history.as_ref() else {
+        return Some(json!({
+            "status": Value::Null,
+            "attemptCount": 0,
+            "repairCount": 0,
+            "latestAttemptRef": Value::Null,
+            "deliveryResultRef": result.delivery_result.as_ref().map(|delivery| delivery.delivery_result_id.clone()),
+            "completeness": "incomplete",
+            "telemetryComplete": false,
+            "missingEvidence": ["verification_history"],
+            "failureClasses": [],
+            "sourceRefCount": 0,
+            "evidenceRefCount": 0
+        }));
+    };
+
+    let analysis = contracts::VerificationAnalysisSummary::from_history_with_evidence(
+        &history.attempts,
+        &history.repairs,
+        result.delivery_result.as_ref(),
+        &result.training_telemetry,
+        &result.verification_findings,
+        Some(&history.evidence),
+    );
+    let mut missing_evidence = analysis.missing_evidence.clone();
+
+    if history.validate(result.delivery_result.as_ref()).is_err() {
+        missing_evidence.push("verification_history_invalid".to_string());
+    }
+    if result
+        .verification_attempt
+        .as_ref()
+        .is_some_and(|attempt| history.attempts.last() != Some(attempt))
+    {
+        missing_evidence.push("verification_attempt_unresolved".to_string());
+    }
+    if result.repair_contract.as_ref().is_some_and(|repair| {
+        !history
+            .repairs
+            .iter()
+            .any(|known_repair| known_repair == repair)
+    }) {
+        missing_evidence.push("repair_contract_unresolved".to_string());
+    }
+    missing_evidence.sort();
+    missing_evidence.dedup();
+
+    let completeness = if missing_evidence.is_empty() {
+        contracts::AnalysisCompleteness::Complete
+    } else {
+        contracts::AnalysisCompleteness::Incomplete
+    };
+
+    Some(json!({
+        "status": analysis.status,
+        "attemptCount": analysis.attempt_count,
+        "repairCount": analysis.repair_count,
+        "latestAttemptRef": analysis.latest_attempt_ref,
+        "deliveryResultRef": analysis.delivery_result_ref,
+        "completeness": completeness,
+        "telemetryComplete": analysis.telemetry_complete,
+        "missingEvidence": missing_evidence,
+        "failureClasses": analysis.failure_classes,
+        "sourceRefCount": analysis.source_refs.len(),
+        "evidenceRefCount": analysis.evidence_refs.len()
+    }))
 }
 
 fn compact_summary(value: &str) -> String {
@@ -6083,6 +6182,124 @@ mod tests {
         assert_eq!(
             retried[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"][0],
             json!("test-results/workflow/trace.zip")
+        );
+    }
+
+    #[test]
+    fn compact_task_result_summary_keeps_read_only_verification_context() {
+        let mut result = task_result_with_browser_check(1);
+        result.verification_history = Some(contracts::VerificationHistory::default());
+        result.verification_analysis = Some(contracts::VerificationAnalysisSummary {
+            status: None,
+            attempt_count: 0,
+            repair_count: 0,
+            latest_attempt_ref: None,
+            delivery_result_ref: None,
+            telemetry_complete: false,
+            completeness: contracts::AnalysisCompleteness::Incomplete,
+            missing_evidence: vec!["verification_attempts".to_string()],
+            failure_classes: vec![],
+            source_refs: vec![],
+            evidence_refs: vec![],
+        });
+
+        let summary = compact_task_result_summaries(&[result]);
+
+        assert_eq!(summary[0]["verificationHistory"]["attemptCount"], json!(0));
+        assert_eq!(
+            summary[0]["verificationAnalysis"]["completeness"],
+            json!("incomplete")
+        );
+        assert_eq!(
+            summary[0]["verificationAnalysis"]["missingEvidence"],
+            json!(["delivery_result", "verification_attempts"])
+        );
+    }
+
+    #[test]
+    fn compact_task_result_summary_derives_readback_from_the_current_result_only() {
+        let evidence = contracts::VerificationEvidenceRecord {
+            evidence_id: "evidence-current".to_string(),
+            assertion_refs: vec!["assertion-current".to_string()],
+            source: "cargo test -p execution".to_string(),
+            location: "src/rust/execution/review.rs".to_string(),
+            observed_result: "passed".to_string(),
+            captured_at: "2026-09-07T00:00:00Z".to_string(),
+        };
+        let attempt = contracts::VerificationAttempt {
+            attempt_id: "attempt-current".to_string(),
+            attempt_number: 1,
+            assertion_refs: vec!["assertion-current".to_string()],
+            evidence_refs: vec!["evidence-current".to_string()],
+            source_version: "source-current".to_string(),
+            contract_version: "contract-current".to_string(),
+            repair_ref: None,
+            status: contracts::VerificationLifecycleStatus::Passed,
+            started_at: "2026-09-07T00:00:00Z".to_string(),
+            completed_at: "2026-09-07T00:00:01Z".to_string(),
+        };
+        let history = contracts::VerificationHistory {
+            attempts: vec![attempt.clone()],
+            repairs: vec![],
+            evidence: vec![evidence],
+        };
+        let delivery = contracts::DeliveryResult {
+            delivery_result_id: "delivery-current".to_string(),
+            latest_attempt_ref: attempt.attempt_id.clone(),
+            latest_source_ref: attempt.source_version.clone(),
+            contract_version: attempt.contract_version.clone(),
+            status: contracts::VerificationLifecycleStatus::Passed,
+            finding_refs: vec![],
+            notes: vec![],
+        };
+        let mut current = task_result_with_browser_check(1);
+        current.task_result_id = "result-current".to_string();
+        current.verification_history = Some(history);
+        current.verification_attempt = Some(attempt);
+        current.delivery_result = Some(delivery.clone());
+        current.verification_analysis = Some(contracts::VerificationAnalysisSummary {
+            status: None,
+            attempt_count: 0,
+            repair_count: 0,
+            latest_attempt_ref: None,
+            delivery_result_ref: None,
+            telemetry_complete: false,
+            completeness: contracts::AnalysisCompleteness::Incomplete,
+            missing_evidence: vec!["stale_saved_analysis".to_string()],
+            failure_classes: vec![],
+            source_refs: vec![],
+            evidence_refs: vec![],
+        });
+
+        let mut unresolved = task_result_with_browser_check(1);
+        unresolved.task_result_id = "result-unresolved".to_string();
+        unresolved.delivery_result = Some(delivery);
+
+        let current_before = serde_json::to_value(&current).expect("serialize current result");
+        let unresolved_before =
+            serde_json::to_value(&unresolved).expect("serialize unresolved result");
+        let summaries = compact_task_result_summaries(&[current.clone(), unresolved.clone()]);
+
+        assert_eq!(
+            summaries[0]["verificationAnalysis"]["completeness"],
+            json!("complete")
+        );
+        assert_eq!(
+            summaries[0]["deliveryResult"]["latestAttemptRef"],
+            json!("attempt-current")
+        );
+        assert_eq!(
+            summaries[1]["verificationAnalysis"]["completeness"],
+            json!("incomplete")
+        );
+        assert_eq!(
+            summaries[1]["verificationAnalysis"]["missingEvidence"],
+            json!(["verification_history"])
+        );
+        assert_eq!(serde_json::to_value(&current).unwrap(), current_before);
+        assert_eq!(
+            serde_json::to_value(&unresolved).unwrap(),
+            unresolved_before
         );
     }
 

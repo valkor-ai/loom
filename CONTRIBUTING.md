@@ -23,17 +23,29 @@ Please keep pull requests focused and easy to review:
 - Use Conventional Commit messages such as `feat: add new capability`, `fix: correct broken behavior`, or `docs: update README`.
 - Include a short summary and testing notes in the PR description.
 - Keep unrelated refactors out of the PR unless they are required for the change.
+- Resolve review conversations before merging.
+- Squash focused changes into one clear commit when merging.
 
 ## Local Checks
 
-For code changes, run the relevant checks before opening a PR:
+For Rust changes, run the relevant checks before opening a PR:
 
 ```bash
-npm run build
+cargo fmt --manifest-path src/rust/Cargo.toml --all --check
+cargo check --manifest-path src/rust/Cargo.toml --workspace
+cargo test --manifest-path src/rust/Cargo.toml --workspace --lib
+cargo build --manifest-path src/rust/Cargo.toml -p mcp-server -p setup
 ```
 
-For documentation-only changes, a visual review of the rendered Markdown is usually enough.
+For changes to the Python algorithm worker, install its local dependencies and run:
+
+```bash
+python3 -m pip install -e src/python/algorithms pytest
+npm run python:test
+```
+
+For release-sensitive changes, also run `npm run rust:test`. For documentation-only changes, a visual review of the rendered Markdown is usually enough.
 
 ## Security
 
-Please do not open public issues for sensitive security problems. Use GitHub's private vulnerability reporting flow if it is enabled for the repository, or contact the maintainers directly.
+Please do not open public issues for sensitive security problems. See [SECURITY.md](SECURITY.md) for the reporting process.

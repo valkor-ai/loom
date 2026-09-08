@@ -148,6 +148,22 @@ pub struct ReviewResult {
     pub decision: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<ReviewFinding>,
+    /// Review and V-SEFM can consume the same attempt and repair references
+    /// as TaskResult instead of inventing a parallel verification identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_history: Option<crate::VerificationHistory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_attempt: Option<crate::VerificationAttempt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_findings: Vec<crate::VerificationFinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_contract: Option<crate::RepairContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_result: Option<crate::DeliveryResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub training_telemetry: Vec<crate::TrainingTelemetryRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_analysis: Option<crate::VerificationAnalysisSummary>,
     pub coverage_assessment: ReviewCoverageAssessment,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<ReviewLimitation>,

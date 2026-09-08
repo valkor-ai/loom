@@ -6,6 +6,9 @@ coverage/
 # Loomline local project state
 .loomline/
 
+# Loom runtime state
+.loom/
+
 # Local environment and editor files
 .env
 .env.*
