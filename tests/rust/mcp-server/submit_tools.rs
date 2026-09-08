@@ -12669,7 +12669,7 @@ fn frontend_surface_decision_candidate_json() -> Value {
             "desktop": {
                 "layoutIntent": "Keep navigation, filters, results, and the primary action visible in the work region.",
                 "allowedPresentations": ["table", "detail_panel", "form_sections"],
-                "forbiddenPresentations": ["no_marketing_hero"]
+                "forbiddenPresentations": ["chart_panel"]
             },
             "tablet": {
                 "layoutIntent": "Keep record scanning first and move secondary detail into a supporting region.",

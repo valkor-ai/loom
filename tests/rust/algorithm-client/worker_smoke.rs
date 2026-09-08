@@ -14,7 +14,7 @@ fn repo_root() -> PathBuf {
 fn client() -> AlgorithmClient {
     let root = repo_root();
     AlgorithmClient::new(
-        "python3",
+        std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string()),
         root.join("src")
             .join("python")
             .join("algorithms")

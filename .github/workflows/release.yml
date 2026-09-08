@@ -79,6 +79,21 @@ jobs:
             --output-dir dist/packages \
             --platform "${{ matrix.platform }}"
 
+      - name: Smoke test packaged runtime
+        if: matrix.rust_target == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$(find dist/packages -mindepth 1 -maxdepth 1 -type d -name 'loom-*' | sort | head -n 1)"
+          extension=""
+          if [ "${{ matrix.platform }}" = "windows-x64" ]; then
+            extension=".exe"
+          fi
+          "$package_root/bin/loom-setup$extension" --version | grep -q '"status": "ok"'
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"release-smoke","version":"0.0.1"}}}' \
+            | "$package_root/bin/loom-mcp-server$extension" \
+            | grep -q 'loom-mcp-server'
+
       - name: Create release archive
         shell: bash
         run: |
