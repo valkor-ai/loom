@@ -158,6 +158,15 @@ fn stdio_server_persists_and_reads_a_delivery_request() {
         read["result"]["structuredContent"]["fields"]["clarificationConversationProtocol"]
             .is_object()
     );
+    let response_audit = std::fs::read_to_string(
+        fixture
+            .project_root
+            .join(".loom/metrics/mcp-response-audit.jsonl"),
+    )
+    .expect("MCP response audit");
+    assert!(response_audit.contains("\"toolName\":\"plan\""));
+    assert!(response_audit.contains("\"toolName\":\"readFieldGroup\""));
+    assert!(response_audit.contains("\"serializedBytes\":"));
 }
 
 struct TestProject {

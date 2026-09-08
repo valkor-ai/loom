@@ -20,6 +20,7 @@ pub struct ProjectPaths {
     pub metrics_dir: PathBuf,
     pub request_size_audit_file: PathBuf,
     pub field_read_audit_file: PathBuf,
+    pub mcp_response_audit_file: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub fn project_paths(project_root: &str) -> StateResult<ProjectPaths> {
         request_index_file: requests_dir.join("index.json"),
         request_size_audit_file: metrics_dir.join("request-size-audit.jsonl"),
         field_read_audit_file: metrics_dir.join("field-read-audit.jsonl"),
+        mcp_response_audit_file: metrics_dir.join("mcp-response-audit.jsonl"),
         loom_dir,
         requests_dir,
         metrics_dir,
