@@ -568,7 +568,7 @@ fn extract_docx_text(path: &Path) -> KnowledgeResult<String> {
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Text(event)) => {
-                text.push_str(&String::from_utf8_lossy(event.as_ref()));
+                text.push_str(event.as_ref());
                 text.push('\n');
             }
             Ok(quick_xml::events::Event::Eof) => break,
