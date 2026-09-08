@@ -529,7 +529,7 @@ fn extract_docx_text(path: &Path) -> StateResult<String> {
     loop {
         match reader.read_event() {
             Ok(Event::Text(text)) => {
-                output.push_str(&text.decode().unwrap_or_default());
+                output.push_str(text.as_ref());
                 output.push(' ');
             }
             Ok(Event::Eof) => break,
