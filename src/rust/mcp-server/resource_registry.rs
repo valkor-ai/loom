@@ -1,7 +1,6 @@
 use delivery_core::LoomMcpActionResult;
 use rmcp::model::{
-    AnnotateAble, ListResourceTemplatesResult, RawResourceTemplate, ReadResourceResult,
-    ResourceContents, ResourceTemplate,
+    ListResourceTemplatesResult, ReadResourceResult, ResourceContents, ResourceTemplate,
 };
 use serde_json::Value;
 
@@ -45,10 +44,9 @@ impl ResourceRegistry {
             .templates
             .iter()
             .map(|template| {
-                RawResourceTemplate::new(template.uri_template, template.name)
+                ResourceTemplate::new(template.uri_template, template.name)
                     .with_description(template.description)
                     .with_mime_type("application/json")
-                    .no_annotation()
             })
             .collect();
         templates.sort_by(|left, right| left.uri_template.cmp(&right.uri_template));
