@@ -62,6 +62,7 @@ pub struct InspectRequestSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InspectReadGroupSummary {
+    pub request_ref: String,
     pub group_id: String,
     pub required: bool,
     pub order: u32,
@@ -76,6 +77,7 @@ pub struct InspectReadGroupSummary {
 impl From<ReadGroupRef> for InspectReadGroupSummary {
     fn from(group: ReadGroupRef) -> Self {
         Self {
+            request_ref: group.request_ref.clone().unwrap_or_default(),
             field_count: group.expanded_fields().len(),
             group_id: group.group_id,
             required: group.required,

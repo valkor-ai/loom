@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, path::Path};
 
 use contracts::{
     BrainstormCandidateAgentWritable, BrainstormContract, BrainstormHandoff, BrainstormHandoffNode,
-    BrainstormStatus, ConceptGroundingRefs, DeliveryContext, FrontendExperienceRefs,
-    OriginalRequestContext, RequirementSource,
+    BrainstormStatus, ConceptGroundingRefs, DeliveryContext, DeliveryWorkflowProfile,
+    FrontendExperienceRefs, OriginalRequestContext, RequirementSource,
 };
 use delivery_core::RouteActionKind;
 use state::{
@@ -35,6 +35,7 @@ pub fn write_accepted_artifacts(
     requirement_input_refs: &[String],
     formal_sources: &[RequirementSource],
     user_facing_language: contracts::UserFacingLanguageConstraint,
+    workflow_profile: DeliveryWorkflowProfile,
     next_action_kind: Option<RouteActionKind>,
     now: &str,
 ) -> StateResult<PersistedArtifacts> {
@@ -107,6 +108,7 @@ pub fn write_accepted_artifacts(
                 input_refs: requirement_input_refs.to_vec(),
             },
             user_facing_language,
+            workflow_profile,
         },
         roadmap: candidate.roadmap.clone(),
         phase_plan: candidate.phase_plan.clone(),

@@ -1,9 +1,9 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
-    BrainstormContract, ClientTrustModel, ProjectKind, SecurityKeySource, SecurityMechanism,
-    SecurityProfile, SecurityRequirement, SecurityRequirementApplicability, SecurityTransport,
-    TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
+    BrainstormContract, ClientTrustModel, DeliveryWorkflowProfile, ProjectKind, SecurityKeySource,
+    SecurityMechanism, SecurityProfile, SecurityRequirement, SecurityRequirementApplicability,
+    SecurityTransport, TechnicalBaselineApprovalType, TechnicalBaselineCandidateAgentWritable,
     TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
@@ -247,9 +247,14 @@ fn build_request_root(
     });
     let repo_evidence =
         technical_baseline_repo_evidence(project_root, project_kind, baseline_exists);
-    let baseline_context_fields =
-        technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
-    let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
+    let workflow_profile = brainstorm.delivery_context.workflow_profile;
+    let baseline_context_fields = technical_baseline_context_fields(
+        brainstorm,
+        previous_baseline.is_some(),
+        workflow_profile,
+    );
+    let repo_evidence_fields =
+        technical_baseline_repo_evidence_fields(project_kind, workflow_profile);
     let mut security_selection_fields = vec!["userConfirmationView"];
     if !matches!(
         brainstorm.security_requirement.applies,
@@ -257,12 +262,13 @@ fn build_request_root(
     ) {
         security_selection_fields.extend(["securityRequirement", "securityProfileGuidance"]);
     }
-    json!({
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "requestId": request_id,
+        "workflowProfile": workflow_profile,
         "requestProtocol": {
             "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
             "fingerprint": protocol_fingerprint
@@ -327,7 +333,11 @@ fn build_request_root(
             baseline_exists,
             previous_baseline.map(|(_, baseline)| &baseline.stack),
         ),
-        "decisionNeeds": technical_baseline_decision_needs(project_kind, baseline_exists),
+        "decisionNeeds": technical_baseline_decision_needs(
+            project_kind,
+            baseline_exists,
+            workflow_profile,
+        ),
         "previousBaselineContext": previous_baseline_context,
         "constraints": {
             "mustUse": [],
@@ -460,6 +470,56 @@ fn build_request_root(
                 }
             ]
         }
+    });
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        root["rules"]["candidatePolicy"] = json!([
+            "Write only the TechnicalBaseline candidate JSON.",
+            "Use outputContract.schemaProjection.maintenanceCandidateTemplate as the concrete candidate shape. Do not add fields outside that template or MCP-owned fields.",
+            "Reuse the existing repository stack. Do not propose a new framework, service, security profile, or deployment surface for a bounded maintenance repair.",
+            "When securityRequirement.applies is not_applicable, keep securityProfiles empty.",
+            "Write approval with type only. Do not add approval.reason or approval.confirmedAt unless the user actually confirmed a baseline change."
+        ]);
+        root["outputContract"]["schemaProjection"]["maintenanceCandidateTemplate"] =
+            explicit_maintenance_candidate_template();
+        root["requestReadPlan"]["groups"]
+            .as_array_mut()
+            .expect("technical baseline request groups are an array")
+            .retain(|group| {
+                !matches!(
+                    group.get("groupId").and_then(Value::as_str),
+                    Some(
+                        "technical_baseline_recommendation"
+                            | "technical_baseline_user_confirmation"
+                    )
+                )
+            });
+    }
+    root
+}
+
+fn explicit_maintenance_candidate_template() -> Value {
+    json!({
+        "status": "confirmed",
+        "source": "detected_from_repo",
+        "projectKind": "existing_project",
+        "scope": "phase_override",
+        "stack": {
+            "summary": "Reuse the existing repository stack for the confirmed maintenance repair.",
+            "tracks": {}
+        },
+        "securityProfiles": [],
+        "constraints": ["Keep the existing repository stack and security boundary."],
+        "evidence": [{
+            "path": "project-relative manifest or configuration file",
+            "reason": "Existing repository evidence confirms the stack to reuse."
+        }],
+        "approval": { "type": "policy_auto_accept" },
+        "confidence": "high",
+        "reasoningSummary": ["The bounded repair reuses the existing project baseline."],
+        "alternatives": []
     })
 }
 
@@ -714,7 +774,32 @@ fn next_phase_preview_summary(preview: &contracts::NextPhasePreview) -> Value {
 fn technical_baseline_context_fields(
     brainstorm: &BrainstormContract,
     has_previous_baseline: bool,
+    workflow_profile: DeliveryWorkflowProfile,
 ) -> Vec<&'static str> {
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        let mut fields = vec![
+            "brainstormLens.summary.oneLine",
+            "brainstormLens.scopeIndex.includedLabels",
+            "brainstormLens.scopeIndex.excludedLabels",
+            "brainstormLens.acceptanceIndex",
+            "currentPhaseLens.phaseId",
+            "currentPhaseLens.goal",
+            "decisionNeeds",
+            "securityRequirement",
+            "constraints.mustAvoid",
+        ];
+        if has_previous_baseline {
+            fields.extend([
+                "previousBaselineContext.technicalBaselineId",
+                "previousBaselineContext.stack",
+                "previousBaselineContext.securityProfiles",
+            ]);
+        }
+        return fields;
+    }
     let mut fields = vec![
         "brainstormLens.summary.title",
         "brainstormLens.summary.oneLine",
@@ -804,7 +889,10 @@ fn technical_baseline_repo_evidence(
     evidence
 }
 
-fn technical_baseline_repo_evidence_fields(project_kind: ProjectKind) -> Vec<&'static str> {
+fn technical_baseline_repo_evidence_fields(
+    project_kind: ProjectKind,
+    workflow_profile: DeliveryWorkflowProfile,
+) -> Vec<&'static str> {
     let mut fields = vec![
         "projectKind",
         "repoEvidence.detectedProjectKind",
@@ -812,13 +900,21 @@ fn technical_baseline_repo_evidence_fields(project_kind: ProjectKind) -> Vec<&'s
         "repoEvidence.repositoryContextExists",
     ];
     if matches!(project_kind, ProjectKind::ExistingProject) {
-        fields.extend([
+        let existing_fields = [
             "repoEvidence.signals.manifests",
             "repoEvidence.signals.packageManagers",
             "repoEvidence.signals.languages",
             "repoEvidence.signals.frameworks",
             "repoEvidence.signals.sourceRoots",
-        ]);
+        ];
+        if matches!(
+            workflow_profile,
+            DeliveryWorkflowProfile::ExplicitMaintenance
+        ) {
+            fields.extend(existing_fields.into_iter().take(3));
+        } else {
+            fields.extend(existing_fields);
+        }
     }
     fields
 }
@@ -1330,6 +1426,7 @@ fn technical_baseline_protocol_fingerprint(
         "version": TECHNICAL_BASELINE_PROTOCOL_VERSION,
         "projectKind": project_kind,
         "hasPreviousBaseline": has_previous_baseline,
+        "workflowProfile": brainstorm.delivery_context.workflow_profile,
         "securityApplicability": brainstorm.security_requirement.applies,
         "recommendationContext": projections.map(|item| &item.recommendation_context),
         "userConfirmationView": projections.map(|item| &item.user_confirmation_view)
@@ -2135,7 +2232,18 @@ fn new_project_quality_automation_complete(stack: &Value) -> bool {
 fn technical_baseline_decision_needs(
     project_kind: ProjectKind,
     baseline_exists: bool,
+    workflow_profile: DeliveryWorkflowProfile,
 ) -> Vec<String> {
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        return vec![
+            "confirm the existing repository runtime and focused test surface".to_string(),
+            "preserve the established stack and security boundary".to_string(),
+            "do not introduce a new technology surface for this repair".to_string(),
+        ];
+    }
     if matches!(project_kind, ProjectKind::NewProject) {
         return vec![
             "web client technology track when applicable".to_string(),
@@ -2745,6 +2853,22 @@ mod tests {
             }
         });
         candidate
+    }
+
+    #[test]
+    fn explicit_maintenance_template_is_a_valid_existing_project_candidate() {
+        let candidate: TechnicalBaselineCandidateAgentWritable =
+            serde_json::from_value(explicit_maintenance_candidate_template())
+                .expect("maintenance candidate template");
+
+        assert_eq!(candidate.project_kind, ProjectKind::ExistingProject);
+        assert_eq!(candidate.status, TechnicalBaselineStatus::Confirmed);
+        assert_eq!(
+            candidate.approval.r#type,
+            TechnicalBaselineApprovalType::PolicyAutoAccept
+        );
+        assert!(candidate.security_profiles.is_empty());
+        assert!(validate_candidate(&candidate, &SecurityRequirement::default()).is_empty());
     }
 
     #[test]
