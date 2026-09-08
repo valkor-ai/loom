@@ -37,7 +37,7 @@ thiserror = "2.0"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
 chrono = "0.4"
 fs2 = "0.4"
-quick-xml = "0.38"
+quick-xml = "0.42"
 zip = "6.0"
 pdf-extract = "0.9"
 toml_edit = "0.25"
