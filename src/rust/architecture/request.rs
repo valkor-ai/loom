@@ -31,6 +31,18 @@ const SECTION_ORDER: [ArchitectureSectionGroup; 6] = [
     ArchitectureSectionGroup::Coverage,
 ];
 
+const APPLICATION_KIND_VALUES: [&str; 9] = [
+    "web_application",
+    "web_client",
+    "mobile_client",
+    "native_client",
+    "desktop_client",
+    "backend_service",
+    "api_service",
+    "worker",
+    "external_system",
+];
+
 pub fn materialize_request(
     project_root: &str,
     delivery_id: &str,
@@ -262,6 +274,7 @@ fn build_request_root(
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
+            "applicationKind": APPLICATION_KIND_VALUES,
             "architectureQuality": architecture_quality_enum_refs(),
             "uiQuality": ui_quality_enum_refs(),
             "uiSurfaceDecision": ui_surface_decision_enum_refs()
@@ -2304,6 +2317,9 @@ pub fn section_enum_refs(
     api_quality_seed: &Value,
 ) -> Value {
     match section {
+        ArchitectureSectionGroup::Foundation => json!({
+            "applicationKind": APPLICATION_KIND_VALUES
+        }),
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
@@ -2334,7 +2350,7 @@ pub fn section_generation_rules(
             "Use currentSectionContract.resultTemplate as the only content shape. Replace every placeholder and populate structured objects before submit; do not submit template labels, prose where an object is required, or null for a required collection.".to_string(),
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only. Write modules once in content.modules; every module needs stable ownership, responsibility, and current-phase scope or acceptance refs.".to_string(),
-            "Write engineeringBoundary.applications as structured objects with applicationId, name, kind, and rootPath. Use the same applicationId values in applicationInteractions; do not use display names as refs.".to_string(),
+            "Write engineeringBoundary.applications as structured objects with applicationId, name, kind, and rootPath. kind must use enumRefs.applicationKind; a library or framework name is not an application kind. Use the same applicationId values in applicationInteractions; do not use display names as refs.".to_string(),
             "Write engineeringBoundary.patternDecision from current-phase business boundaries, consistency needs, state complexity, interaction pressure, runtime boundaries, and failure recovery. patternId is open-ended: use classification=custom with concrete structuralRules when no known pattern fits; custom never relaxes ownership or verification obligations.".to_string(),
             "Keep patternDecision.decisionDrivers, structuralRules, and rationale concrete. Do not use organization size, prestige, hypothetical scale, or an unrelated example as a structural driver.".to_string(),
             "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
@@ -2639,6 +2655,34 @@ mod tests {
             assert_eq!(traits[field], json!("boolean"), "missing {field}");
         }
         assert!(traits["operationalPolicies"].is_array());
+    }
+
+    #[test]
+    fn foundation_contract_exposes_application_kind_enum() {
+        let enum_refs =
+            section_enum_refs(ArchitectureSectionGroup::Foundation, false, &Value::Null);
+
+        assert_eq!(
+            enum_refs["applicationKind"],
+            json!([
+                "web_application",
+                "web_client",
+                "mobile_client",
+                "native_client",
+                "desktop_client",
+                "backend_service",
+                "api_service",
+                "worker",
+                "external_system"
+            ])
+        );
+        assert!(section_generation_rules(
+            ArchitectureSectionGroup::Foundation,
+            false,
+            &Value::Null
+        )
+        .join("\n")
+        .contains("enumRefs.applicationKind"));
     }
 
     #[test]

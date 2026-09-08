@@ -17,7 +17,7 @@ use state::{
 };
 
 use crate::{
-    clarification::{initial_state, write_initial_state_file},
+    clarification::{initial_state, write_initial_state_file, ClarificationProfile},
     gate::{gate_for_block, to_value},
     paths::brainstorm_contract_file,
     request::build_brainstorm_request_root,
@@ -101,7 +101,15 @@ fn start_brainstorm_inner(
     let contract_file = brainstorm_contract_file(staged_root, &delivery_id);
     write_json_atomic(&contract_file, &contract)?;
     let contract_ref = to_project_relative(staged_root, &contract_file)?;
-    let clarification_state = initial_state(&delivery_id, &phase_id, &brainstorm_run_id);
+    let (clarification_profile, clarification_profile_reason) =
+        classify_clarification_profile(project_root, &input.request_text);
+    let clarification_state = initial_state(
+        &delivery_id,
+        &phase_id,
+        &brainstorm_run_id,
+        clarification_profile.clone(),
+        clarification_profile_reason,
+    );
     let clarification_state_ref =
         write_initial_state_file(staged_root, &delivery_id, &phase_id, &clarification_state)?;
 
@@ -113,6 +121,7 @@ fn start_brainstorm_inner(
         &brainstorm_run_id,
         &requirement.user_facing_language,
         context_refs,
+        &clarification_profile,
     );
     let stored = state::write_native_request_staged(
         &staged_root.to_string_lossy(),
@@ -140,6 +149,7 @@ fn start_brainstorm_inner(
         contracts::ClarificationBlockName::PhaseScope,
         vec![],
         vec![],
+        &clarification_profile,
     );
 
     let mut latest_refs = BTreeMap::new();
@@ -270,6 +280,111 @@ fn start_brainstorm_inner(
     ))
 }
 
+fn classify_clarification_profile(
+    project_root: &Path,
+    request_text: &str,
+) -> (ClarificationProfile, Option<String>) {
+    if !looks_like_existing_repository(project_root) {
+        return (ClarificationProfile::Full, None);
+    }
+
+    let normalized = request_text.to_ascii_lowercase();
+    let has_maintenance_intent = [
+        "fix",
+        "bug",
+        "regression",
+        "crash",
+        "exception",
+        "incorrect",
+        "wrong",
+        "fails",
+        "failure",
+        "should return",
+        "should handle",
+    ]
+    .iter()
+    .any(|signal| normalized.contains(signal));
+    let has_concrete_target = request_text.contains('`')
+        || request_text.contains(".rs")
+        || request_text.contains(".py")
+        || request_text.contains(".ts")
+        || request_text.contains(".js")
+        || request_text.contains(".go")
+        || normalized.contains("function")
+        || normalized.contains("method")
+        || normalized.contains("test");
+    let has_broad_or_sensitive_intent = [
+        " ui ",
+        "frontend",
+        "page",
+        "screen",
+        "api",
+        "endpoint",
+        "schema",
+        "migration",
+        "database",
+        "auth",
+        "authorization",
+        "security",
+        "permission",
+        "deploy",
+        "deployment",
+        "infrastructure",
+        "runtime",
+        "feature",
+        "redesign",
+        "refactor",
+    ]
+    .iter()
+    .any(|signal| has_unexcluded_signal(&normalized, signal));
+    let is_bounded = request_text.chars().count() <= 1_200;
+
+    if has_maintenance_intent && has_concrete_target && is_bounded && !has_broad_or_sensitive_intent
+    {
+        return (
+            ClarificationProfile::ExplicitMaintenance,
+            Some("Existing repository with a bounded maintenance request and a concrete implementation target; broad or sensitive delivery signals were absent.".to_string()),
+        );
+    }
+    (ClarificationProfile::Full, None)
+}
+
+fn has_unexcluded_signal(request_text: &str, signal: &str) -> bool {
+    request_text.split(['.', ';', '\n']).any(|clause| {
+        clause.contains(signal)
+            && ![
+                "do not ",
+                "don't ",
+                "no ",
+                "without ",
+                "not change",
+                "not modify",
+                "not touch",
+                "preserve ",
+                "keep existing",
+                "keep the existing",
+            ]
+            .iter()
+            .any(|exclusion| clause.contains(exclusion))
+    })
+}
+
+fn looks_like_existing_repository(project_root: &Path) -> bool {
+    project_root.join(".git").exists()
+        || [
+            "Cargo.toml",
+            "package.json",
+            "pyproject.toml",
+            "setup.py",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "Gemfile",
+        ]
+        .iter()
+        .any(|marker| project_root.join(marker).is_file())
+}
+
 fn initial_contract(
     delivery_id: &str,
     phase_id: &str,
@@ -310,6 +425,7 @@ fn initial_contract(
                 input_refs: requirement_files.to_vec(),
             },
             user_facing_language: requirement.user_facing_language.clone(),
+            workflow_profile: contracts::DeliveryWorkflowProfile::Full,
         },
         roadmap: Roadmap {
             required: false,
@@ -407,4 +523,77 @@ fn summarize_request(request_text: &str, file_count: usize) -> RequestSummary {
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::from_core_error(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_path(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "loom-brainstorm-profile-{name}-{}",
+            state::store::now_millis()
+        ));
+        std::fs::create_dir_all(&path).expect("create test project");
+        std::fs::write(path.join("pyproject.toml"), "[project]\nname = 'test'\n")
+            .expect("write repository marker");
+        path
+    }
+
+    #[test]
+    fn selects_explicit_maintenance_only_for_bounded_fix() {
+        let path = repo_path("maintenance");
+        let (profile, reason) = classify_clarification_profile(
+            &path,
+            "Fix `django.utils.numberformat.format()` so None returns unchanged and add a regression test in tests/utils_tests/test_numberformat.py.",
+        );
+        assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        assert!(reason.is_some());
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
+
+    #[test]
+    fn falls_back_to_full_for_api_change() {
+        let path = repo_path("api");
+        let (profile, reason) = classify_clarification_profile(
+            &path,
+            "Fix `format()` and add a new API endpoint for callers.",
+        );
+        assert_eq!(profile, ClarificationProfile::Full);
+        assert!(reason.is_none());
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
+
+    #[test]
+    fn explicit_exclusions_do_not_disable_maintenance_profile() {
+        let path = repo_path("excluded-signals");
+        let (profile, _) = classify_clarification_profile(
+            &path,
+            "Fix `format()` and add a regression test. Do not change public APIs, database schema, migrations, authentication, security, deployment, runtime configuration, or UI.",
+        );
+        assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
+
+    #[test]
+    fn maintenance_delivery_language_does_not_disable_the_profile() {
+        let path = repo_path("delivery-language");
+        let (profile, _) = classify_clarification_profile(
+            &path,
+            "Fix `format()` and add a regression test. Complete implementation and focused verification.",
+        );
+        assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
+
+    #[test]
+    fn preserving_existing_security_boundary_does_not_disable_maintenance_profile() {
+        let path = repo_path("preserve-security-boundary");
+        let (profile, _) = classify_clarification_profile(
+            &path,
+            "Fix `django.utils.numberformat.format()` so None returns unchanged and add a regression test in tests/utils_tests/test_numberformat.py. Keep the existing repository stack and security boundary.",
+        );
+        assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
 }

@@ -2,9 +2,10 @@
 name: godot
 description: |
   Build, test, debug, and visually verify Godot projects through Loom.
-  Use this skill for Godot project structure, GDScript or C# API questions,
-  headless checks, input maps, runtime inspection through godot-mcp, gameplay
-  tests, screenshots, and handoff evidence.
+  Use only when the task explicitly mentions Godot, GDScript, gdUnit, or
+  godot-mcp, or when the active workspace contains project.godot. Covers Godot
+  project structure, engine APIs, headless checks, gameplay tests, screenshots,
+  and handoff evidence. Do not load for unrelated repositories.
 ---
 
 # Godot Skills for Loom

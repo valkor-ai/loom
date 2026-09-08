@@ -10,7 +10,10 @@ use schemars::schema_for;
 use serde_json::{json, Map, Value};
 use state::paths::to_project_relative;
 
-use crate::{gate::required_blocks, paths::brainstorm_agent_candidate_file};
+use crate::{
+    clarification::ClarificationProfile, gate::required_blocks,
+    paths::brainstorm_agent_candidate_file,
+};
 
 pub fn build_brainstorm_request_root(
     _project_root: &Path,
@@ -20,6 +23,7 @@ pub fn build_brainstorm_request_root(
     brainstorm_run_id: &str,
     user_facing_language: &UserFacingLanguageConstraint,
     context_refs: Value,
+    profile: &ClarificationProfile,
 ) -> serde_json::Value {
     build_brainstorm_clarification_request_root(
         request_id,
@@ -29,6 +33,7 @@ pub fn build_brainstorm_request_root(
         user_facing_language,
         context_refs,
         ClarificationBlockName::PhaseScope,
+        profile,
     )
 }
 
@@ -40,11 +45,14 @@ pub fn build_brainstorm_clarification_request_root(
     user_facing_language: &UserFacingLanguageConstraint,
     context_refs: Value,
     current_block: ClarificationBlockName,
+    profile: &ClarificationProfile,
 ) -> serde_json::Value {
-    let (rule_key, rules, rule_group_fields) = block_rules(&current_block);
+    let (rule_key, rules, rule_group_fields) = block_rules(&current_block, profile);
+    let maintenance_frontend_skip = *profile == ClarificationProfile::ExplicitMaintenance
+        && current_block == ClarificationBlockName::FrontendExperience;
     let mut rules_object = Map::new();
     rules_object.insert(rule_key.to_string(), rules);
-    if current_block != ClarificationBlockName::FinalSummary {
+    if current_block != ClarificationBlockName::FinalSummary && !maintenance_frontend_skip {
         rules_object.insert(
             "requirementSemanticGrounding".to_string(),
             json!({ "compactRules": requirement_semantic_compact_rules() }),
@@ -65,7 +73,7 @@ pub fn build_brainstorm_clarification_request_root(
             "clarificationConversationProtocol.confirmToolRule"
         ])
     })];
-    if current_block != ClarificationBlockName::FinalSummary {
+    if current_block != ClarificationBlockName::FinalSummary && !maintenance_frontend_skip {
         groups.push(json!({
             "groupId": "requirement_context",
             "required": true,
@@ -105,7 +113,7 @@ pub fn build_brainstorm_clarification_request_root(
             ])
         }));
     }
-    if current_block != ClarificationBlockName::FinalSummary {
+    if current_block != ClarificationBlockName::FinalSummary && !maintenance_frontend_skip {
         groups.push(json!({
             "groupId": "knowledge_context_plan",
             "required": true,
@@ -146,10 +154,10 @@ pub fn build_brainstorm_clarification_request_root(
             "userVisibleBlockTitle": user_visible_block_title(&current_block),
             "userFacingLanguageRule": user_facing_language.rule,
             "currentTurnAnswerRule": current_turn_answer_rule(&current_block),
-            "blockRule": block_rule(&current_block),
+            "blockRule": block_rule(&current_block, profile),
             "confirmToolRule": "After visible user confirmation, call loom.brainstormConfirmBlock with this requestRef, currentBlock, a concise user-facing summary, and current-block confirmedData. Do not write the final Brainstorm candidate in a clarification block."
         },
-        "knowledgeQueryPlan": knowledge_query_plan_for_block(&current_block),
+        "knowledgeQueryPlan": knowledge_query_plan_for_block(&current_block, profile),
         "rules": Value::Object(rules_object),
         "blockConfirmationContract": {
             "tool": "loom.brainstormConfirmBlock",
@@ -171,6 +179,7 @@ pub fn build_brainstorm_candidate_write_request_root(
     brainstorm_run_id: &str,
     user_facing_language: &UserFacingLanguageConstraint,
     context_refs: Value,
+    profile: &ClarificationProfile,
 ) -> serde_json::Value {
     let candidate_file = to_project_relative(
         project_root,
@@ -180,16 +189,22 @@ pub fn build_brainstorm_candidate_write_request_root(
     let schema_shape = serde_json::to_value(schema_for!(BrainstormCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
 
-    json!({
+    let explicit_maintenance = matches!(profile, ClarificationProfile::ExplicitMaintenance);
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "brainstorm_candidate_write",
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "brainstormRunId": brainstorm_run_id,
+        "workflowProfile": if explicit_maintenance { "explicit_maintenance" } else { "full" },
         "userFacingLanguage": user_facing_language,
         "contextRefs": context_refs,
         "rules": {
-            "candidateWrite": candidate_write_rules(),
+            "candidateWrite": if explicit_maintenance {
+                explicit_maintenance_candidate_write_rules()
+            } else {
+                candidate_write_rules()
+            },
             "requirementSemanticGrounding": {
                 "compactRules": requirement_semantic_compact_rules()
             }
@@ -277,7 +292,37 @@ pub fn build_brainstorm_candidate_write_request_root(
                 }
             ]
         }
-    })
+    });
+    if explicit_maintenance {
+        root["outputContract"]
+            .as_object_mut()
+            .expect("brainstorm output contract is an object")
+            .remove("resultTemplate");
+        root["outputContract"]["schemaProjection"]["maintenanceCandidateTemplate"] =
+            explicit_maintenance_candidate_template(phase_id);
+        let selectors = root["requestReadPlan"]["groups"]
+            .as_array_mut()
+            .expect("brainstorm candidate read groups are an array")
+            .iter_mut()
+            .find(|group| group["groupId"] == "candidate_write_contract")
+            .and_then(|group| group.get_mut("selectors"))
+            .expect("brainstorm candidate write contract selectors exist");
+        *selectors = read_selectors_value_from_paths([
+            "outputContract.writeTargets",
+            "outputContract.submitTool",
+            "outputContract.schemaProjection",
+            "enumRefs.complexity",
+            "enumRefs.scopeSource",
+            "enumRefs.acceptancePriority",
+            "enumRefs.phaseStatus",
+            "enumRefs.phasePlanCurrentStatus",
+            "enumRefs.nextPhasePreviewKind",
+            "enumRefs.conceptGroundingMode",
+            "enumRefs.securityRequirementApplicability",
+            "rules.candidateWrite",
+        ]);
+    }
+    root
 }
 
 fn schema_projection() -> Value {
@@ -542,6 +587,85 @@ fn candidate_result_template(phase_id: &str) -> Value {
     })
 }
 
+/// A bounded repair still needs a complete, valid Brainstorm candidate. This
+/// template exposes that small shape without loading the full product-flow
+/// contract used for feature delivery.
+fn explicit_maintenance_candidate_template(phase_id: &str) -> Value {
+    json!({
+        "requestSummary": {
+            "title": "",
+            "oneLine": "",
+            "complexity": "small"
+        },
+        "scope": {
+            "included": [{
+                "id": "scope_1",
+                "label": "",
+                "items": [],
+                "source": "user_confirmed"
+            }],
+            "excluded": [{
+                "id": "excluded_1",
+                "label": "",
+                "items": [],
+                "source": "user_confirmed"
+            }],
+            "deferred": [],
+            "assumptions": []
+        },
+        "roadmap": {
+            "required": false,
+            "phases": [{
+                "phaseId": phase_id,
+                "title": "",
+                "status": "scope_confirmed",
+                "goal": "",
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "dependsOn": []
+            }]
+        },
+        "phasePlan": {
+            "current": {
+                "title": "",
+                "goal": "",
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "status": "scope_confirmed"
+            },
+            "nextPhasePreview": {
+                "kind": "none",
+                "reason": ""
+            }
+        },
+        "acceptance": [{
+            "id": "acc_1",
+            "statement": "",
+            "sourceRefs": [],
+            "priority": "must"
+        }],
+        "conceptGrounding": {
+            "phaseConceptGrounding": {
+                "mode": "none_required",
+                "reason": "",
+                "concepts": []
+            },
+            "glossaryUpdates": []
+        },
+        "conceptConfirmation": {
+            "shownToUser": false,
+            "confirmedConceptRefs": [],
+            "confirmationSummary": ""
+        },
+        "securityRequirement": {
+            "applies": "not_applicable",
+            "clientTrustModels": [],
+            "sourceRefs": [],
+            "rationale": ""
+        }
+    })
+}
+
 fn enum_refs() -> Value {
     json!({
         "complexity": ["small", "medium", "large", "unknown"],
@@ -672,7 +796,54 @@ fn knowledge_query_plan() -> Value {
     })
 }
 
-fn knowledge_query_plan_for_block(block: &ClarificationBlockName) -> Value {
+fn explicit_maintenance_knowledge_query_plan() -> Value {
+    json!({
+        "sharedRules": [
+            "Use request-scoped knowledge only to verify the supplied maintenance scope and technical impact.",
+            "Call loom.knowledgeBrainstormContext once for every listed executionOrder step before confirmation.",
+            "If knowledge is empty, continue with the source requirement and repository evidence.",
+            "If knowledge returns an error, report it instead of silently treating the block as confirmed.",
+            "Do not expand the request into alternate product scope, business scenarios, actor modeling, or lifecycle analysis unless the evidence exposes an ambiguity that requires user clarification."
+        ],
+        "toolContract": {
+            "contextTool": "loom.knowledgeBrainstormContext",
+            "inspectTool": "loom.knowledgeInspectChunk",
+            "doNotUseAsContextCheck": ["loom.knowledgeList", "loom.knowledgePending"],
+            "requiredInputFields": ["projectRoot", "requestRef", "block", "stepId", "querySubject", "naturalLanguageQuery", "semanticFocus"]
+        },
+        "blocks": {
+            "phase_scope": {
+                "executionOrder": [{
+                    "stepId": "phase_scope_explicit_maintenance",
+                    "queryKind": "dependency_order",
+                    "querySubjectRule": "The supplied bounded fix, its target symbol or file, regression test, and explicitly excluded work.",
+                    "queryConstructionRules": [
+                        "Verify the requested behavior change and whether the named fix has a direct dependency boundary.",
+                        "Do not generate alternate phase cuts or candidate scope options when the supplied boundary is clear.",
+                        "Ask one focused clarification only when repository or requirement evidence makes the target, behavior, or boundary genuinely ambiguous."
+                    ]
+                }]
+            },
+            "concept_grounding": {
+                "executionOrder": [{
+                    "stepId": "concept_grounding_technical_impact",
+                    "queryKind": "scope_item_grounding",
+                    "querySubjectRule": "The confirmed maintenance target and regression behavior.",
+                    "queryConstructionRules": [
+                        "Verify the affected symbol or file, behavior before and after, regression test location, and out-of-scope boundary.",
+                        "Do not retrieve or model unrelated business objects, actors, pages, or lifecycle steps."
+                    ]
+                }]
+            },
+            "frontend_experience": { "executionOrder": [] }
+        }
+    })
+}
+
+fn knowledge_query_plan_for_block(
+    block: &ClarificationBlockName,
+    profile: &ClarificationProfile,
+) -> Value {
     if *block == ClarificationBlockName::FinalSummary {
         return json!({
             "sharedRules": [
@@ -685,7 +856,11 @@ fn knowledge_query_plan_for_block(block: &ClarificationBlockName) -> Value {
             "blocks": {}
         });
     }
-    let full = knowledge_query_plan();
+    let full = if *profile == ClarificationProfile::ExplicitMaintenance {
+        explicit_maintenance_knowledge_query_plan()
+    } else {
+        knowledge_query_plan()
+    };
     let block_name = block_id(block);
     let Some(block_plan) = full.pointer(&format!("/blocks/{block_name}")).cloned() else {
         return full;
@@ -699,8 +874,25 @@ fn knowledge_query_plan_for_block(block: &ClarificationBlockName) -> Value {
     })
 }
 
-fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'static str>) {
+fn block_rules(
+    block: &ClarificationBlockName,
+    profile: &ClarificationProfile,
+) -> (&'static str, Value, Vec<&'static str>) {
     match block {
+        ClarificationBlockName::PhaseScope
+            if *profile == ClarificationProfile::ExplicitMaintenance =>
+        {
+            (
+                "phaseScope",
+                explicit_maintenance_phase_scope_rules(),
+                vec![
+                    "rules.phaseScope.blockMission",
+                    "rules.phaseScope.presentation",
+                    "rules.phaseScope.selfCheck",
+                    "rules.phaseScope.confirmedDataShape",
+                ],
+            )
+        }
         ClarificationBlockName::PhaseScope => (
             "phaseScope",
             phase_scope_rules(),
@@ -713,6 +905,20 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
                 "rules.phaseScope.confirmedDataShape",
             ],
         ),
+        ClarificationBlockName::ConceptGrounding
+            if *profile == ClarificationProfile::ExplicitMaintenance =>
+        {
+            (
+                "conceptGrounding",
+                explicit_maintenance_concept_grounding_rules(),
+                vec![
+                    "rules.conceptGrounding.presentation",
+                    "rules.conceptGrounding.selfCheck",
+                    "rules.conceptGrounding.technicalImpact",
+                    "rules.conceptGrounding.confirmedDataShape",
+                ],
+            )
+        }
         ClarificationBlockName::ConceptGrounding => (
             "conceptGrounding",
             concept_grounding_rules(),
@@ -727,6 +933,19 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
                 "rules.conceptGrounding.confirmedDataShape",
             ],
         ),
+        ClarificationBlockName::FrontendExperience
+            if *profile == ClarificationProfile::ExplicitMaintenance =>
+        {
+            (
+                "frontendExperience",
+                explicit_maintenance_frontend_rules(),
+                vec![
+                    "rules.frontendExperience.presentation",
+                    "rules.frontendExperience.selfCheck",
+                    "rules.frontendExperience.confirmedDataShape",
+                ],
+            )
+        }
         ClarificationBlockName::FrontendExperience => (
             "frontendExperience",
             frontend_experience_rules(),
@@ -754,6 +973,57 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
     }
 }
 
+fn explicit_maintenance_phase_scope_rules() -> Value {
+    json!({
+        "blockMission": "Confirm one supplied, bounded maintenance fix without inventing alternative product scope.",
+        "presentation": [
+            "Use a short user-facing maintenance scope confirmation.",
+            "State the target behavior, the regression test to add or update, and the explicit out-of-scope boundary.",
+            "Present the supplied fix as the confirmation target. Do not generate A/B/C options unless a real ambiguity is found."
+        ],
+        "selfCheck": [
+            "Verify that the target symbol or file, behavior change, regression test, and boundary are grounded in the request or repository evidence.",
+            "Verify that no UI, API, schema, migration, auth, security, deployment, or runtime change has been silently included.",
+            "If the evidence reveals a real ambiguity, ask one focused question before confirmation."
+        ],
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::PhaseScope)
+    })
+}
+
+fn explicit_maintenance_concept_grounding_rules() -> Value {
+    json!({
+        "presentation": [
+            "Use a short user-facing technical impact confirmation.",
+            "State the affected symbol or file, behavior before and after, regression test, and out-of-scope boundary.",
+            "Do not introduce business scenarios, actors, lifecycle scans, or product workflows for a technical maintenance fix."
+        ],
+        "selfCheck": [
+            "Verify that the impact statement matches the confirmed maintenance scope.",
+            "Verify that the regression test distinguishes the old failing behavior from the intended behavior.",
+            "Ask a focused question only when a technical invariant or boundary is genuinely unclear."
+        ],
+        "technicalImpact": [
+            "Keep the technical impact limited to the affected implementation target, behavior change, regression coverage, and explicit boundary.",
+            "Do not infer a business domain model from a narrow maintenance request."
+        ],
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::ConceptGrounding)
+    })
+}
+
+fn explicit_maintenance_frontend_rules() -> Value {
+    json!({
+        "presentation": [
+            "Record that no user-facing UI applies to this bounded maintenance repair.",
+            "Use the explicit user-confirmed reason; do not describe page paths, forms, or user workflows."
+        ],
+        "selfCheck": [
+            "Verify that the confirmed maintenance scope does not change a user-facing surface.",
+            "Submit this block as skipped with the concrete no-UI reason."
+        ],
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::FrontendExperience)
+    })
+}
+
 fn block_id(block: &ClarificationBlockName) -> &'static str {
     match block {
         ClarificationBlockName::PhaseScope => "phase_scope",
@@ -772,15 +1042,24 @@ fn user_visible_block_title(block: &ClarificationBlockName) -> &'static str {
     }
 }
 
-fn block_rule(block: &ClarificationBlockName) -> &'static str {
+fn block_rule(block: &ClarificationBlockName, profile: &ClarificationProfile) -> &'static str {
     match block {
         ClarificationBlockName::PhaseScope => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Confirm the supplied bounded maintenance fix, its regression test, and the explicit out-of-scope boundary after one request-scoped knowledge query. Do not generate alternate scope candidates unless the evidence reveals ambiguity.";
+            }
             "Confirm only the active phase boundary: first query request-scoped knowledge for this block, then present 2-3 current-phase options, not a full multi-stage project roadmap, and wait for explicit user confirmation."
         }
         ClarificationBlockName::ConceptGrounding => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Confirm the technical impact of the already confirmed maintenance scope: affected symbol or file, behavior before and after, regression test, and boundary. Do not perform business object, actor, or lifecycle modeling.";
+            }
             "Use only the confirmed current-stage scope as the subject set; first query request-scoped knowledge for this block, then wait for explicit user confirmation."
         }
         ClarificationBlockName::FrontendExperience => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Record the explicit no-UI reason and submit this block as skipped. Do not query or model a page operation path.";
+            }
             "Use confirmed business operations; first query request-scoped knowledge for this block, then confirm the page or workspace path, or record a concrete skip reason."
         }
         ClarificationBlockName::FinalSummary => {
@@ -1086,6 +1365,18 @@ fn candidate_write_rules() -> Value {
     ])
 }
 
+fn explicit_maintenance_candidate_write_rules() -> Value {
+    json!([
+        "Write only the Brainstorm candidate target after final_summary is confirmed.",
+        "Preserve the confirmed implementation target, behavior before and after, focused regression test, and excluded boundary in scope and acceptance.",
+        "Use outputContract.schemaProjection.maintenanceCandidateTemplate as the concrete field shape. Do not add fields outside that template or machine-owned fields listed in outputContract.",
+        "Use scope.excluded for the bounded out-of-scope boundary. Keep scope.deferred empty unless the user confirmed a real later delivery phase.",
+        "Set frontendExperience to absent when the confirmed maintenance state says no UI applies.",
+        "Do not invent product flows, UI surfaces, architecture, or broader refactors for this bounded repair.",
+        "Keep the accepted candidate sufficient for task planning, focused tests, review, repair, and verification."
+    ])
+}
+
 fn requirement_semantic_compact_rules() -> Value {
     json!([
         "Preserve the confirmed current-phase semantics in existing Brainstorm candidate fields; avoid vague labels.",
@@ -1094,4 +1385,146 @@ fn requirement_semantic_compact_rules() -> Value {
         "When business detail does not apply, state the concrete non-domain reason rather than fabricating domain rules.",
         "If a required semantic detail is unclear after reading the requirement and inspected knowledge, ask the user before accept."
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::{UserFacingLanguageSource, UserFacingLocale};
+
+    fn language() -> UserFacingLanguageConstraint {
+        UserFacingLanguageConstraint {
+            default_locale: UserFacingLocale::En,
+            source: UserFacingLanguageSource::Fallback,
+            applies_to: vec![],
+            does_not_apply_to: vec![],
+            rule: "Use English.".to_string(),
+        }
+    }
+
+    #[test]
+    fn explicit_maintenance_phase_scope_has_one_bounded_knowledge_step() {
+        let request = build_brainstorm_request_root(
+            Path::new("."),
+            "request-1",
+            "delivery-1",
+            "phase-1",
+            "run-1",
+            &language(),
+            json!({}),
+            &ClarificationProfile::ExplicitMaintenance,
+        );
+
+        let steps = request
+            .pointer("/knowledgeQueryPlan/blocks/phase_scope/executionOrder")
+            .and_then(Value::as_array)
+            .expect("maintenance phase scope steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["stepId"], "phase_scope_explicit_maintenance");
+        assert!(request
+            .pointer("/rules/phaseScope/optionComparison")
+            .is_none());
+        assert!(request
+            .to_string()
+            .contains("Do not generate A/B/C options"));
+    }
+
+    #[test]
+    fn full_phase_scope_keeps_candidate_closure_requirements() {
+        let request = build_brainstorm_request_root(
+            Path::new("."),
+            "request-1",
+            "delivery-1",
+            "phase-1",
+            "run-1",
+            &language(),
+            json!({}),
+            &ClarificationProfile::Full,
+        );
+
+        assert_eq!(
+            request.pointer(
+                "/knowledgeQueryPlan/blocks/phase_scope/executionOrder/1/minimumQueryCount"
+            ),
+            Some(&json!(2))
+        );
+        assert!(request
+            .pointer("/rules/phaseScope/optionComparison")
+            .is_some());
+    }
+
+    #[test]
+    fn explicit_maintenance_frontend_block_is_a_compact_skip() {
+        let request = build_brainstorm_clarification_request_root(
+            "request-1",
+            "delivery-1",
+            "phase-1",
+            "run-1",
+            &language(),
+            json!({}),
+            ClarificationBlockName::FrontendExperience,
+            &ClarificationProfile::ExplicitMaintenance,
+        );
+
+        assert!(request
+            .pointer("/requestReadPlan/groups")
+            .and_then(Value::as_array)
+            .expect("read groups")
+            .iter()
+            .all(|group| group["groupId"] != "knowledge_context_plan"));
+        assert!(request.to_string().contains("submit this block as skipped"));
+        assert!(request
+            .pointer("/rules/frontendExperience/operationPath")
+            .is_none());
+    }
+
+    #[test]
+    fn explicit_maintenance_candidate_request_omits_generic_result_template() {
+        let request = build_brainstorm_candidate_write_request_root(
+            Path::new("."),
+            "request-1",
+            "delivery-1",
+            "phase-1",
+            "run-1",
+            &language(),
+            json!({}),
+            &ClarificationProfile::ExplicitMaintenance,
+        );
+
+        assert_eq!(request["workflowProfile"], json!("explicit_maintenance"));
+        assert!(request.pointer("/outputContract/resultTemplate").is_none());
+        assert_eq!(
+            request.pointer("/outputContract/schemaProjection/maintenanceCandidateTemplate/roadmap/phases/0/phaseId"),
+            Some(&json!("phase-1"))
+        );
+        assert_eq!(
+            request.pointer("/outputContract/schemaProjection/maintenanceCandidateTemplate/conceptConfirmation/shownToUser"),
+            Some(&json!(false))
+        );
+        let write_contract = request["requestReadPlan"]["groups"]
+            .as_array()
+            .expect("read groups")
+            .iter()
+            .find(|group| group["groupId"] == "candidate_write_contract")
+            .expect("candidate write contract");
+        assert!(!write_contract.to_string().contains("resultTemplate"));
+        assert!(!write_contract.to_string().contains("frontendExperience"));
+    }
+
+    #[test]
+    fn full_candidate_request_keeps_generic_result_template() {
+        let request = build_brainstorm_candidate_write_request_root(
+            Path::new("."),
+            "request-1",
+            "delivery-1",
+            "phase-1",
+            "run-1",
+            &language(),
+            json!({}),
+            &ClarificationProfile::Full,
+        );
+
+        assert_eq!(request["workflowProfile"], json!("full"));
+        assert!(request.pointer("/outputContract/resultTemplate").is_some());
+    }
 }
