@@ -18,10 +18,10 @@ use knowledge::mcp_models::{
 use planning::{accept_repository_context_file, accept_technical_baseline_file};
 use rmcp::{
     model::{
-        CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation,
-        ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
-        ServerInfo, Tool,
+        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        Implementation, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::stdio,
@@ -119,8 +119,8 @@ impl ServerHandler for LoomMcpServer {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        ready(call_tool(self, request))
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
+        ready(call_tool(self, request).map(Into::into))
     }
 
     fn list_resources(
@@ -143,8 +143,8 @@ impl ServerHandler for LoomMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
-        ready(read_resource(self, &request.uri))
+    ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + Send + '_ {
+        ready(read_resource(self, &request.uri).map(Into::into))
     }
 }
 
