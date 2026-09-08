@@ -23,7 +23,10 @@ use state::{
     store::{ensure_dir, read_json_value, StateError, StateResult},
 };
 
-use crate::gate::{gate_for_block, to_value};
+use crate::{
+    clarification::ClarificationProfile,
+    gate::{gate_for_block, to_value},
+};
 
 pub use accept::accept_brainstorm_file;
 pub use clarification::{confirm_block, BrainstormConfirmBlockInput};
@@ -85,7 +88,7 @@ pub fn module_name() -> &'static str {
 /// user-facing question without guessing from a generic phase-handoff message.
 pub fn phase_scope_gate() -> Value {
     let current_block = ClarificationBlockName::PhaseScope;
-    let gate = gate_for_block(current_block, vec![], vec![]);
+    let gate = gate_for_block(current_block, vec![], vec![], &ClarificationProfile::Full);
     to_value(&gate)
 }
 
@@ -374,6 +377,7 @@ pub fn materialize_phase_brainstorm_from_preview(
         &brainstorm_run_id,
         &contract.delivery_context.user_facing_language,
         context_refs,
+        &ClarificationProfile::Full,
     );
     attach_next_phase_seed(&mut request_root, &source_phase_id, &handoff);
     let repository_projection = match repository_context_ref {
@@ -400,8 +404,13 @@ pub fn materialize_phase_brainstorm_from_preview(
             root: request_root,
         },
     )?;
-    let clarification_state =
-        clarification::initial_state(delivery_id, &handoff.phase_id, &brainstorm_run_id);
+    let clarification_state = clarification::initial_state(
+        delivery_id,
+        &handoff.phase_id,
+        &brainstorm_run_id,
+        ClarificationProfile::Full,
+        None,
+    );
     let clarification_state_ref = clarification::write_initial_state_file(
         root,
         delivery_id,

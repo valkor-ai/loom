@@ -29,6 +29,68 @@ pub struct InspectRequestResult {
     pub submit_tool: Option<String>,
 }
 
+impl InspectRequestResult {
+    pub fn mcp_summary(self) -> InspectRequestSummary {
+        InspectRequestSummary {
+            request_ref: self.request_ref,
+            request_id: self.request_id,
+            project_id: self.project_id,
+            request_kind: self.request_kind,
+            read_groups: self
+                .read_groups
+                .into_iter()
+                .map(InspectReadGroupSummary::from)
+                .collect(),
+            write_targets: self.write_targets,
+            submit_tool: self.submit_tool,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectRequestSummary {
+    pub request_ref: String,
+    pub request_id: String,
+    pub project_id: String,
+    pub request_kind: String,
+    pub read_groups: Vec<InspectReadGroupSummary>,
+    pub write_targets: Vec<Value>,
+    pub submit_tool: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectReadGroupSummary {
+    pub request_ref: String,
+    pub group_id: String,
+    pub required: bool,
+    pub order: u32,
+    pub purpose: String,
+    pub when_to_read: String,
+    pub projection_mode: String,
+    pub field_count: usize,
+    pub read_tool: String,
+    pub resource_uri: String,
+}
+
+impl From<ReadGroupRef> for InspectReadGroupSummary {
+    fn from(group: ReadGroupRef) -> Self {
+        Self {
+            request_ref: group.request_ref.clone().unwrap_or_default(),
+            field_count: group.expanded_fields().len(),
+            group_id: group.group_id,
+            required: group.required,
+            order: group.order,
+            purpose: group.purpose,
+            when_to_read: group.when_to_read,
+            projection_mode: group.projection_mode,
+            read_tool: group.read_tool,
+            resource_uri: group.resource_uri,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFieldGroupInput {

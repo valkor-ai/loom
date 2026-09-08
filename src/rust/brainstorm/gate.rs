@@ -2,6 +2,8 @@ use contracts::ClarificationBlockName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::clarification::ClarificationProfile;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainstormGate {
@@ -44,6 +46,7 @@ pub fn gate_for_block(
     block: ClarificationBlockName,
     already_confirmed_blocks: Vec<ClarificationBlockName>,
     skipped_blocks: Vec<SkippedBlockSummary>,
+    profile: &ClarificationProfile,
 ) -> BrainstormGate {
     BrainstormGate {
         gate_id: format!("gate_{}", block_id(&block)),
@@ -51,7 +54,7 @@ pub fn gate_for_block(
         required_blocks: required_blocks(),
         already_confirmed_blocks,
         skipped_blocks,
-        user_message: block_message(&block),
+        user_message: block_message_for_profile(&block, profile),
         response_rule: BrainstormResponseRule {
             mode: "progressive_brainstorm".to_string(),
             final_summary_required_before_write: true,
@@ -74,27 +77,52 @@ pub fn to_value(gate: &BrainstormGate) -> Value {
     serde_json::to_value(gate).unwrap_or_else(|_| serde_json::json!({}))
 }
 
-pub fn required_knowledge_step_ids(block: &ClarificationBlockName) -> &'static [&'static str] {
+pub fn required_knowledge_step_ids(
+    block: &ClarificationBlockName,
+    profile: &ClarificationProfile,
+) -> &'static [&'static str] {
     match block {
-        ClarificationBlockName::PhaseScope => &[
-            "phase_scope_dependency_order",
-            "phase_scope_capability_closure",
-        ],
-        ClarificationBlockName::ConceptGrounding => &["concept_grounding_scope_item"],
+        ClarificationBlockName::PhaseScope => match profile {
+            ClarificationProfile::Full => &[
+                "phase_scope_dependency_order",
+                "phase_scope_capability_closure",
+            ],
+            ClarificationProfile::ExplicitMaintenance => &["phase_scope_explicit_maintenance"],
+        },
+        ClarificationBlockName::ConceptGrounding => match profile {
+            ClarificationProfile::Full => &["concept_grounding_scope_item"],
+            ClarificationProfile::ExplicitMaintenance => &["concept_grounding_technical_impact"],
+        },
         ClarificationBlockName::FrontendExperience => &["frontend_experience_page_operation_path"],
         ClarificationBlockName::FinalSummary => &[],
     }
 }
 
 pub fn block_message(block: &ClarificationBlockName) -> String {
+    block_message_for_profile(block, &ClarificationProfile::Full)
+}
+
+fn block_message_for_profile(
+    block: &ClarificationBlockName,
+    profile: &ClarificationProfile,
+) -> String {
     match block {
         ClarificationBlockName::PhaseScope => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Read the current block's knowledge plan, then confirm the supplied maintenance fix boundary, its regression test, and what remains out of scope. Wait for the user's visible confirmation before continuing.".to_string();
+            }
             "Read the current block's knowledge plan, query request-scoped knowledge, then present 2-3 active phase boundary options in the user's language, not a full multi-stage project roadmap. Wait for the user's visible confirmation, then continue to business understanding and rule confirmation. Do not show internal block ids to the user.".to_string()
         }
         ClarificationBlockName::ConceptGrounding => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Read the current block's knowledge plan, then confirm the affected symbol or file, behavior before and after, regression test, and out-of-scope boundary. Wait for the user's visible confirmation.".to_string();
+            }
             "Read the current block's knowledge plan, query request-scoped knowledge, then confirm the business objects, operations, rules, fields, blockers, outcomes, and misunderstanding boundaries for the user-confirmed current scope. Use a user-facing title such as business understanding and rule confirmation.".to_string()
         }
         ClarificationBlockName::FrontendExperience => {
+            if *profile == ClarificationProfile::ExplicitMaintenance {
+                return "Record the user-confirmed no-UI reason for this maintenance repair, then continue to the final summary.".to_string();
+            }
             "Read the current block's knowledge plan, query request-scoped knowledge, then confirm the page or workspace operation path, target discovery, action entry, feedback, and readback, or explicitly record why UI is not applicable. Use a user-facing title such as page operation path confirmation.".to_string()
         }
         ClarificationBlockName::FinalSummary => {

@@ -44,6 +44,12 @@ jobs:
       - name: Test workspace libraries
         run: cargo test --manifest-path src/rust/Cargo.toml --workspace --lib
 
+      - name: Test delivery lifecycle
+        run: cargo test --manifest-path src/rust/Cargo.toml -p mcp-server --tests -- --test-threads=1
+
+      - name: Test Rust algorithm worker bridge
+        run: PYTHON=python cargo test --manifest-path src/rust/Cargo.toml -p algorithm-client --test worker_smoke
+
       - name: Build release binaries
         run: cargo build --release --manifest-path src/rust/Cargo.toml -p mcp-server -p setup
 

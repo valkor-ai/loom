@@ -6828,7 +6828,7 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
     .fields;
     assert_eq!(
         template_fields["outputContract.resultTemplate"].value["nextAction"]["type"],
-        "continue_to_next_phase"
+        "done"
     );
     assert!(
         template_fields["outputContract.resultTemplate"].value["nextAction"]
@@ -6836,7 +6836,13 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
             .is_none()
     );
 
-    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "approved",
+        "continue_to_next_phase",
+        vec![],
+    );
     let result = call_submit(
         "loom.reviewAcceptFile",
         &review_request_ref,
@@ -7117,6 +7123,42 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
 }
 
 #[test]
+fn review_accept_done_keeps_next_phase_preview_deferred() {
+    let fixture = Fixture::new("review-deferred-next-phase");
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
+        &fixture,
+        candidate_with_next_phase_preview(),
+    );
+
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "done", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    let index: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(".loom/deliveries")
+                .join(&delivery_id)
+                .join("index.json"),
+        )
+        .expect("read delivery index"),
+    )
+    .expect("parse delivery index");
+    assert_eq!(index["status"], "completed");
+    assert!(index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .all(|phase| phase["phaseId"] != "phase-2"));
+}
+
+#[test]
 fn review_accept_approved_activates_existing_unstarted_next_phase_from_preview() {
     let fixture = Fixture::new("review-existing-next-phase");
     let review_request_ref = complete_task_execution_to_review_with_candidate(
@@ -7126,7 +7168,13 @@ fn review_accept_approved_activates_existing_unstarted_next_phase_from_preview()
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     append_unstarted_phase(&fixture, &delivery_id, "phase-2");
 
-    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "approved",
+        "continue_to_next_phase",
+        vec![],
+    );
     let result = call_submit(
         "loom.reviewAcceptFile",
         &review_request_ref,
@@ -8216,7 +8264,7 @@ fn manual_review_approval_materializes_next_phase_from_preview() {
         .as_str()
         .expect("manual review requestRef")
         .to_string();
-    write_manual_review_approval_candidate(&fixture, &manual_request_ref, "done");
+    write_manual_review_approval_candidate(&fixture, &manual_request_ref, "continue_to_next_phase");
 
     let result = call_submit(
         "loom.reviewResolveFile",
@@ -9629,7 +9677,9 @@ fn skip_brainstorm_block(
     reason: &str,
 ) -> Value {
     read_required_request_groups(fixture, request_ref);
-    run_knowledge_context(server, fixture, request_ref, block);
+    // A non-UI delivery has no page-operation path to research. The skip itself is
+    // persisted as confirmed scope evidence by the MCP handler.
+    assert_eq!(block, "frontend_experience");
     let arguments = json!({
         "projectRoot": fixture.root_str(),
         "requestRef": request_ref,
@@ -12669,7 +12719,7 @@ fn frontend_surface_decision_candidate_json() -> Value {
             "desktop": {
                 "layoutIntent": "Keep navigation, filters, results, and the primary action visible in the work region.",
                 "allowedPresentations": ["table", "detail_panel", "form_sections"],
-                "forbiddenPresentations": ["no_marketing_hero"]
+                "forbiddenPresentations": ["chart_panel"]
             },
             "tablet": {
                 "layoutIntent": "Keep record scanning first and move secondary detail into a supporting region.",

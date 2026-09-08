@@ -3,10 +3,11 @@ use std::future::{ready, Future};
 use brainstorm::{accept_brainstorm_file, BrainstormConfirmBlockInput};
 use delivery_core::{
     is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
-    DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpRuntimeContext,
-    OperationContext, PlanConflictChoice, PlanConflictResolveInput, PlanToolInput,
-    ProjectToolInput, ReadFieldGroupInput, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    DomainDispatcher, FileSubmitInput, InspectRequestInput, InspectRequestResult,
+    LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpRepairableErrorResult, LoomMcpRuntimeContext, OperationContext, PlanConflictChoice,
+    PlanConflictResolveInput, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use execution::{VsefmToolInput, VsefmVerificationResolveInput};
@@ -152,8 +153,14 @@ fn call_tool(
     server: &LoomMcpServer,
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
-    let tool_name = canonical_tool_name(request.name.as_ref());
-    match tool_name {
+    let tool_name = canonical_tool_name(request.name.as_ref()).to_string();
+    let project_root = request
+        .arguments
+        .as_ref()
+        .and_then(|arguments| arguments.get("projectRoot"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let result = match tool_name.as_str() {
         "initProject" => action_result(init_project_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
@@ -185,9 +192,10 @@ fn call_tool(
         >(
             request.arguments,
         )?)),
-        "inspectRequest" => structured(state::inspect_request(parse_args::<InspectRequestInput>(
-            request.arguments,
-        )?)),
+        "inspectRequest" => structured(
+            state::inspect_request(parse_args::<InspectRequestInput>(request.arguments)?)
+                .map(InspectRequestResult::mcp_summary),
+        ),
         "readFieldGroup" => structured(state::read_field_group(parse_args::<ReadFieldGroupInput>(
             request.arguments,
         )?)),
@@ -364,9 +372,35 @@ fn call_tool(
         )),
         _ => server
             .tools
-            .call_registered_placeholder(tool_name, request.arguments)
+            .call_registered_placeholder(&tool_name, request.arguments)
             .map_err(|_| McpError::method_not_found::<CallToolRequestMethod>()),
+    };
+    if let (Some(project_root), Ok(response)) = (project_root.as_deref(), result.as_ref()) {
+        record_mcp_response(project_root, &tool_name, response);
     }
+    result
+}
+
+fn record_mcp_response(project_root: &str, tool_name: &str, response: &CallToolResult) {
+    let Ok(value) = serde_json::to_value(response) else {
+        return;
+    };
+    let state = value
+        .get("structuredContent")
+        .and_then(|content| content.get("state"))
+        .and_then(serde_json::Value::as_str);
+    let Ok(serialized) = serde_json::to_vec(&value) else {
+        return;
+    };
+    state::read_audit::record_mcp_response_audit(
+        project_root,
+        state::read_audit::McpResponseAudit {
+            tool_name,
+            state,
+            serialized_bytes: serialized.len(),
+            recorded_at: state::read_audit::now_for_audit(),
+        },
+    );
 }
 
 fn canonical_tool_name(name: &str) -> &str {

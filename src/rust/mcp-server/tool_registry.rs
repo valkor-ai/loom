@@ -2,7 +2,7 @@ use std::{borrow::Cow, sync::Arc};
 
 use brainstorm::BrainstormConfirmBlockInput;
 use delivery_core::{
-    normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestResult,
+    normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestSummary,
     LoomMcpActionResult, PlanConflictResolveInput, PlanToolInput, ProjectToolInput,
     ReadFieldGroupInput, ReadFieldGroupResult,
 };
@@ -536,7 +536,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
 fn output_schema(kind: ToolOutputKind) -> JsonObject {
     match kind {
         ToolOutputKind::ActionResult => schema_json_object::<LoomMcpActionResult>(),
-        ToolOutputKind::InspectRequest => schema_json_object::<InspectRequestResult>(),
+        ToolOutputKind::InspectRequest => schema_json_object::<InspectRequestSummary>(),
         ToolOutputKind::ReadFieldGroup => schema_json_object::<ReadFieldGroupResult>(),
     }
 }

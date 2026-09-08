@@ -649,7 +649,7 @@ fn ui_surface_state_model_shape() -> Value {
 
 fn ui_surface_composition_constraints_shape() -> Value {
     json!({
-        "requiredComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
+        "requiredComposition": [UI_REGION_ROLES.join(" | ")],
         "forbiddenComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
         "antiDemoRules": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
         "customRules": ["required when known constraints do not cover the product surface"]

@@ -164,6 +164,9 @@ struct TokenReadPlanSummary {
     request_count: usize,
     total_payload_bytes: u64,
     max_compact_bytes: u64,
+    mcp_response_count: usize,
+    total_mcp_response_bytes: u64,
+    max_mcp_response_bytes: u64,
     total_field_read_count: usize,
     read_field_group_count: usize,
     read_request_fields_count: usize,
@@ -773,6 +776,7 @@ fn build_token_summary(
     let paths = state::paths::project_paths(project_root)?;
     let request_audits = read_jsonl(&paths.request_size_audit_file)?;
     let field_audits = read_jsonl(&paths.field_read_audit_file)?;
+    let response_audits = read_jsonl(&paths.mcp_response_audit_file)?;
     let total_payload_bytes = request_audits
         .iter()
         .map(|value| {
@@ -785,6 +789,15 @@ fn build_token_summary(
     let max_compact_bytes = request_audits
         .iter()
         .filter_map(|value| value.get("compactBytes").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(0);
+    let total_mcp_response_bytes = response_audits
+        .iter()
+        .filter_map(|value| value.get("serializedBytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    let max_mcp_response_bytes = response_audits
+        .iter()
+        .filter_map(|value| value.get("serializedBytes").and_then(Value::as_u64))
         .max()
         .unwrap_or(0);
     let read_field_group_count = field_audits
@@ -868,6 +881,9 @@ fn build_token_summary(
         request_count: request_audits.len(),
         total_payload_bytes,
         max_compact_bytes,
+        mcp_response_count: response_audits.len(),
+        total_mcp_response_bytes,
+        max_mcp_response_bytes,
         total_field_read_count: field_audits.len(),
         read_field_group_count,
         read_request_fields_count,
