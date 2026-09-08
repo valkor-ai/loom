@@ -575,7 +575,7 @@ fn ui_surface_layout_model_shape() -> Value {
         "desktop": {
             "layoutIntent": "string",
             "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")],
-            "forbiddenPresentations": ["string"]
+            "forbiddenPresentations": [UI_PRESENTATION_KINDS.join(" | ")]
         },
         "tablet": {
             "layoutIntent": "string",
@@ -649,9 +649,9 @@ fn ui_surface_state_model_shape() -> Value {
 
 fn ui_surface_composition_constraints_shape() -> Value {
     json!({
-        "requiredComposition": ["string"],
-        "forbiddenComposition": ["string"],
-        "antiDemoRules": ["string"],
+        "requiredComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
+        "forbiddenComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
+        "antiDemoRules": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | ")],
         "customRules": ["required when known constraints do not cover the product surface"]
     })
 }
@@ -667,7 +667,7 @@ fn ui_surface_content_boundary_shape() -> Value {
             "business_feedback",
             "help_entry"
         ],
-        "forbiddenUserVisibleContent": ["string"],
+        "forbiddenUserVisibleContent": [UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | ")],
         "customForbiddenContent": ["required when product-specific content must be blocked"],
         "copyRule": "Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."
     })
