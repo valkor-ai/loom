@@ -78,6 +78,8 @@ pub struct RunLoomToolNext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadGroupRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<String>,
     pub group_id: String,
     pub required: bool,
     pub order: u32,
@@ -115,6 +117,7 @@ impl ReadGroupRef {
         resource_uri: impl Into<String>,
     ) -> Self {
         Self {
+            request_ref: None,
             group_id: group_id.into(),
             required: true,
             order,

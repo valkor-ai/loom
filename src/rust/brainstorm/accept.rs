@@ -16,6 +16,7 @@ use state::{
 
 use crate::{
     artifacts::write_accepted_artifacts,
+    clarification::{ClarificationProfile, ClarificationState},
     gate::to_value,
     requirements::formal_sources_from_items,
     validation::{gate_check, validate_candidate},
@@ -194,6 +195,16 @@ where
         .unwrap_or("brainstorm-run")
         .to_string();
     let user_facing_language = request_context.user_facing_language;
+    let clarification_state_file =
+        crate::paths::brainstorm_clarification_state_file(project_root, &delivery_id, &phase_id);
+    let clarification_state: ClarificationState =
+        state::store::read_json(&clarification_state_file)?;
+    let workflow_profile = match clarification_state.clarification_profile {
+        ClarificationProfile::Full => contracts::DeliveryWorkflowProfile::Full,
+        ClarificationProfile::ExplicitMaintenance => {
+            contracts::DeliveryWorkflowProfile::ExplicitMaintenance
+        }
+    };
     let formal_sources = formal_sources_from_items(&source_items);
     let original_request_text = build_original_request_text(project_root, &source_items)
         .unwrap_or(request_context.normalized_text);
@@ -208,6 +219,7 @@ where
         &source_ids.iter().cloned().collect::<Vec<_>>(),
         &formal_sources,
         user_facing_language,
+        workflow_profile,
         authorized
             .next_action
             .as_ref()

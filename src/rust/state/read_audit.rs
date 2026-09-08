@@ -44,12 +44,26 @@ pub struct FieldReadAudit<'a> {
     pub recorded_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResponseAudit<'a> {
+    pub tool_name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<&'a str>,
+    pub serialized_bytes: usize,
+    pub recorded_at: String,
+}
+
 pub fn record_request_size_audit(project_root: &str, audit: RequestSizeAudit<'_>) {
     let _ = append_json_line(project_root, AuditFile::RequestSize, &audit);
 }
 
 pub fn record_field_read_audit(project_root: &str, audit: FieldReadAudit<'_>) {
     let _ = append_json_line(project_root, AuditFile::FieldRead, &audit);
+}
+
+pub fn record_mcp_response_audit(project_root: &str, audit: McpResponseAudit<'_>) {
+    let _ = append_json_line(project_root, AuditFile::McpResponse, &audit);
 }
 
 pub fn record_request_inspect_audit(project_root: &str, request_ref: &str, request_id: &str) {
@@ -160,6 +174,7 @@ fn read_audit_entries(project_root: &str) -> Vec<serde_json::Value> {
 enum AuditFile {
     RequestSize,
     FieldRead,
+    McpResponse,
 }
 
 fn append_json_line(
@@ -168,10 +183,14 @@ fn append_json_line(
     value: &impl Serialize,
 ) -> StateResult<()> {
     let paths = project_paths(project_root)?;
+    if !paths.loom_dir.is_dir() {
+        return Ok(());
+    }
     ensure_dir(&paths.metrics_dir)?;
     let file = match kind {
         AuditFile::RequestSize => paths.request_size_audit_file,
         AuditFile::FieldRead => paths.field_read_audit_file,
+        AuditFile::McpResponse => paths.mcp_response_audit_file,
     };
     let line = format!("{}\n", serde_json::to_string(value)?);
     use std::io::Write;
