@@ -8,6 +8,7 @@ pub mod execution;
 pub mod planning;
 pub mod review;
 pub mod ui_quality;
+pub mod verification;
 
 pub use api_quality::*;
 pub use architecture::*;
@@ -19,6 +20,7 @@ pub use execution::*;
 pub use planning::*;
 pub use review::*;
 pub use ui_quality::*;
+pub use verification::*;
 
 pub fn module_name() -> &'static str {
     "contracts"
