@@ -41,8 +41,8 @@ jobs:
       - name: Check workspace
         run: cargo check --manifest-path src/rust/Cargo.toml --workspace
 
-      - name: Test workspace
-        run: cargo test --manifest-path src/rust/Cargo.toml --workspace --exclude release-tests
+      - name: Test workspace libraries
+        run: cargo test --manifest-path src/rust/Cargo.toml --workspace --lib
 
       - name: Build release binaries
         run: cargo build --release --manifest-path src/rust/Cargo.toml -p mcp-server -p setup

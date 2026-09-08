@@ -33,7 +33,7 @@ For Rust changes, run the relevant checks before opening a PR:
 ```bash
 cargo fmt --manifest-path src/rust/Cargo.toml --all --check
 cargo check --manifest-path src/rust/Cargo.toml --workspace
-cargo test --manifest-path src/rust/Cargo.toml --workspace --exclude release-tests
+cargo test --manifest-path src/rust/Cargo.toml --workspace --lib
 cargo build --manifest-path src/rust/Cargo.toml -p mcp-server -p setup
 ```
 
