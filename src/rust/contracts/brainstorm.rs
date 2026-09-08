@@ -786,6 +786,16 @@ pub struct BrainstormHandoff {
 pub struct DeliveryContext {
     pub original_request: OriginalRequestContext,
     pub user_facing_language: UserFacingLanguageConstraint,
+    #[serde(default)]
+    pub workflow_profile: DeliveryWorkflowProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryWorkflowProfile {
+    #[default]
+    Full,
+    ExplicitMaintenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

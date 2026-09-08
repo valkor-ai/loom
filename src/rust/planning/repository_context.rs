@@ -1,9 +1,9 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    BrainstormContract, BrainstormStatus, ClarificationBlockName, PhaseDevelopmentMode,
-    ProjectKind, RepositoryContextCandidateAgentWritable, RepositoryContextContract,
-    RepositoryMode, TechnicalBaselineContract,
+    BrainstormContract, BrainstormStatus, ClarificationBlockName, DeliveryWorkflowProfile,
+    PhaseDevelopmentMode, ProjectKind, RepositoryContextCandidateAgentWritable,
+    RepositoryContextContract, RepositoryMode, TechnicalBaselineContract,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, FileSubmitInput,
@@ -104,6 +104,8 @@ fn materialize_request_inner(
             )
         })?
         .clone();
+    let brainstorm: BrainstormContract =
+        state::store::read_json(&from_project_relative(root, &brainstorm_contract_ref)?)?;
     let baseline = read_baseline(root, delivery_id)?;
     let request_id = format!("repoctx_{}", state::store::now_millis());
     let candidate_file = to_project_relative(
@@ -123,6 +125,8 @@ fn materialize_request_inner(
         &brainstorm_contract_ref,
         &baseline,
         repository_lens,
+        brainstorm.delivery_context.workflow_profile,
+        &brainstorm,
     );
     let stored = state::write_native_request(
         project_root,
@@ -168,6 +172,8 @@ fn build_request_root(
     brainstorm_contract_ref: &str,
     baseline: &TechnicalBaselineContract,
     repository_lens: RepositoryLens,
+    workflow_profile: DeliveryWorkflowProfile,
+    brainstorm: &BrainstormContract,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(RepositoryContextCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -179,6 +185,19 @@ fn build_request_root(
     if !repository_lens.completed_phase_summaries.is_empty() {
         scan_purpose["completedPhaseSummaries"] =
             Value::Array(repository_lens.completed_phase_summaries.clone());
+    }
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        scan_purpose["scanPurpose"] = json!("bounded_maintenance_evidence");
+        scan_purpose["primaryConsumer"] = json!("TaskPlan and review");
+        scan_purpose["laterConsumers"] = json!(["TaskPlan", "review"]);
+        scan_purpose["maintenanceFocus"] = json!({
+            "summary": brainstorm.summary.one_line,
+            "includedScope": brainstorm.scope.included.iter().map(|item| &item.label).collect::<Vec<_>>(),
+            "acceptanceCount": brainstorm.acceptance.len(),
+        });
     }
     let mut generation_rules = vec![
         "Summarize repository code facts only.",
@@ -196,6 +215,19 @@ fn build_request_root(
     ) {
         generation_rules.push("When scanPurpose.completedPhaseSummaries exists, inspect and report current repository facts after those delivered phases instead of treating the repository as blank.");
     }
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        generation_rules = vec![
+            "Inspect only the code and focused test surfaces needed to verify the confirmed maintenance repair.",
+            "Record repository facts that constrain the edit or the focused verification command; do not produce a repository-wide inventory.",
+            "Keep relevantSurfaces and recommendedReadRefs limited to the implementation target, its direct dependencies, and the validation surface.",
+            "Use outputContract.schemaProjection.maintenanceRepositoryContextTemplate as the concrete candidate shape.",
+            "structureSignals.configurationFiles contains project-relative string paths, not objects.",
+            "All paths must stay inside projectRoot and must not use forbidden prefixes.",
+        ];
+    }
     let mut scan_contract_fields = vec![
         "baselineProjectKind",
         "repositoryMode",
@@ -209,7 +241,37 @@ fn build_request_root(
     if !repository_lens.completed_phase_summaries.is_empty() {
         scan_contract_fields.push("scanPurpose.completedPhaseSummaries");
     }
-    json!({
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        scan_contract_fields = vec![
+            "baselineProjectKind",
+            "repositoryMode",
+            "scanPurpose.scanPurpose",
+            "scanPurpose.maintenanceFocus",
+            "source.brainstormContractRef",
+            "source.technicalBaselineRef",
+        ];
+    }
+    let write_contract_fields = if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        vec![
+            "outputContract.writeTargets",
+            "outputContract.submitTool",
+            "outputContract.schemaProjection",
+        ]
+    } else {
+        vec![
+            "outputContract.writeTargets",
+            "outputContract.submitTool",
+            "outputContract.schemaProjection",
+            "outputContract.resultTemplate",
+        ]
+    };
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "repository_context_request",
         "requestId": request_id,
@@ -218,6 +280,7 @@ fn build_request_root(
         "baselineProjectKind": baseline.project_kind,
         "repositoryMode": repository_lens.repository_mode,
         "phaseDevelopmentMode": repository_lens.phase_development_mode,
+        "workflowProfile": workflow_profile,
         "source": {
             "brainstormContractRef": brainstorm_contract_ref,
             "technicalBaselineRef": format!(".loom/deliveries/{}/contracts/technical-baseline.json", delivery_id)
@@ -389,15 +452,72 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the write target and schema projection before writing the candidate.",
                     "whenToRead": "Read only when ready to write RepositoryContext.",
-                    "selectors": read_selectors_value_from_paths([
-                        "outputContract.writeTargets",
-                        "outputContract.submitTool",
-                        "outputContract.schemaProjection",
-                        "outputContract.resultTemplate"
-                    ])
+                    "selectors": read_selectors_value_from_paths(write_contract_fields)
                 }
             ]
         }
+    });
+    if matches!(
+        workflow_profile,
+        DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        root["outputContract"]["schemaProjection"]["maintenanceRepositoryContextTemplate"] =
+            explicit_maintenance_repository_context_template();
+    }
+    root
+}
+
+fn explicit_maintenance_repository_context_template() -> Value {
+    json!({
+        "status": "completed",
+        "repoOverview": {
+            "summary": "",
+            "repositoryShape": "single_package",
+            "primaryApplications": [{
+                "applicationId": "app_main",
+                "name": "",
+                "kind": "",
+                "rootPath": "."
+            }]
+        },
+        "technologySignals": {
+            "primaryLanguages": [],
+            "frameworks": [],
+            "packageManagers": [],
+            "buildCommands": [],
+            "testCommands": [],
+            "notes": []
+        },
+        "structureSignals": {
+            "rootPaths": [{ "path": ".", "role": "source_root" }],
+            "entryPoints": [{
+                "path": "",
+                "kind": "module",
+                "description": ""
+            }],
+            "configurationFiles": ["project-relative/config-file"]
+        },
+        "relevantSurfaces": [{
+            "surfaceId": "implementation",
+            "kind": "module",
+            "path": "",
+            "summary": "",
+            "relevance": "implemented_capability",
+            "suggestedUse": "inspect_or_extend"
+        }],
+        "recommendedReadRefs": [{
+            "path": "",
+            "reason": "implemented_capability",
+            "priority": "high",
+            "summary": "",
+            "surfaceRefs": ["implementation"]
+        }],
+        "contextQuality": {
+            "coverage": "focused",
+            "confidence": "high",
+            "warnings": []
+        },
+        "warnings": []
     })
 }
 
