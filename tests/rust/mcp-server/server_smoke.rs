@@ -1,6 +1,8 @@
 use std::{
     io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::{json, Value};
@@ -100,6 +102,98 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
     );
 }
 
+#[test]
+fn stdio_server_persists_and_reads_a_delivery_request() {
+    let fixture = TestProject::new("delivery-lifecycle");
+    let mut client = McpProcess::start_with_loom_home(&fixture.loom_home);
+    client.initialize();
+
+    let initialized = client.call_tool(
+        1,
+        "loom.initProject",
+        json!({ "projectRoot": fixture.project_root }),
+    );
+    assert_eq!(initialized["result"]["structuredContent"]["state"], "done");
+    assert!(fixture.project_root.join(".loom/status.json").exists());
+
+    let planned = client.call_tool(
+        2,
+        "loom.plan",
+        json!({
+            "projectRoot": fixture.project_root,
+            "requestText": "Add an account search flow with tests and a clear handoff."
+        }),
+    );
+    let plan = &planned["result"]["structuredContent"];
+    assert_eq!(plan["state"], "user_gate", "{plan:#}");
+    let request_ref = plan["requestRef"].as_str().expect("request ref");
+
+    let inspected = client.call_tool(
+        3,
+        "loom.inspectRequest",
+        json!({
+            "projectRoot": fixture.project_root,
+            "requestRef": request_ref
+        }),
+    );
+    let inspection = &inspected["result"]["structuredContent"];
+    assert_eq!(inspection["requestRef"], request_ref);
+    assert!(inspection["readGroups"]
+        .as_array()
+        .is_some_and(|groups| !groups.is_empty()));
+    let first_group = &inspection["readGroups"][0];
+    assert!(first_group["fieldCount"].is_u64());
+    assert!(first_group.get("selectors").is_none());
+
+    let read = client.call_tool(
+        4,
+        "loom.readFieldGroup",
+        json!({
+            "projectRoot": fixture.project_root,
+            "requestRef": request_ref,
+            "groupId": "conversation_protocol"
+        }),
+    );
+    assert!(
+        read["result"]["structuredContent"]["fields"]["clarificationConversationProtocol"]
+            .is_object()
+    );
+}
+
+struct TestProject {
+    root: PathBuf,
+    project_root: PathBuf,
+    loom_home: PathBuf,
+}
+
+impl TestProject {
+    fn new(name: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "loom-mcp-stdio-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        let project_root = root.join("project");
+        let loom_home = root.join("loom-home");
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::create_dir_all(&loom_home).expect("create Loom home");
+        Self {
+            root,
+            project_root,
+            loom_home,
+        }
+    }
+}
+
+impl Drop for TestProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 struct McpProcess {
     child: Child,
     stdin: ChildStdin,
@@ -108,7 +202,15 @@ struct McpProcess {
 
 impl McpProcess {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_loom-mcp-server"))
+        Self::start_with_loom_home(Path::new(""))
+    }
+
+    fn start_with_loom_home(loom_home: &Path) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_loom-mcp-server"));
+        if !loom_home.as_os_str().is_empty() {
+            command.env("LOOM_HOME", loom_home);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -130,6 +232,36 @@ impl McpProcess {
 
     fn notify(&mut self, notification: Value) {
         self.write_message(&notification);
+    }
+
+    fn initialize(&mut self) {
+        let initialized = self.request(json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "loom-test-client", "version": "0.0.1" }
+            }
+        }));
+        assert_eq!(
+            initialized["result"]["serverInfo"]["name"],
+            "loom-mcp-server"
+        );
+        self.notify(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }));
+    }
+
+    fn call_tool(&mut self, id: u64, name: &str, arguments: Value) -> Value {
+        self.request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }))
     }
 
     fn write_message(&mut self, value: &Value) {

@@ -906,6 +906,8 @@ fn release_workflow_uploads_installers_packages_and_checksums() {
     assert!(workflow.contains("install.ps1.sha256"));
     assert!(workflow.contains(".tar.gz.sha256"));
     assert!(workflow.contains(".zip.sha256"));
+    assert!(workflow.contains("Smoke test packaged runtime"));
+    assert!(workflow.contains("release-smoke"));
     assert!(workflow.contains("softprops/action-gh-release@v3"));
     assert!(workflow.contains("make_latest: true"));
 }
