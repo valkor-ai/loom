@@ -2578,21 +2578,48 @@ fn existing_active_repair_action(
     {
         return None;
     }
-    let request_ref = action.request_ref.as_deref().or(latest)?;
-    if latest != Some(request_ref) {
-        return Some(failed(
-            project_root,
-            "STALE_REPAIR_ACTION",
-            "Continue found a stale repair action requestRef; rerun loom.continue after the active phase state is refreshed.".to_string(),
-            "repair",
-        ));
-    }
+    let request_ref = match active_repair_request_ref(action, latest, artifact_kind) {
+        Ok(Some(request_ref)) => request_ref,
+        Ok(None) => return None,
+        Err(()) => {
+            return Some(failed(
+                project_root,
+                "STALE_REPAIR_ACTION",
+                "Continue found a stale repair action requestRef; rerun loom.continue after the active phase state is refreshed.".to_string(),
+                "repair",
+            ));
+        }
+    };
     Some(existing_write_artifact_next(
         project_root,
         request_ref,
         artifact_kind,
         write_mode,
     ))
+}
+
+fn active_repair_request_ref<'a>(
+    action: &'a RouteAction,
+    latest: Option<&'a str>,
+    artifact_kind: ArtifactKind,
+) -> Result<Option<&'a str>, ()> {
+    if matches!(
+        artifact_kind,
+        ArtifactKind::TaskplanRepair | ArtifactKind::ArchitectureArtifactRepair
+    ) {
+        // Review actions retain the review-result ref as their provenance. Once a
+        // repair request is materialized, the phase's active repair ref is the
+        // authoritative continuation target.
+        return Ok(latest.or(action.request_ref.as_deref()));
+    }
+
+    let request_ref = action.request_ref.as_deref().or(latest);
+    if let Some(request_ref) = request_ref {
+        if latest != Some(request_ref) {
+            return Err(());
+        }
+    }
+    Ok(request_ref)
 }
 
 fn existing_write_artifact_next(
@@ -2979,4 +3006,54 @@ fn failed(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::from_core_error(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repair_action(kind: RouteActionKind, source: &str, request_ref: &str) -> RouteAction {
+        RouteAction {
+            kind,
+            source: source.to_string(),
+            reason: "repair required".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(request_ref.to_string()),
+            details: None,
+            target_phase_id: None,
+        }
+    }
+
+    #[test]
+    fn taskplan_repair_resume_uses_active_request_after_review_route() {
+        let action = repair_action(
+            RouteActionKind::TaskplanRepair,
+            "review_result",
+            ".loom/deliveries/delivery-1/reviews/phase-1/results/review-1.json",
+        );
+        let active_request = "loom://projects/project-1/requests/taskplan_repair-1";
+
+        assert_eq!(
+            active_repair_request_ref(&action, Some(active_request), ArtifactKind::TaskplanRepair,)
+                .unwrap(),
+            Some(active_request),
+        );
+    }
+
+    #[test]
+    fn task_result_repair_keeps_stale_request_protection() {
+        let action = repair_action(
+            RouteActionKind::TaskResultRepair,
+            "repair_action",
+            "loom://projects/project-1/requests/task_result_repair-old",
+        );
+
+        assert!(active_repair_request_ref(
+            &action,
+            Some("loom://projects/project-1/requests/task_result_repair-current"),
+            ArtifactKind::TaskResultRepair,
+        )
+        .is_err());
+    }
 }

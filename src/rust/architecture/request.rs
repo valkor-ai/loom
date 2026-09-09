@@ -138,7 +138,7 @@ fn materialize_request_inner(
 
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
-    let frontend_experience_source = build_frontend_experience_source(phase);
+    let frontend_experience_source = build_frontend_experience_source(phase, &planning_contract);
     // API applicability is produced after Foundation declares structured application interactions.
     let api_quality_seed = Value::Null;
     let section_outputs = build_section_outputs(
@@ -506,7 +506,12 @@ pub(crate) fn architecture_read_groups(
             "selectors": read_selectors_value_from_paths(api_quality_seed_read_fields())
         }));
     }
-    if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+    if matches!(section, ArchitectureSectionGroup::FrontendExperience)
+        && frontend_experience_source
+            .get("required")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
         let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
         for ref_key in [
             "confirmedFrontendExperienceRef",
@@ -760,9 +765,19 @@ fn build_source_refs(
     value
 }
 
-fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -> Value {
+fn build_frontend_experience_source(
+    phase: &delivery_core::DeliveryPhaseState,
+    planning_contract: &PlanningGenerationContract,
+) -> Value {
+    let frontend = planning_contract
+        .planning_inputs
+        .frontend_experience
+        .as_ref();
     let mut value = json!({
-        "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
+        "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only.",
+        "required": frontend.is_some_and(|experience| experience.required),
+        "kind": frontend.map(|experience| experience.kind.clone()),
+        "confirmationSummary": frontend.and_then(|experience| experience.confirmation_summary.clone())
     });
     if let Some(confirmed_frontend_ref) = phase.latest_refs.get("confirmedFrontendExperience") {
         value["confirmedFrontendExperienceRef"] = json!(confirmed_frontend_ref);
@@ -1725,31 +1740,14 @@ fn section_content_template(
         }),
         ArchitectureSectionGroup::DomainContract => json!({
             "dataModel": {
-                "entities": [{
-                    "entityId": "entity_1",
-                    "name": "",
-                    "fields": [],
-                    "constraints": [],
-                    "scopeRefs": [],
-                    "acceptanceRefs": []
-                }],
+                "entities": [],
                 "relationships": [],
                 "constraints": [],
                 "dataArchitecture": {
-                    "persistenceMode": "selected_stack",
-                    "sourceOfTruth": "replace_with_selected_current_phase_source_of_truth",
-                    "ownership": [{
-                        "dataRef": "entity_1",
-                        "ownerModuleRef": "module_1",
-                        "boundary": "replace_with_write_and_read_ownership"
-                    }],
-                    "invariants": [{
-                        "invariantId": "invariant_1",
-                        "ownerModuleRef": "module_1",
-                        "rule": "replace_with_business_invariant",
-                        "enforcementPoints": ["domain_or_service_boundary"],
-                        "failureBehavior": "replace_with_blocking_behavior"
-                    }],
+                    "persistenceMode": "no_persistence",
+                    "sourceOfTruth": "",
+                    "ownership": [],
+                    "invariants": [],
                     "transactionBoundaries": [],
                     "consistencyRules": [],
                     "migrationImpacts": [],
@@ -1818,38 +1816,61 @@ fn section_content_template(
                 "acceptanceRefs": []
             }]
         }),
+        ArchitectureSectionGroup::FrontendExperience
+            if frontend_experience_source
+                .get("required")
+                .and_then(Value::as_bool)
+                == Some(true) =>
+        {
+            json!({
+                "frontendExperience": {
+                    "required": true,
+                    "kind": "",
+                    "experienceLevel": "usable_internal_product",
+                    "surfaces": [{
+                        "surfaceId": "surface_1",
+                        "name": "",
+                        "purpose": "",
+                        "audienceRefs": []
+                    }],
+                    "dataViews": [{
+                        "viewId": "view_1",
+                        "name": "",
+                        "fields": [],
+                        "sourceRefs": []
+                    }],
+                    "actions": [{
+                        "actionId": "action_1",
+                        "label": "",
+                        "entryPoint": "",
+                        "sourceRefs": []
+                    }],
+                    "operationPaths": [{
+                        "pathId": "path_1",
+                        "name": "",
+                        "surfaceRef": "surface_1",
+                        "dataViewRefs": ["view_1"],
+                        "actionRefs": ["action_1"],
+                        "sourceRefs": []
+                    }],
+                    "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
+                    "sourceRefs": frontend_source_refs_template(frontend_experience_source)
+                }
+            })
+        }
         ArchitectureSectionGroup::FrontendExperience => json!({
             "frontendExperience": {
-                "required": true,
-                "kind": "",
-                "experienceLevel": "usable_internal_product",
-                "surfaces": [{
-                    "surfaceId": "surface_1",
-                    "name": "",
-                    "purpose": "",
-                    "audienceRefs": []
-                }],
-                "dataViews": [{
-                    "viewId": "view_1",
-                    "name": "",
-                    "fields": [],
-                    "sourceRefs": []
-                }],
-                "actions": [{
-                    "actionId": "action_1",
-                    "label": "",
-                    "entryPoint": "",
-                    "sourceRefs": []
-                }],
-                "operationPaths": [{
-                    "pathId": "path_1",
-                    "name": "",
-                    "surfaceRef": "surface_1",
-                    "dataViewRefs": ["view_1"],
-                    "actionRefs": ["action_1"],
-                    "sourceRefs": []
-                }],
-                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
+                "required": false,
+                "kind": frontend_experience_source
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("non-UI technical maintenance"),
+                "experienceLevel": "none",
+                "surfaces": [],
+                "dataViews": [],
+                "actions": [],
+                "operationPaths": [],
+                "surfaceDecisionCandidate": {},
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -2374,8 +2395,8 @@ pub fn section_generation_rules(
                 "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
                     .to_string(),
                 "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
-                "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
-                "Write dataModel.dataArchitecture as the implementation-facing storage-use contract. Use persistenceMode=no_persistence only when current state is intentionally derived or in-memory; otherwise identify source of truth and complete the declared structured fields for each applicable ownership, invariant, transaction, consistency, migration, read-model, lifecycle, and derived-data entry. Keep non-applicable collections empty.".to_string(),
+                "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency only when the confirmed current phase introduces or changes persistent state.".to_string(),
+                "Write dataModel.dataArchitecture as the implementation-facing storage-use contract. Start from persistenceMode=no_persistence with empty data collections when the current phase only changes computation, validation, formatting, or tests. Select selected_stack only when confirmed scope changes durable state, then identify source of truth and complete each applicable structured collection.".to_string(),
                 "Every dataArchitecture collection is an array of objects, never an array of prose strings. For transactionBoundaries use transactionId, ownerModuleRef, operationRefs, atomicityRule, and failureBehavior; for consistencyRules use consistencyId, ownerModuleRef, dataRefs, mode, rule, and conflictOrStaleBehavior; for migrationImpacts use migrationId, ownerModuleRef, dataRefs, change, compatibilityRule, rollbackOrForwardRepair, and verification; for readModels use readModelId, ownerModuleRef, dataRefs, queryPurpose, boundedReadRule, and freshnessRule; for lifecyclePolicies use policyId, dataRefs, lifecycleRule, ownerModuleRef, and cleanupOrArchiveBehavior; for derivedData use derivedDataId, ownerModuleRef, sourceDataRefs, refreshTrigger, freshnessRule, and rebuildStrategy. Use [] when a collection is not applicable.".to_string(),
                 "Use exact enum values for dataArchitecture.consistencyRules[].mode: strong, eventual, read_your_writes, or external_source_owned. Use entityId/moduleId/interfaceId/flowId values for refs, not display names or explanatory sentences; do not leave required fields as empty strings or replace_with_* placeholders.".to_string(),
                 "Do not reselect a database in dataArchitecture. Derive its rules from the accepted Technical Baseline and current phase behavior, including provider-safe migration and failure boundaries where they apply.".to_string(),
@@ -2404,6 +2425,7 @@ pub fn section_generation_rules(
         ],
         ArchitectureSectionGroup::FrontendExperience => vec![
             "Read frontendExperienceSource before writing this section.".to_string(),
+            "When frontendExperienceSource.required is false, preserve frontendExperience.required=false with empty surface collections and do not create a UI surface decision, UI quality evidence, or a browser workflow.".to_string(),
             "Read uiQualitySeed before writing the UI surface decision candidate.".to_string(),
             "Treat uiQualitySeed.requiredReferenceGroups, uiQualitySeed.referenceLoadPlan, and uiQualitySeed.qualityRulePreview as read-only pre-submit hints for selecting and reading UIX references. Do not copy them into the candidate or repeat them in uiSurfaceRegistry; after submit, MCP recomputes the final reference plan and quality rules from the selected surface decision and stack signals.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
@@ -2581,6 +2603,28 @@ mod tests {
                 .any(|rule| rule.contains("read-only pre-submit hints")),
             "frontend rules must distinguish seed hints from the final MCP-derived plan"
         );
+    }
+
+    #[test]
+    fn non_ui_frontend_contract_does_not_request_ui_context() {
+        let groups = architecture_read_groups(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            false,
+            &json!({}),
+            &json!({
+                "required": false,
+                "kind": "non-UI technical maintenance"
+            }),
+            &Value::Null,
+            &json!({}),
+        );
+
+        assert!(!groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| { group["groupId"] == "architecture_frontend_context" }));
     }
 
     #[test]

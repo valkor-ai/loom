@@ -703,6 +703,15 @@ impl TaskPlanSubmitMode {
     }
 }
 
+fn clear_consumed_repair_action(
+    latest_refs: &mut BTreeMap<String, String>,
+    mode: TaskPlanSubmitMode,
+) {
+    if matches!(mode, TaskPlanSubmitMode::Repair) {
+        latest_refs.remove("activeRepairActionRef");
+    }
+}
+
 fn accept_task_plan_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
@@ -1047,6 +1056,7 @@ where
         .iter_mut()
         .find(|phase| phase.phase_id == phase_id)
     {
+        clear_consumed_repair_action(&mut phase.latest_refs, mode);
         phase
             .latest_refs
             .insert("taskPlan".to_string(), task_plan_ref.clone());
@@ -8591,6 +8601,37 @@ pub(crate) fn execute_task_next_from_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepting_taskplan_repair_releases_active_repair_request() {
+        let mut latest_refs = BTreeMap::from([
+            (
+                "activeRepairActionRef".to_string(),
+                "loom://projects/project-1/requests/taskplan_repair-1".to_string(),
+            ),
+            (
+                "taskPlanRequestRef".to_string(),
+                "loom://projects/project-1/requests/taskplan-1".to_string(),
+            ),
+        ]);
+
+        clear_consumed_repair_action(&mut latest_refs, TaskPlanSubmitMode::Repair);
+
+        assert!(!latest_refs.contains_key("activeRepairActionRef"));
+        assert!(latest_refs.contains_key("taskPlanRequestRef"));
+    }
+
+    #[test]
+    fn accepting_generated_taskplan_preserves_active_repair_request() {
+        let mut latest_refs = BTreeMap::from([(
+            "activeRepairActionRef".to_string(),
+            "loom://projects/project-1/requests/taskplan_repair-1".to_string(),
+        )]);
+
+        clear_consumed_repair_action(&mut latest_refs, TaskPlanSubmitMode::Generation);
+
+        assert!(latest_refs.contains_key("activeRepairActionRef"));
+    }
 
     fn browser_task(verification_count: usize) -> TaskDefinition {
         let verification_intents = (0..verification_count)
