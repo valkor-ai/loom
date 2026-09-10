@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#111312" />
+    <link rel="icon" href="data:," />
+    <title>Three.js Vite Game</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="game-canvas" aria-label="Playable Three.js game canvas"></canvas>
+      <section id="hud" aria-live="polite">
+        <div class="hud-metric">
+          <span>Relays</span>
+          <strong><span id="score-value">0</span>/<span id="target-value">8</span></strong>
+        </div>
+        <div class="hud-metric">
+          <span>Time</span>
+          <strong id="timer-value">00:00</strong>
+        </div>
+        <div id="status-line">Collect relays</div>
+      </section>
+      <div id="touch-controls" aria-hidden="true">
+        <div id="touch-stick">
+          <div id="touch-knob"></div>
+        </div>
+        <button id="dash-button" type="button">Dash</button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Audio Generator"
+  short_description: "Generate SFX, ambience, and voices for Three.js games"
+  default_prompt: "Use $threejs-audio-generator to generate and integrate audio for this game's actual events and runtime constraints."

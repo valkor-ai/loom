@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Debug Profiler"
+  short_description: "Debug and profile Three.js games"
+  default_prompt: "Use $threejs-debug-profiler to reproduce this issue, fix its measured cause, and verify the affected behavior."

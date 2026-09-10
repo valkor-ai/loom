@@ -544,6 +544,11 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root.join("skills/godot/SKILL.md").exists());
         assert!(root.join("skills/godot/mcp-driver/SKILL.md").exists());
         assert!(root.join("skills/godot/reviewer/physics/SKILL.md").exists());
+        assert!(root.join("skills/threejs/SKILL.md").exists());
+        assert!(root
+            .join("skills/threejs/threejs-qa-release/SKILL.md")
+            .exists());
+        assert!(root.join("skills/threejs/UPSTREAM_LICENSE").exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -2786,6 +2791,17 @@ impl Fixture {
             "godot/reviewer/shader/SKILL.md",
             "godot/reviewer/tilemap/SKILL.md",
             "godot/reviewer/ui/SKILL.md",
+            "threejs/SKILL.md",
+            "threejs/threejs-3d-generator/SKILL.md",
+            "threejs/threejs-aaa-graphics-builder/SKILL.md",
+            "threejs/threejs-audio-generator/SKILL.md",
+            "threejs/threejs-debug-profiler/SKILL.md",
+            "threejs/threejs-game-director/SKILL.md",
+            "threejs/threejs-game-ui-designer/SKILL.md",
+            "threejs/threejs-gameplay-systems/SKILL.md",
+            "threejs/threejs-image-generator/SKILL.md",
+            "threejs/threejs-qa-release/SKILL.md",
+            "threejs/UPSTREAM_LICENSE",
         ] {
             write_file(
                 &self

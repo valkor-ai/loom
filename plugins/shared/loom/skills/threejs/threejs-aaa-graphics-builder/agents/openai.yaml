@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js AAA Graphics Builder"
+  short_description: "Upgrade Three.js graphics quality"
+  default_prompt: "Use $threejs-aaa-graphics-builder to improve this game's graphics within its art direction and verify the result at gameplay scale."

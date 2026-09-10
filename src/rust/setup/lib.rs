@@ -51,6 +51,17 @@ const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
     "plugins/shared/loom/skills/godot/reviewer/shader/SKILL.md",
     "plugins/shared/loom/skills/godot/reviewer/tilemap/SKILL.md",
     "plugins/shared/loom/skills/godot/reviewer/ui/SKILL.md",
+    "plugins/shared/loom/skills/threejs/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-3d-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-aaa-graphics-builder/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-audio-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-debug-profiler/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-game-director/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-game-ui-designer/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-gameplay-systems/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-image-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-qa-release/SKILL.md",
+    "plugins/shared/loom/skills/threejs/UPSTREAM_LICENSE",
 ];
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/verification/v-sefm.json",
