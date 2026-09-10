@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/headbar.png" alt="Loom" width="100%">
-  <p><strong>面向 agentic software delivery 的 loop engineering。</strong></p>
-  <p>一套开源交付 harness，帮助 Claude Code、Codex、OpenCode 等 coding agents 完成更大的软件任务，并保留过程状态。</p>
+  <p><strong>让软件交付持续推进。</strong></p>
+  <p>Loom 是一套开源交付 harness，服务于 Claude Code、Codex、OpenCode 和其他 coding agents。</p>
   <p>
     <a href="./README.md">English</a>
     ·
@@ -31,64 +31,48 @@
   <p>⭐ 如果 Loom 对你有帮助，欢迎点个 Star，让更多开发者看到它。</p>
 </div>
 
-## 什么是 Loom？
+## 从这里开始
 
-Coding agents 写代码很快，但完整收尾并不稳定：容易丢上下文、跳过检查，最后留下一个不太好接手的状态。
+| 想做什么 | Codex | Claude Code / OpenCode |
+| --- | --- | --- |
+| 开发功能或应用 | `@loom build 新增团队设置页` | `/loom build 新增团队设置页` |
+| 继续中断的交付任务 | `@loom continue` | `/loom continue` |
+| Review 并修复改动 | `@loom review` | `/loom review` |
+| 验证本地预览 | `@loom deploy` | `/loom deploy` |
 
-Loom 是一套开源 harness，运行在你已经使用的 agent 旁边。它把任务推进成一条简单的循环：规划、构建、测试、修复、预览、交接。
+一条命令为这台机器上的所有受支持 agent 安装 Loom：
 
-Loom 会保存关键项目状态：需求、任务进度、测试结果、运行时事实和修复记录。会话中断后，下一次运行可以从已有进度继续。
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent all
+```
 
-当一个任务不是单条 prompt 能解决的改动，而是涉及功能开发、部署、review、修复、预览或需要交接证据时，就适合使用 Loom。
+只安装单个 agent、Windows 安装或本地仓库验证，请看[快速开始](#快速开始)。
 
-## News
+## Loom 做什么
 
-- **即将推出：** V-SEFM，一个面向软件交付的验证模型，正在准备中。细节后续公布。
+Loom 运行在你已经使用的 coding agent 旁边，把较大的改动推进成一条交付循环：澄清范围、规划任务、实现、运行检查、修复失败、预览结果、完成交接。
+
+项目本地的 `.loom/` 会保存需求、任务进度、执行结果、运行时事实和修复记录。新的会话可以直接接着真实工作状态推进，不必从聊天记录里重新拼出上下文。
+
+它适合不止需要生成第一版代码的工作：功能开发、review、部署、修复，或任何需要让他人能够检查和继续的改动。
+
+可以查看[已交付案例](./docs/use-cases.zh-CN.md)，了解 Loom 已端到端完成的项目类型。
+
+## 交付模型
+
+| 阶段 | Loom 保留什么 |
+| --- | --- |
+| 范围与设计 | 已确认的需求、决策和任务边界 |
+| 执行 | 任务所需上下文、写入目标和明确的执行结果 |
+| 验证 | 测试、运行检查、预览和 review 发现 |
+| 修复与交接 | 修复请求、再次验证，以及给下一位使用者或下一次会话的项目状态 |
+
+Loom 会按当前任务选择技术参考和上下文，而不是每一轮都加载整个仓库或一份泛化的大 skill。共享参考覆盖架构、API、语言与框架实现、review 和浏览器验证。
+
+## 最新动态
+
 - **2026 年 7 月：** Loom 已将 MCP runtime 从 TypeScript 迁移到 Rust，让核心更小、更快。
 - **2026 年 7 月：** Loom 现已支持通过 Godot MCP 开发 Godot 项目。[安装指导](./docs/godot.zh-CN.md)
-
-## 为什么需要 Harness？
-
-现在的 coding agents 很快就能生成网站和应用。更麻烦的是第一版之后的事：保留需求、检查结果、修复失败，以及在会话中断后继续推进。
-
-稍微长一点的任务，常见问题很固定：
-
-失败模式 | Loom 的应对
---- | ---
-只完成一部分就宣布完成 | 任务有边界，必须写出明确结果，Loom 再路由下一步。
-目标漂移 | 已确认的 scope 和架构决策会被保存，并在后续会话继续使用。
-自我验证偏差 | Review 和 repair 是单独步骤，并保留对应证据。
-重复加载上下文 | Agent 读取紧凑的项目和任务状态，而不是反复扫完整仓库。
-交付交接缺口 | 报告、日志、预览和修复历史会留下来，方便人或下一个 agent 检查。
-
-## 从 Demo 到交付
-
-AI coding 让 demo 变得很便宜。一段 prompt 就能生成页面、原型，或者一个自己用的小工具。
-
-但交付是另一回事。稍微复杂的任务，仍然需要对齐需求、做架构取舍、跑测试、准备运行环境、修问题、看预览，并留下别人能接手的状态。
-
-Loom 关注的就是这段差距。它给现有 coding agent 加上一条交付循环和一个保存进度的地方，让任务能扛住检查失败、上下文压缩和会话中断。
-
-目标很简单：少一点从头来过，少一点半成品 agent 输出，多一点能验证、能交接的结果。
-
-能力 | 解决的问题
---- | ---
-Stateful delivery protocol | 把一次性 coding session 变成可恢复的交付循环，并用 `.loom/` 状态、request refs、结果文件、review 记录、修复请求和交接证据承载过程。
-Requirement intelligence | 把松散 prompt 转成已确认的范围、业务规则、生命周期覆盖、页面办理路径和验收细节，让规划、执行和 review 都必须承接。
-架构与系统设计 | 将已确认的技术基线和仓库事实转成面向实现的边界、行为、数据归属、运行时职责、NFR 目标、ADR 和故障模式决策，并用紧凑 id 传递给规划、执行、评审和修复阶段。
-API 契约 | 在确实属于当前范围时，明确结构化接口、请求与响应模型、校验、错误行为、集合接口策略和兼容性规则。前端任务、联调检查、运行时探测和部署都消费已接受的 API 契约，不再自行猜测路径或前缀。
-按技术栈选择的实现指导 | 根据已确认的 Technical Baseline 和当前任务归属，只加载任务需要的语言、框架、持久化和前端 references。代码与框架 references 提供仓库适配、实现模式、验证要求和反模式约束，不加载无关技术栈，也不重新选择技术。
-Engineering contracts | 将运行时、代码质量和任务归属决策作为结构化 contracts 传递，而不是依赖 agent 反复记住 prompt 提醒。
-Production UI guidance | 将 UI 质量前置到生成端：通过 surface decision、场景 references、布局密度、style asset plan、token 期望、禁用内容规则和 desktop/mobile 证据约束页面交付。
-Targeted context routing | 让 agent 按需读取 field groups、reference profiles、任务 contracts 和 repair context，避免反复读取大文件或整份 artifact。
-Task-scoped execution | 把交付拆成有边界的任务，并携带 source refs、写入边界、验证意图、结果模板和 continuation rules。
-验证与评审纪律 | 只有任务拥有对应验证证据时才加载语言/框架测试指导；使用 review references 检查规格符合性和实现质量；只有明确分配浏览器行为时才加入 Playwright 浏览器闭环。运行时失败保留为环境证据，不误报成代码缺陷。
-Review and repair loop | 通过 review signals、TaskResult evidence、repair contracts、多目标 repair 队列和再次验证，把实现与验证分离。
-Runtime and deploy readiness | 面向本地 Docker Compose 预览准备 topology-aware services、build contexts、环境规则、端口、health checks、日志和 repair boundaries。
-Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段。
-Multi-agent MCP protocol | 让 Codex、Claude Code、OpenCode 和后续支持 MCP 的 agents 运行同一套交付状态机。
-
-这条链路背后的技术指导集中在 `plugins/shared/loom/references/tech/`：架构（`arch`）、API 设计（`api`）、语言与 SQL 实现（`code`）、后端和前端框架（`backend`、`frontend`）、评审（`review`）以及 Playwright 验证（`test/playwright`）。这些内容不会作为一整套大 skill 一次性加载，而是由 Loom 根据已接受的技术事实和任务归属生成任务级选择，再把选中的 references 传给对应的架构、规划、执行、评审或浏览器闭环 request。
 
 ## 上下文路由
 
