@@ -1713,11 +1713,22 @@ fn materialize_architecture_repair_action(
             "userFacingLanguage": user_facing_language
         }
     });
-    let frontend_experience_source = if frontend_fields.is_empty() {
+    let mut frontend_experience_source = if frontend_fields.is_empty() {
         frontend_experience_source_from_source_refs(&source_refs)
     } else {
         frontend_experience_source_from_fields(&frontend_fields)?
     };
+    if let Some(frontend) = planning_contract
+        .as_ref()
+        .and_then(|contract| contract.planning_inputs.frontend_experience.as_ref())
+    {
+        frontend_experience_source["required"] = json!(frontend.required);
+        frontend_experience_source["kind"] = json!(frontend.kind.clone());
+        frontend_experience_source["confirmationSummary"] =
+            json!(frontend.confirmation_summary.clone());
+    } else {
+        frontend_experience_source["required"] = json!(false);
+    }
     let ui_quality_seed = ui_quality_seed_from_fields(&frontend_fields).unwrap_or_else(|| {
         build_ui_quality_seed(
             planning_contract
