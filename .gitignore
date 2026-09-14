@@ -9,6 +9,11 @@ coverage/
 # Loom runtime state
 .loom/
 
+# Local SWE-bench dataset, repository cache, worktrees, and delivery evidence
+benchmarks/swe-bench/data/
+benchmarks/swe-bench/repos/
+benchmarks/swe-bench/runs/
+
 # Local environment and editor files
 .env
 .env.*
