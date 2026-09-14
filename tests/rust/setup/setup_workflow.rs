@@ -423,6 +423,15 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
             .status,
         "passed"
     );
+    assert_eq!(
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "python.worker")
+            .unwrap()
+            .status,
+        "pending"
+    );
 }
 
 #[test]
@@ -886,7 +895,18 @@ fn install_ps1_release_contract_uses_windows_zip_checksum_and_doctor() {
     assert!(script.contains("Get-FileHash -Algorithm SHA256"));
     assert!(script.contains("windows-x64"));
     assert!(script.contains("install --agent $Agent --package-root"));
+    assert!(script.contains("Initialize-LoomPythonRuntime"));
+    assert!(script.contains("--managed-python --python 3.12"));
     assert!(script.contains("doctor --agent $Agent --package-root"));
+}
+
+#[test]
+fn install_sh_bootstraps_an_isolated_python_runtime() {
+    let script = fs::read_to_string(repo_root().join("install.sh")).unwrap();
+    assert!(script.contains("bootstrap_python_runtime"));
+    assert!(script.contains("--managed-python --python 3.12"));
+    assert!(script.contains("rm -rf \"$RUNTIME_ROOT\""));
+    assert!(script.contains("\"$UV\" pip install --python"));
 }
 
 #[test]

@@ -1995,6 +1995,15 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
     write_registry(env, &registry)?;
     report.installed_runtime = Some(path_string(env.runtime_current()));
     report.checks = doctor(env, agents, false)?.checks;
+    for check in &mut report.checks {
+        if check.name == "python.worker"
+            && check.status == "failed"
+            && check.detail.contains("managed Python executable is missing")
+        {
+            check.status = "pending".to_string();
+            check.detail = "managed Python runtime will be prepared by the installer".to_string();
+        }
+    }
     if let Some(message) = appkey_setup_warning {
         report.checks.push(DoctorCheck {
             name: "vsefm.appkey".to_string(),
@@ -2122,7 +2131,7 @@ pub fn write_package_layout(
     })?;
     write_text(
         &package_dir.join(&manifest.python.runtime).join("README"),
-        "This local development package uses the host python3 runtime when a bundled Python runtime is not present.\n",
+        "The installer creates Loom's managed Python runtime in this directory.\n",
     )?;
 
     copy_required(
@@ -3218,8 +3227,11 @@ fn check_python_worker(env: &SetupEnvironment) -> DoctorCheck {
     if !python.exists() {
         return DoctorCheck {
             name: "python.worker".to_string(),
-            status: "skipped".to_string(),
-            detail: "bundled python executable is not present in this package".to_string(),
+            status: "failed".to_string(),
+            detail: format!(
+                "managed Python executable is missing at {}; rerun the Loom installer",
+                python.display()
+            ),
         };
     }
     let smoke = json!({

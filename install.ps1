@@ -77,6 +77,41 @@ function Test-ArchiveChecksum {
   }
 }
 
+function Resolve-Uv {
+  $command = Get-Command uv -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+
+  Write-Host "loom install: installing uv for the managed Python runtime"
+  Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+
+  foreach ($candidate in @(
+    (Join-Path $env:USERPROFILE ".local\\bin\\uv.exe"),
+    (Join-Path $env:USERPROFILE ".cargo\\bin\\uv.exe")
+  )) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+  throw "uv installation completed but the uv executable was not found. Restart PowerShell and run the installer again."
+}
+
+function Initialize-LoomPythonRuntime {
+  $loomHome = if ($env:LOOM_HOME) { $env:LOOM_HOME } else { Join-Path $HOME ".loom" }
+  $runtimeRoot = Join-Path $loomHome "runtime\\current\\python\\runtime"
+  $algorithmsRoot = Join-Path $loomHome "runtime\\current\\python\\algorithms"
+  if (-not (Test-Path (Join-Path $algorithmsRoot "pyproject.toml"))) {
+    throw "Installed package is missing Python algorithms at $algorithmsRoot"
+  }
+
+  $uv = Resolve-Uv
+  Write-Host "loom install: preparing managed Python runtime"
+  Remove-Item -Recurse -Force $runtimeRoot -ErrorAction SilentlyContinue
+  Invoke-CheckedCommand $uv venv --managed-python --python 3.12 $runtimeRoot
+  Invoke-CheckedCommand $uv pip install --python (Join-Path $runtimeRoot "Scripts\\python.exe") $algorithmsRoot
+}
+
 $platform = Get-LoomPlatform
 $package = "loom-$Version-$platform.zip"
 if (($PSBoundParameters.ContainsKey("Version") -or $env:LOOM_INSTALL_USE_VERSIONED_URL -eq "1") -and -not $PSBoundParameters.ContainsKey("BaseUrl")) {
@@ -131,6 +166,7 @@ try {
   }
   $setup = Join-Path $packageRoot.FullName "bin\loom-setup.exe"
   Invoke-CheckedCommand $setup install --agent $Agent --package-root $packageRoot.FullName
+  Initialize-LoomPythonRuntime
   Invoke-CheckedCommand $setup doctor --agent $Agent --package-root $packageRoot.FullName
 } finally {
   Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue

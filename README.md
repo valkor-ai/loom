@@ -108,7 +108,7 @@ Agent turn / LLM context
 
 ## Quick Start
 
-Install Loom for the coding agent you use. The installer detects your OS and CPU, downloads the matching release package, verifies the package `.sha256` asset, installs the Rust MCP server, bundles the Python algorithm runtime, writes the agent MCP registration, refreshes the local plugin, and runs `loom-setup doctor`.
+Install Loom for the coding agent you use. The installer detects your OS and CPU, downloads the matching release package, verifies the package `.sha256` asset, installs the Rust MCP server, creates an isolated Python runtime for Loom's algorithms, writes the agent MCP registration, refreshes the local plugin, and runs `loom-setup doctor`.
 
 Codex:
 
