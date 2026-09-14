@@ -1998,7 +1998,9 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
     for check in &mut report.checks {
         if check.name == "python.worker"
             && check.status == "failed"
-            && check.detail.contains("managed Python executable is missing")
+            && check
+                .detail
+                .contains("managed Python executable is missing")
         {
             check.status = "pending".to_string();
             check.detail = "managed Python runtime will be prepared by the installer".to_string();
