@@ -10,9 +10,12 @@ coverage/
 .loom/
 
 # Local SWE-bench dataset, repository cache, worktrees, and delivery evidence
+benchmarks/
 benchmarks/swe-bench/data/
 benchmarks/swe-bench/repos/
 benchmarks/swe-bench/runs/
+logs/
+codex-*.json
 
 # Local environment and editor files
 .env
