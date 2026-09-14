@@ -874,6 +874,7 @@ where
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
     normalize_runtime_delivery_requirements(&mut tasks, &aac);
     normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
+    assign_single_owner_architecture_quality_refs(&aac, &mut tasks);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
@@ -881,6 +882,7 @@ where
     let api_contract_requirements =
         normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs, &baseline);
     normalize_structured_verification_intents(&aac, &mut tasks);
+    normalize_maintenance_behavior_verification_intents(&mut tasks, &pgc);
     normalize_task_verification_detail_refs(&mut tasks, &pgc, &aac);
     normalize_implementation_obligations(&baseline, &aac, &mut tasks);
     let code_quality_requirements =
@@ -6659,6 +6661,51 @@ fn normalize_architecture_quality_artifact_refs(
     }
 }
 
+// A small phase can have one implementation task even when its requirement details do not
+// carry module coverage. In that case, the single business owner is the only valid owner for
+// the phase's accepted architecture-quality obligations.
+fn assign_single_owner_architecture_quality_refs(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) {
+    let owner_indices = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| is_business_owner_task(task))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [owner_index] = owner_indices.as_slice() else {
+        return;
+    };
+
+    let owner = &mut tasks[*owner_index];
+    if !owner.write_boundary.artifact_refs.decisions.is_empty()
+        || !owner.write_boundary.artifact_refs.nfrs.is_empty()
+        || !owner.write_boundary.artifact_refs.risks.is_empty()
+    {
+        return;
+    }
+
+    for decision in &aac.architecture_quality.decisions {
+        push_unique(
+            &mut owner.write_boundary.artifact_refs.decisions,
+            decision.decision_id.clone(),
+        );
+    }
+    for nfr in &aac.architecture_quality.nfrs {
+        push_unique(
+            &mut owner.write_boundary.artifact_refs.nfrs,
+            nfr.nfr_id.clone(),
+        );
+    }
+    for risk in &aac.architecture_quality.risks {
+        push_unique(
+            &mut owner.write_boundary.artifact_refs.risks,
+            risk.risk_id.clone(),
+        );
+    }
+}
+
 fn owner_refs_intersect(
     owner_modules: &[String],
     owner_interfaces: &[String],
@@ -7552,6 +7599,77 @@ fn normalize_structured_verification_intents(
                 ],
             });
         }
+    }
+}
+
+fn normalize_maintenance_behavior_verification_intents(
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+) {
+    if !matches!(
+        pgc.workflow_profile,
+        contracts::DeliveryWorkflowProfile::ExplicitMaintenance
+    ) {
+        return;
+    }
+
+    for acceptance in &pgc.phase_scope.acceptance_candidates {
+        let owner_index = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.acceptance_refs.contains(&acceptance.id))
+            .max_by_key(|(_, task)| {
+                task.implementation_actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        ImplementationAction::AddOrUpdateTests
+                            | ImplementationAction::AddOrUpdatePersistenceTests
+                    )
+                }) as u8
+            })
+            .map(|(index, _)| index);
+        let Some(owner_index) = owner_index else {
+            continue;
+        };
+        let task = &mut tasks[owner_index];
+        let verification_id = format!(
+            "verify-maintenance-behavior-{}-{}",
+            normalized_identifier(&task.task_id),
+            normalized_identifier(&acceptance.id)
+        );
+        if task
+            .verification_intents
+            .iter()
+            .any(|intent| intent.verification_id == verification_id)
+        {
+            continue;
+        }
+        let requirement_detail_refs = pgc
+            .requirement_details
+            .items
+            .iter()
+            .filter(|detail| detail.acceptance_refs.contains(&acceptance.id))
+            .filter(|detail| {
+                task.requirement_detail_refs.is_empty()
+                    || task.requirement_detail_refs.contains(&detail.detail_id)
+            })
+            .map(|detail| detail.detail_id.clone())
+            .collect();
+        task.verification_intents.push(VerificationIntent {
+            verification_id,
+            acceptance_refs: vec![acceptance.id.clone()],
+            requirement_detail_refs,
+            behavior: format!(
+                "Verify an equivalent minimal scenario covers this maintenance behavior: {} The evidence may differ from the request wording, but must exercise the essential inputs, operation sequence, and expected outcome.",
+                acceptance.statement
+            ),
+            preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+            acceptable_evidence: vec![
+                VerificationEvidence::AutomatedTest,
+                VerificationEvidence::RuntimeApiCheck,
+                VerificationEvidence::ManualCommandOutput,
+            ],
+        });
     }
 }
 
@@ -8677,6 +8795,135 @@ mod tests {
         .expect("browser task")
     }
 
+    fn maintenance_pgc(workflow_profile: &str) -> contracts::PlanningGenerationContract {
+        serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "planningContractId": "pgc-maintenance",
+            "deliveryId": "delivery-maintenance",
+            "phaseId": "phase-maintenance",
+            "workflowProfile": workflow_profile,
+            "status": "ready",
+            "source": {
+                "brainstormRunId": "brainstorm-run-maintenance",
+                "brainstormContractId": "brainstorm-maintenance",
+                "phaseId": "phase-maintenance",
+                "technicalBaselineId": "baseline-maintenance"
+            },
+            "phaseScope": {
+                "phaseName": "Maintenance repair",
+                "phaseGoal": "Correct the reported behavior.",
+                "acceptanceCandidates": [{
+                    "id": "acceptance-repair",
+                    "statement": "A combined query keeps its ordering when projected values are selected.",
+                    "priority": "must"
+                }]
+            },
+            "contextRefs": {"brainstormContractRef": ".loom/brainstorm.json"},
+            "technicalBaseline": {
+                "technicalBaselineId": "baseline-maintenance",
+                "status": "confirmed",
+                "scope": "project",
+                "summary": {},
+                "securityRequirement": {
+                    "applies": "not_applicable",
+                    "rationale": "No security change is involved."
+                },
+                "mustFollow": true
+            },
+            "planningInputs": {"businessGoal": "Repair the reported behavior."},
+            "requirementDetails": {
+                "schemaVersion": "1.0",
+                "authority": "brainstorm_contract",
+                "sourceBrainstormContractRef": ".loom/brainstorm.json",
+                "items": [{
+                    "detailId": "detail-repair",
+                    "kind": "acceptance_outcome",
+                    "title": "Preserve projected ordering",
+                    "summary": "The projected combined query keeps its ordering.",
+                    "requiredForCurrentPhase": true,
+                    "priority": "must",
+                    "acceptanceRefs": ["acceptance-repair"],
+                    "lifecycleStage": "not_applicable",
+                    "quality": "usable"
+                }]
+            },
+            "planningRules": {
+                "scopeIsolation": {
+                    "onlyPlanCurrentPhase": true,
+                    "forbidDeferredScopeImplementation": true,
+                    "forbidFuturePhaseImplementation": true
+                },
+                "outputRequirements": {
+                    "mustCreateArchitectureArtifactContract": true,
+                    "mustCreateTaskPlan": true,
+                    "taskPlanMustReferenceAcceptance": true
+                },
+                "deployment": {
+                    "defaultEnabled": false,
+                    "requiresExplicitUserRequest": true
+                }
+            },
+            "qualityGates": {
+                "requiresArchitectureBeforeTaskPlan": true,
+                "requiresAcceptanceCoverage": true,
+                "requiresVerificationEvidence": true
+            },
+            "handoff": {
+                "readyForArchitecture": true,
+                "readyForTaskPlan": true,
+                "nextNode": "task_plan"
+            },
+            "createdAt": "2026-09-13T00:00:00Z",
+            "updatedAt": "2026-09-13T00:00:00Z"
+        }))
+        .expect("maintenance planning contract")
+    }
+
+    #[test]
+    fn maintenance_profile_adds_focused_behavior_intent_to_test_owner() {
+        let pgc = maintenance_pgc("explicit_maintenance");
+        let mut implementation = browser_task(0);
+        implementation.task_id = "task-implementation".to_string();
+        implementation.acceptance_refs = vec!["acceptance-repair".to_string()];
+        implementation.implementation_actions =
+            vec![ImplementationAction::CreateOrUpdateBusinessRule];
+
+        let mut tests = browser_task(0);
+        tests.task_id = "task-tests".to_string();
+        tests.acceptance_refs = vec!["acceptance-repair".to_string()];
+        tests.requirement_detail_refs = vec!["detail-repair".to_string()];
+        tests.implementation_actions = vec![ImplementationAction::AddOrUpdateTests];
+
+        let mut tasks = vec![implementation, tests];
+        normalize_maintenance_behavior_verification_intents(&mut tasks, &pgc);
+
+        assert!(tasks[0].verification_intents.is_empty());
+        let intent = tasks[1]
+            .verification_intents
+            .iter()
+            .find(|intent| {
+                intent
+                    .verification_id
+                    .starts_with("verify-maintenance-behavior-")
+            })
+            .expect("maintenance behavior intent on test owner");
+        assert_eq!(intent.acceptance_refs, ["acceptance-repair"]);
+        assert_eq!(intent.requirement_detail_refs, ["detail-repair"]);
+        assert!(intent.behavior.contains("equivalent minimal scenario"));
+        assert!(intent.behavior.contains("essential inputs"));
+    }
+
+    #[test]
+    fn full_profile_does_not_add_maintenance_behavior_intents() {
+        let pgc = maintenance_pgc("full");
+        let mut task = browser_task(0);
+        task.acceptance_refs = vec!["acceptance-repair".to_string()];
+
+        normalize_maintenance_behavior_verification_intents(std::slice::from_mut(&mut task), &pgc);
+
+        assert!(task.verification_intents.is_empty());
+    }
+
     #[test]
     fn implementation_obligations_keep_single_provenance_and_relevant_verifications() {
         let mut task = browser_task(3);
@@ -8864,6 +9111,64 @@ mod tests {
         assert!(tasks[1].write_boundary.artifact_refs.decisions.is_empty());
         assert!(tasks[1].write_boundary.artifact_refs.nfrs.is_empty());
         assert!(tasks[1].write_boundary.artifact_refs.risks.is_empty());
+    }
+
+    #[test]
+    fn single_business_task_inherits_unassigned_architecture_quality() {
+        let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-1",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "status": "ready",
+            "source": {"planningGenerationContractId": "pgc-1", "technicalBaselineId": "tbr-1"},
+            "engineeringBoundary": {},
+            "modules": [{"moduleId": "module-orders"}],
+            "dataModel": {},
+            "interfaces": [],
+            "userFlows": [],
+            "stateMachines": [],
+            "acceptanceMatrix": [],
+            "detailCoverage": [],
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "adr-orders",
+                    "category": "module_boundary",
+                    "title": "Own order behavior in one module",
+                    "status": "accepted",
+                    "context": "The current phase changes order behavior.",
+                    "decision": "The order module owns its behavior.",
+                    "alternativesConsidered": [{"name": "shared service", "tradeoff": "less ownership", "rejectedBecause": "it weakens invariants"}],
+                    "consequences": {"positive": ["clear ownership"], "negative": ["explicit mapping"], "neutral": []},
+                    "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                    "ownerArtifactRefs": {"modules": ["module-orders"], "interfaces": []},
+                    "verificationHints": ["review module ownership"]
+                }],
+                "nfrs": [],
+                "risks": []
+            },
+            "handoff": {"readyForTaskPlan": true, "blockingReasons": [], "nextNode": "task_plan"},
+            "createdAt": "2026-07-15T00:00:00Z",
+            "updatedAt": "2026-07-15T00:00:00Z"
+        }))
+        .expect("architecture artifact");
+        let mut tasks = vec![browser_task(1)];
+
+        normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
+        assert!(tasks[0].write_boundary.artifact_refs.decisions.is_empty());
+
+        assign_single_owner_architecture_quality_refs(&aac, &mut tasks);
+        let requirements = normalize_architecture_quality_requirements(&aac, &mut tasks);
+
+        assert_eq!(
+            tasks[0].write_boundary.artifact_refs.decisions,
+            ["adr-orders"]
+        );
+        assert_eq!(
+            tasks[0].architecture_quality_requirement_refs,
+            ["aqr-task-ui"]
+        );
+        assert_eq!(requirements.len(), 1);
     }
 
     #[test]

@@ -294,6 +294,52 @@ pub fn materialize_delivery_execution_repair(
     }
 }
 
+/// Re-open a completed delivery after an independent evaluator reports a failure.
+/// Every task that produced a result in the active phase is revisited in order so
+/// the repair remains inside the existing delivery contract.
+pub fn materialize_external_validation_repair(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    source_ref: Option<String>,
+) -> LoomMcpActionResult {
+    let root = Path::new(project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.to_string(),
+        phase_id: phase_id.to_string(),
+    };
+    let target_task_ids = match load_current_plan_and_run(root, &locator) {
+        Ok((task_plan, run)) => task_plan
+            .tasks
+            .iter()
+            .filter(|task| {
+                run.task_states
+                    .iter()
+                    .find(|state| state.task_id == task.task_id)
+                    .is_some_and(|state| state.result_id.is_some())
+            })
+            .map(|task| task.task_id.clone())
+            .collect(),
+        Err(error) => {
+            return failed(
+                project_root,
+                "EXTERNAL_VALIDATION_REPAIR_REQUEST_FAILED",
+                error.to_string(),
+                "execution_repair",
+            );
+        }
+    };
+    materialize_delivery_execution_repair(
+        project_root,
+        delivery_id,
+        phase_id,
+        "external_validation",
+        source_ref,
+        vec![],
+        target_task_ids,
+    )
+}
+
 fn materialize_delivery_execution_repair_inner(
     project_root: &str,
     delivery_id: &str,
@@ -2927,6 +2973,7 @@ fn safe_id(value: &str) -> String {
 
 fn repair_origin(origin: &str) -> RepairOrigin {
     match origin {
+        "external_validation" => RepairOrigin::ExternalValidation,
         "review_result" => RepairOrigin::ReviewResult,
         "manual_review_resolution" => RepairOrigin::ManualReviewResolution,
         _ => RepairOrigin::TaskFailure,

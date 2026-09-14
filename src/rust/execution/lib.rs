@@ -51,16 +51,25 @@ impl DomainDispatcher for ExecutionDomainDispatcher {
                 review::materialize_review_request(project_root, delivery_id, phase_id)
             }
             RouteActionKind::ExecutionRepair => {
-                let context = execution_repair_context(action);
-                repair::materialize_delivery_execution_repair(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    context.origin,
-                    action.request_ref.clone(),
-                    context.finding_refs,
-                    context.target_task_ids,
-                )
+                if action.source == "external_validation_feedback" {
+                    repair::materialize_external_validation_repair(
+                        project_root,
+                        delivery_id,
+                        phase_id,
+                        action.request_ref.clone(),
+                    )
+                } else {
+                    let context = execution_repair_context(action);
+                    repair::materialize_delivery_execution_repair(
+                        project_root,
+                        delivery_id,
+                        phase_id,
+                        context.origin,
+                        action.request_ref.clone(),
+                        context.finding_refs,
+                        context.target_task_ids,
+                    )
+                }
             }
             RouteActionKind::VsefmVerification
             | RouteActionKind::VsefmResultGate
@@ -147,6 +156,9 @@ fn execution_repair_origin(action: &RouteAction) -> &'static str {
         .and_then(|details| details.get("origin"))
         .and_then(Value::as_str);
     match (action.source.as_str(), detail_origin) {
+        ("external_validation_feedback", _) | (_, Some("external_validation")) => {
+            "external_validation"
+        }
         ("review_result", _) | (_, Some("review_result")) => "review_result",
         ("manual_review_resolution", _) | (_, Some("manual_review_resolution")) => {
             "manual_review_resolution"

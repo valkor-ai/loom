@@ -6,8 +6,8 @@ use delivery_core::{
     DomainDispatcher, FileSubmitInput, InspectRequestInput, InspectRequestResult,
     LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
     LoomMcpRepairableErrorResult, LoomMcpRuntimeContext, OperationContext, PlanConflictChoice,
-    PlanConflictResolveInput, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    PlanConflictResolveInput, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, RouteAction,
+    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use execution::{VsefmToolInput, VsefmVerificationResolveInput};
@@ -547,6 +547,17 @@ fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
     match result {
         Ok(PlanRoute::StartBrainstorm(input)) => WorkflowDomainDispatcher.start_brainstorm(&input),
         Ok(PlanRoute::Continue(project_root)) => continue_tool_inner(project_root),
+        Ok(PlanRoute::ExternalValidationRepair {
+            project_root,
+            delivery_id,
+            phase_id,
+            action,
+        }) => WorkflowDomainDispatcher.dispatch_route_action(
+            &project_root,
+            &delivery_id,
+            &phase_id,
+            &action,
+        ),
         Ok(PlanRoute::ConflictGate(project_root, conflict)) => {
             plan_conflict_gate(&project_root, &conflict)
         }
@@ -560,6 +571,12 @@ fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
 enum PlanRoute {
     StartBrainstorm(delivery_core::ValidatedPlanInput),
     Continue(ProjectToolInput),
+    ExternalValidationRepair {
+        project_root: String,
+        delivery_id: String,
+        phase_id: String,
+        action: RouteAction,
+    },
     ConflictGate(String, delivery_core::PlanConflictRecord),
     PendingConflict(String, delivery_core::PlanConflictRecord),
 }
@@ -573,6 +590,40 @@ fn prepare_plan_route_locked(
         .map_err(state::store::from_core_error)?;
 
     let Some(active_delivery_id) = status.active_delivery_id.clone() else {
+        if is_external_validation_repair_request(&input.request_text) {
+            if let Some(completed_delivery_id) = status.last_completed_delivery_id.clone() {
+                let completed_delivery = store
+                    .load_delivery_index(&input.project_root, &completed_delivery_id)
+                    .map_err(state::store::from_core_error)?;
+                if matches!(
+                    completed_delivery.status,
+                    delivery_core::DeliveryLifecycleStatus::Completed
+                        | delivery_core::DeliveryLifecycleStatus::CompletedWithOverride
+                ) && completed_delivery
+                    .phases
+                    .iter()
+                    .any(|phase| phase.phase_id == completed_delivery.active_phase_id)
+                {
+                    let mut reopened_delivery = completed_delivery;
+                    reopened_delivery.status = delivery_core::DeliveryLifecycleStatus::Executing;
+                    reopened_delivery.updated_at = state::store::now_string();
+                    state::commit_lifecycle(
+                        &input.project_root,
+                        state::LifecycleCommit {
+                            expected_revision: Some(status.revision),
+                            expected_active_delivery_id: Some(None),
+                            deliveries: vec![reopened_delivery.clone()],
+                            ..state::LifecycleCommit::default()
+                        },
+                    )?;
+                    return Ok(external_validation_repair_route(
+                        input,
+                        completed_delivery_id,
+                        reopened_delivery.active_phase_id,
+                    ));
+                }
+            }
+        }
         let mut prepared = input.clone();
         prepared.expected_lifecycle_revision = Some(status.revision);
         prepared.supersede_active_delivery_id = None;
@@ -587,6 +638,22 @@ fn prepare_plan_route_locked(
             | delivery_core::DeliveryLifecycleStatus::CompletedWithOverride
             | delivery_core::DeliveryLifecycleStatus::Superseded
     ) {
+        if matches!(
+            active_delivery.status,
+            delivery_core::DeliveryLifecycleStatus::Completed
+                | delivery_core::DeliveryLifecycleStatus::CompletedWithOverride
+        ) && is_external_validation_repair_request(&input.request_text)
+            && active_delivery
+                .phases
+                .iter()
+                .any(|phase| phase.phase_id == active_delivery.active_phase_id)
+        {
+            return Ok(external_validation_repair_route(
+                input,
+                active_delivery_id,
+                active_delivery.active_phase_id,
+            ));
+        }
         let result = state::mutate_lifecycle(&input.project_root, |current, _| {
             if current.active_delivery_id.as_deref() == Some(active_delivery_id.as_str()) {
                 current.active_delivery_id = None;
@@ -657,6 +724,50 @@ fn prepare_plan_route_locked(
         input.project_root.clone(),
         conflict,
     ))
+}
+
+fn external_validation_repair_route(
+    input: &delivery_core::ValidatedPlanInput,
+    delivery_id: String,
+    phase_id: String,
+) -> PlanRoute {
+    PlanRoute::ExternalValidationRepair {
+        project_root: input.project_root.clone(),
+        delivery_id,
+        phase_id,
+        action: RouteAction {
+            kind: RouteActionKind::ExecutionRepair,
+            source: "external_validation_feedback".to_string(),
+            reason: "EXTERNAL_VALIDATION_FAILED".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(input.request_identity.request_ref.clone()),
+            details: Some(json!({
+                "origin": "external_validation",
+                "feedbackRequestRef": input.request_identity.request_ref,
+                "feedback": input.request_text,
+            })),
+            target_phase_id: None,
+        },
+    }
+}
+
+fn is_external_validation_repair_request(request_text: &str) -> bool {
+    let request = request_text.to_ascii_lowercase();
+    let mentions_external_validation = [
+        "external validation",
+        "official evaluation",
+        "official swe-bench",
+        "official swebench",
+        "evaluation harness",
+        "upstream test suite",
+    ]
+    .iter()
+    .any(|phrase| request.contains(phrase));
+    let requests_repair = ["repair", "fix", "correct", "resolve"]
+        .iter()
+        .any(|phrase| request.contains(phrase));
+    mentions_external_validation && requests_repair
 }
 
 fn pending_conflict_replacement(
@@ -1422,4 +1533,159 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
     let service = LoomMcpServer::from_env().serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use delivery_core::{
+        validate_plan_input, DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState,
+        DeliveryStatusEntry, PlanToolInput, ProjectStatus, RouteActionKind, TransitionStore,
+    };
+    use state::lifecycle_store::{init_project_state, FileTransitionStore};
+
+    use super::{is_external_validation_repair_request, prepare_plan_route_locked, PlanRoute};
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn recognizes_explicit_external_validation_repair() {
+        assert!(is_external_validation_repair_request(
+            "Official SWE-bench evaluation failed after delivery. Treat this as an execution repair and fix the regression."
+        ));
+        assert!(is_external_validation_repair_request(
+            "External validation found a failing case; please repair it in the existing delivery."
+        ));
+    }
+
+    #[test]
+    fn requires_both_external_validation_and_repair_intent() {
+        assert!(!is_external_validation_repair_request(
+            "The official evaluation is available. Please summarize the result."
+        ));
+        assert!(!is_external_validation_repair_request(
+            "Fix the failing unit test and add coverage."
+        ));
+        assert!(!is_external_validation_repair_request(
+            "Start a new feature for the evaluation dashboard."
+        ));
+    }
+
+    #[test]
+    fn external_validation_repair_keeps_the_completed_delivery_active() {
+        let project_root = completed_delivery_fixture("external-validation-repair");
+        let input = validated_plan_input(
+            &project_root,
+            "Official SWE-bench evaluation failed. Repair the regression in the existing delivery.",
+        );
+
+        let route = prepare_plan_route_locked(&input).expect("prepare repair route");
+        match route {
+            PlanRoute::ExternalValidationRepair {
+                delivery_id,
+                phase_id,
+                action,
+                ..
+            } => {
+                assert_eq!(delivery_id, "delivery-completed");
+                assert_eq!(phase_id, "phase-1");
+                assert_eq!(action.kind, RouteActionKind::ExecutionRepair);
+                assert_eq!(action.source, "external_validation_feedback");
+            }
+            _ => panic!("external validation feedback must not restart Brainstorm"),
+        }
+
+        let store = FileTransitionStore;
+        let status = store.load_status(&project_root).expect("load status");
+        assert_eq!(
+            status.active_delivery_id.as_deref(),
+            Some("delivery-completed")
+        );
+        assert_eq!(
+            status.deliveries[0].status,
+            DeliveryLifecycleStatus::Executing
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn ordinary_request_after_completion_starts_a_new_delivery() {
+        let project_root = completed_delivery_fixture("ordinary-request");
+        let input =
+            validated_plan_input(&project_root, "Add export support for the reporting API.");
+
+        let route = prepare_plan_route_locked(&input).expect("prepare new delivery route");
+        assert!(matches!(route, PlanRoute::StartBrainstorm(_)));
+
+        let store = FileTransitionStore;
+        let status = store.load_status(&project_root).expect("load status");
+        assert_eq!(status.active_delivery_id, None);
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    fn validated_plan_input(
+        project_root: &str,
+        request_text: &str,
+    ) -> delivery_core::ValidatedPlanInput {
+        validate_plan_input(PlanToolInput {
+            project_root: project_root.to_string(),
+            request_text: request_text.to_string(),
+            requirement_files: vec![],
+        })
+        .expect("validate plan input")
+    }
+
+    fn completed_delivery_fixture(name: &str) -> String {
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let project_root = std::env::temp_dir().join(format!(
+            "loom-mcp-server-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&project_root).expect("create project root");
+        let project_root = project_root.to_string_lossy().into_owned();
+        init_project_state(&project_root).expect("initialize project state");
+
+        let delivery = DeliveryIndex {
+            schema_version: 1,
+            delivery_id: "delivery-completed".to_string(),
+            active_phase_id: "phase-1".to_string(),
+            status: DeliveryLifecycleStatus::Completed,
+            phases: vec![DeliveryPhaseState {
+                phase_id: "phase-1".to_string(),
+                latest_refs: BTreeMap::new(),
+                next_action: None,
+                pending_repair: None,
+            }],
+            updated_at: "2026-09-13T00:00:00Z".to_string(),
+            request_ref: None,
+            request_fingerprint: None,
+        };
+        let status = ProjectStatus {
+            schema_version: 1,
+            revision: 1,
+            active_delivery_id: None,
+            last_completed_delivery_id: Some(delivery.delivery_id.clone()),
+            deliveries: vec![DeliveryStatusEntry {
+                delivery_id: delivery.delivery_id.clone(),
+                active_phase_id: Some(delivery.active_phase_id.clone()),
+                status: delivery.status.clone(),
+                updated_at: delivery.updated_at.clone(),
+            }],
+            updated_at: delivery.updated_at.clone(),
+            pending_plan_conflict_id: None,
+        };
+        let store = FileTransitionStore;
+        store
+            .save_delivery_index(&project_root, &delivery)
+            .expect("save delivery");
+        store
+            .save_status(&project_root, &status)
+            .expect("save status");
+        project_root
+    }
 }

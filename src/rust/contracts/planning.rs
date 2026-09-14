@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AcceptanceCandidate, FrontendExperience, ScopeItem, SecurityRequirement,
-    UserFacingLanguageConstraint,
+    AcceptanceCandidate, DeliveryWorkflowProfile, FrontendExperience, ScopeItem,
+    SecurityRequirement, UserFacingLanguageConstraint,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -667,6 +667,8 @@ pub struct PlanningGenerationContract {
     pub planning_contract_id: String,
     pub delivery_id: String,
     pub phase_id: String,
+    #[serde(default)]
+    pub workflow_profile: DeliveryWorkflowProfile,
     pub status: PlanningContractStatus,
     pub source: PlanningContractSource,
     pub phase_scope: PlanningContractPhaseScope,

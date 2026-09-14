@@ -241,6 +241,7 @@ where
         planning_contract_id: format!("pgc-{}", phase_id),
         delivery_id: delivery_id.to_string(),
         phase_id: phase_id.to_string(),
+        workflow_profile: brainstorm.delivery_context.workflow_profile,
         status: PlanningContractStatus::Ready,
         source: PlanningContractSource {
             brainstorm_run_id: brainstorm.brainstorm_run_id.clone(),
