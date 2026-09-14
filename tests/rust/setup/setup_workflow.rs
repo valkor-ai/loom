@@ -423,6 +423,15 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
             .status,
         "passed"
     );
+    assert_eq!(
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "python.worker")
+            .unwrap()
+            .status,
+        "pending"
+    );
 }
 
 #[test]
@@ -544,6 +553,11 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root.join("skills/godot/SKILL.md").exists());
         assert!(root.join("skills/godot/mcp-driver/SKILL.md").exists());
         assert!(root.join("skills/godot/reviewer/physics/SKILL.md").exists());
+        assert!(root.join("skills/threejs/SKILL.md").exists());
+        assert!(root
+            .join("skills/threejs/threejs-qa-release/SKILL.md")
+            .exists());
+        assert!(root.join("skills/threejs/UPSTREAM_LICENSE").exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -881,7 +895,18 @@ fn install_ps1_release_contract_uses_windows_zip_checksum_and_doctor() {
     assert!(script.contains("Get-FileHash -Algorithm SHA256"));
     assert!(script.contains("windows-x64"));
     assert!(script.contains("install --agent $Agent --package-root"));
+    assert!(script.contains("Initialize-LoomPythonRuntime"));
+    assert!(script.contains("--managed-python --python 3.12"));
     assert!(script.contains("doctor --agent $Agent --package-root"));
+}
+
+#[test]
+fn install_sh_bootstraps_an_isolated_python_runtime() {
+    let script = fs::read_to_string(repo_root().join("install.sh")).unwrap();
+    assert!(script.contains("bootstrap_python_runtime"));
+    assert!(script.contains("--managed-python --python 3.12"));
+    assert!(script.contains("rm -rf \"$RUNTIME_ROOT\""));
+    assert!(script.contains("\"$UV\" pip install --python"));
 }
 
 #[test]
@@ -2786,6 +2811,17 @@ impl Fixture {
             "godot/reviewer/shader/SKILL.md",
             "godot/reviewer/tilemap/SKILL.md",
             "godot/reviewer/ui/SKILL.md",
+            "threejs/SKILL.md",
+            "threejs/threejs-3d-generator/SKILL.md",
+            "threejs/threejs-aaa-graphics-builder/SKILL.md",
+            "threejs/threejs-audio-generator/SKILL.md",
+            "threejs/threejs-debug-profiler/SKILL.md",
+            "threejs/threejs-game-director/SKILL.md",
+            "threejs/threejs-game-ui-designer/SKILL.md",
+            "threejs/threejs-gameplay-systems/SKILL.md",
+            "threejs/threejs-image-generator/SKILL.md",
+            "threejs/threejs-qa-release/SKILL.md",
+            "threejs/UPSTREAM_LICENSE",
         ] {
             write_file(
                 &self

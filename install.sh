@@ -83,6 +83,42 @@ verify_archive_checksum() {
   fi
 }
 
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    UV="$(command -v uv)"
+    return
+  fi
+
+  echo "loom install: installing uv for the managed Python runtime"
+  if ! command -v curl >/dev/null 2>&1; then
+    fail "uv is required to prepare Loom's Python runtime; install uv or make curl available"
+  fi
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+  for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
+    if [ -x "$candidate" ]; then
+      UV="$candidate"
+      return
+    fi
+  done
+  fail "uv installation completed but the uv executable was not found; restart your shell and run the installer again"
+}
+
+bootstrap_python_runtime() {
+  LOOM_ROOT="${LOOM_HOME:-$HOME/.loom}"
+  RUNTIME_ROOT="$LOOM_ROOT/runtime/current/python/runtime"
+  ALGORITHMS_ROOT="$LOOM_ROOT/runtime/current/python/algorithms"
+  if [ ! -f "$ALGORITHMS_ROOT/pyproject.toml" ]; then
+    fail "installed package is missing Python algorithms at $ALGORITHMS_ROOT"
+  fi
+
+  ensure_uv
+  echo "loom install: preparing managed Python runtime"
+  rm -rf "$RUNTIME_ROOT"
+  "$UV" venv --managed-python --python 3.12 "$RUNTIME_ROOT"
+  "$UV" pip install --python "$RUNTIME_ROOT/bin/python" "$ALGORITHMS_ROOT"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --agent)
@@ -214,4 +250,5 @@ fi
 
 SETUP="$PACKAGE_ROOT/bin/loom-setup"
 "$SETUP" install --agent "$AGENT" --package-root "$PACKAGE_ROOT"
+bootstrap_python_runtime
 "$SETUP" doctor --agent "$AGENT" --package-root "$PACKAGE_ROOT"

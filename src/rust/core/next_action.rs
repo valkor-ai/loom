@@ -311,6 +311,7 @@ pub enum ExecutionKind {
 #[serde(rename_all = "snake_case")]
 pub enum RepairOrigin {
     TaskFailure,
+    ExternalValidation,
     ReviewResult,
     ManualReviewResolution,
     DeployFailure,

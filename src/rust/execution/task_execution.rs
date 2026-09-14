@@ -528,7 +528,15 @@ fn build_execution_request(
     if browser_verification_context.is_some() {
         execution_rules["browserVerificationRules"] = browser_verification_rules();
     }
-    let result_rules = task_result_rules(&request_task, browser_verification_profile.is_some());
+    let maintenance_behavior_verification = matches!(
+        pgc.workflow_profile,
+        contracts::DeliveryWorkflowProfile::ExplicitMaintenance
+    );
+    let result_rules = task_result_rules(
+        &request_task,
+        browser_verification_profile.is_some(),
+        maintenance_behavior_verification,
+    );
     let mut source_context = json!({
         "technicalBaseline": {
             "projectKind": baseline.project_kind,
@@ -542,6 +550,10 @@ fn build_execution_request(
         "requirementDetailSnapshot": pgc.requirement_details.items.iter()
             .filter(|detail| request_task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
             .collect::<Vec<_>>(),
+        "maintenanceBehaviorVerification": maintenance_behavior_verification.then(|| json!({
+            "rule": "For this maintenance repair, passed evidence must cover the essential inputs, operation sequence, and expected outcome of each assigned maintenance verification intent. An equivalent focused scenario is valid; a test for only a related failure mode is not.",
+            "acceptanceSource": "acceptanceSnapshot"
+        })),
         "userFacingLanguage": user_facing_language
     });
     if !dependency_results.is_empty() {
@@ -974,7 +986,11 @@ fn runtime_delivery_execution_rules() -> Value {
     })
 }
 
-fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> Value {
+fn task_result_rules(
+    task: &TaskDefinition,
+    has_browser_verification: bool,
+    maintenance_behavior_verification: bool,
+) -> Value {
     let mut rules = vec![
         "TaskResult must include every requiredTopLevelFields entry.".to_string(),
         "If status is completed, every verification intent should have passed evidence.".to_string(),
@@ -998,6 +1014,15 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
     if has_browser_verification {
         rules.push("Record every sourceContext.browserVerificationContext.profile.checks outcome under verificationResults[].browserChecks in the profile order. Loom derives verificationId and checkId; do not write or copy those linkage fields, and do not paste trace, screenshot, or report contents into TaskResult prose.".to_string());
         rules.push("Passed browser checks require the exact command, attempt count, and concise observed outcome. Blocked checks require a concrete blockedReason. Keep retry success visible with attempts greater than one.".to_string());
+    }
+    if maintenance_behavior_verification
+        && task.verification_intents.iter().any(|intent| {
+            intent
+                .verification_id
+                .starts_with("verify-maintenance-behavior-")
+        })
+    {
+        rules.push("For each verify-maintenance-behavior intent, record passed evidence for an equivalent minimal scenario that covers its essential inputs, operation sequence, and expected outcome. Do not mark this intent passed using only a related regression, static review, build, or broad suite result without identifying the scenario in the verification summary and provenance.".to_string());
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
@@ -3282,11 +3307,25 @@ mod tests {
         }
     }
 
+    fn maintenance_behavior_task() -> TaskDefinition {
+        let mut task = code_quality_task();
+        task.verification_intents = vec![contracts::VerificationIntent {
+            verification_id: "verify-maintenance-behavior-task-observability-acceptance-repair"
+                .to_string(),
+            acceptance_refs: vec!["acceptance-repair".to_string()],
+            requirement_detail_refs: vec!["detail-repair".to_string()],
+            behavior: "Verify the reported ordering behavior.".to_string(),
+            preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+            acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+        }];
+        task
+    }
+
     #[test]
     fn task_execute_uses_task_scope_as_the_implementation_contract() {
         let task = code_quality_task();
         let execution_rules = code_quality_execution_rules(&task);
-        let result_rules = task_result_rules(&task, false);
+        let result_rules = task_result_rules(&task, false, false);
 
         assert!(execution_rules["implementationRules"]
             .as_array()
@@ -3298,6 +3337,27 @@ mod tests {
         assert!(result_rules.as_array().unwrap().iter().any(|rule| rule
             .as_str()
             .is_some_and(|text| text.contains("task.implementationActions"))));
+    }
+
+    #[test]
+    fn maintenance_behavior_result_rules_require_equivalent_scenario_evidence() {
+        let rules = task_result_rules(&maintenance_behavior_task(), false, true);
+
+        assert!(rules.as_array().unwrap().iter().any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("equivalent minimal scenario"))));
+        assert!(rules.as_array().unwrap().iter().any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("related regression"))));
+    }
+
+    #[test]
+    fn non_maintenance_result_rules_do_not_add_behavior_scenario_requirement() {
+        let rules = task_result_rules(&maintenance_behavior_task(), false, false);
+
+        assert!(!rules.as_array().unwrap().iter().any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("equivalent minimal scenario"))));
     }
 
     #[test]

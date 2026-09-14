@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js QA Release"
+  short_description: "Verify and release Three.js games"
+  default_prompt: "Use $threejs-qa-release to verify this game's changed behavior and gather current-run evidence proportional to the task."

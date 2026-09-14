@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Gameplay Systems"
+  short_description: "Design and build playable Three.js systems"
+  default_prompt: "Use $threejs-gameplay-systems to design and implement this game's loop, levels, controls, and physics."

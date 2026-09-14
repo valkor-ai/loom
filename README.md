@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/headbar.png" alt="Loom" width="100%">
-  <p><strong>Loop engineering for agentic software delivery.</strong></p>
-  <p>An open delivery harness that helps Claude Code, Codex, OpenCode, and other coding agents finish larger software tasks without losing state.</p>
+  <p><strong>Keep software delivery moving.</strong></p>
+  <p>Loom is an open delivery harness for Claude Code, Codex, OpenCode, and other coding agents.</p>
   <p>
     <a href="./README.zh-CN.md">Simplified Chinese</a>
     ·
@@ -30,64 +30,48 @@
   <p>⭐ If Loom is useful to you, give it a star and help more developers find it.</p>
 </div>
 
-## What Is Loom?
+## Start Here
 
-Coding agents are good at writing code. They are less reliable at finishing the whole job: they lose context, skip checks, and leave handoffs unclear.
+| I want to... | In Codex | In Claude Code / OpenCode |
+| --- | --- | --- |
+| Build a feature or app | `@loom build Add a team settings page` | `/loom build Add a team settings page` |
+| Resume an interrupted delivery | `@loom continue` | `/loom continue` |
+| Review and repair a change | `@loom review` | `/loom review` |
+| Validate a local preview | `@loom deploy` | `/loom deploy` |
 
-Loom is an open-source harness that runs beside the agent you already use. It keeps the work moving through a simple loop: plan, build, test, fix, preview, and hand off.
+Install Loom once for every supported agent on this machine:
 
-Loom saves the important project state: requirements, task progress, test results, runtime facts, and repair notes. If a session stops, the next run can continue from where things left off.
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent all
+```
 
-Use Loom when a task is too big for a single prompt: feature work, deployment, review, repair, preview, or a handoff that needs evidence.
+For a single agent, Windows, or a local checkout, see [Quick Start](#quick-start).
+
+## What Loom Does
+
+Loom runs beside the coding agent you already use and turns a larger change into a delivery loop: clarify the scope, plan the work, build it, run checks, repair failures, preview the result, and leave a handoff.
+
+The project-local `.loom/` directory keeps requirements, task progress, results, runtime facts, and repair history. A new session can pick up the actual state of the work instead of reconstructing it from chat history.
+
+Loom is for work that needs more than a generated first pass: a feature, a review, a deployment, a repair, or a change someone else must be able to inspect and continue.
+
+See [delivered examples](./docs/use-cases.md) for the kinds of projects Loom has run end to end.
+
+## Delivery Model
+
+| Stage | Loom keeps |
+| --- | --- |
+| Scope and design | Confirmed requirements, decisions, and task boundaries |
+| Execution | Task-specific context, write targets, and recorded results |
+| Verification | Tests, runtime checks, previews, and review findings |
+| Repair and handoff | Repair requests, re-verification, and the project state for the next person or session |
+
+Loom selects technical references and context for the current task rather than loading the entire repository or a large generic skill into every turn. The shared references cover architecture, APIs, language and framework work, review, and browser verification.
 
 ## News
 
-- **Upcoming:** V-SEFM, a verifier model for software delivery, is in progress. Details later.
 - **Jul 2026:** Loom moved its MCP runtime from TypeScript to Rust to make the core smaller and faster.
 - **Jul 2026:** Loom now supports Godot projects through Godot MCP. [Setup guide](./docs/godot.md)
-
-## Why a Harness?
-
-Coding agents can generate websites and apps quickly. The rough part is keeping them on track after the first pass: preserving requirements, checking the work, fixing failures, and resuming after a stopped session.
-
-Longer tasks tend to fail in familiar ways:
-
-Failure mode | Loom response
---- | ---
-Partial completion | Tasks are bounded and must write explicit results before Loom routes the next step.
-Goal drift | Scope and architecture decisions are saved and reused across sessions.
-Self-check bias | Review and repair run as separate steps with recorded evidence.
-Repeated context loading | Agents read compact project and task state instead of reloading the whole repo.
-Handoff gaps | Reports, logs, previews, and repair history make the final state inspectable.
-
-## From Demo to Delivery
-
-AI coding has made demos cheap. A single prompt can get you a web page, a prototype, or a personal tool.
-
-Shipping the same work is different. You still need requirements, architecture choices, tests, runtime setup, fixes, preview evidence, and a handoff someone can trust.
-
-Loom focuses on that gap. It gives existing agents a delivery loop and a place to store progress, so a task can survive failed checks, context compaction, and a new session.
-
-The goal is simple: fewer rebuilt sessions, fewer half-finished agent runs, and more software that reaches a verifiable finish.
-
-Capability | What it changes
---- | ---
-Stateful delivery protocol | Turns a one-shot coding session into a resumable delivery loop backed by `.loom/` state, request refs, result files, review records, repair requests, and handoff evidence.
-Requirement intelligence | Converts loose prompts into confirmed scope, business rules, lifecycle coverage, UI operation paths, and acceptance details that planning, execution, and review must preserve.
-Architecture and system design | Turns the accepted technical baseline and repository facts into implementation-facing decisions for boundaries, behavior, data ownership, runtime responsibilities, NFR targets, ADRs, and failure modes. These decisions become compact ids that planning, execution, review, and repair can carry forward.
-API contracts | Defines structured interfaces, request and response models, validation, error behavior, collection policies, and compatibility rules when they are actually in scope. Frontend tasks, integration checks, runtime probes, and deploy consume the accepted API contract instead of guessing paths or prefixes.
-Stack-aware implementation guidance | Selects only the language, framework, persistence, and frontend references owned by the current task from the accepted Technical Baseline. The code and framework references provide repository adaptation, implementation patterns, verification expectations, and anti-patterns without loading unrelated stacks or reselecting technology.
-Engineering contracts | Carries runtime, code-quality, and task ownership decisions as structured contracts instead of relying on repeated prompt reminders.
-Production UI guidance | Pushes UI quality to the generation side with surface decisions, scenario references, layout density, style asset plans, token expectations, forbidden content rules, and desktop/mobile evidence.
-Targeted context routing | Lets agents read field groups, reference profiles, task contracts, and repair context instead of repeatedly loading broad files or entire artifacts.
-Task-scoped execution | Splits delivery into bounded tasks with source refs, write boundaries, verification intent, result templates, and continuation rules.
-Verification and review discipline | Applies language/framework-specific testing guidance only when the task owns the evidence, uses review references to assess specification and implementation quality, and adds Playwright browser closure only for explicitly assigned browser behavior. Runtime failures remain environment evidence rather than being misreported as code defects.
-Review and repair loop | Separates implementation from validation through review signals, TaskResult evidence, repair contracts, multi-target repair routing, and re-verification.
-Runtime and deploy readiness | Prepares local Docker Compose previews with topology-aware services, build contexts, environment rules, ports, health checks, logs, and repair boundaries.
-Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and pull only matching chunks into the right clarification step.
-Multi-agent MCP protocol | Runs the same delivery state machine through Codex, Claude Code, OpenCode, and future MCP-capable agents.
-
-The technical guidance behind this path is organized under `plugins/shared/loom/references/tech/`: architecture (`arch`), API design (`api`), language and SQL implementation (`code`), backend and frontend frameworks (`backend` and `frontend`), review (`review`), and Playwright verification (`test/playwright`). These are not loaded as one large skill. Loom derives a task-scoped selection from accepted technical facts and task ownership, then passes only the selected references into the relevant architecture, planning, execution, review, or browser-closure request.
 
 ## Context Routing
 
@@ -124,7 +108,7 @@ Agent turn / LLM context
 
 ## Quick Start
 
-Install Loom for the coding agent you use. The installer detects your OS and CPU, downloads the matching release package, verifies the package `.sha256` asset, installs the Rust MCP server, bundles the Python algorithm runtime, writes the agent MCP registration, refreshes the local plugin, and runs `loom-setup doctor`.
+Install Loom for the coding agent you use. The installer detects your OS and CPU, downloads the matching release package, verifies the package `.sha256` asset, installs the Rust MCP server, creates an isolated Python runtime for Loom's algorithms, writes the agent MCP registration, refreshes the local plugin, and runs `loom-setup doctor`.
 
 Codex:
 

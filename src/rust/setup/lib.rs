@@ -51,6 +51,17 @@ const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
     "plugins/shared/loom/skills/godot/reviewer/shader/SKILL.md",
     "plugins/shared/loom/skills/godot/reviewer/tilemap/SKILL.md",
     "plugins/shared/loom/skills/godot/reviewer/ui/SKILL.md",
+    "plugins/shared/loom/skills/threejs/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-3d-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-aaa-graphics-builder/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-audio-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-debug-profiler/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-game-director/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-game-ui-designer/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-gameplay-systems/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-image-generator/SKILL.md",
+    "plugins/shared/loom/skills/threejs/threejs-qa-release/SKILL.md",
+    "plugins/shared/loom/skills/threejs/UPSTREAM_LICENSE",
 ];
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/verification/v-sefm.json",
@@ -1984,6 +1995,17 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
     write_registry(env, &registry)?;
     report.installed_runtime = Some(path_string(env.runtime_current()));
     report.checks = doctor(env, agents, false)?.checks;
+    for check in &mut report.checks {
+        if check.name == "python.worker"
+            && check.status == "failed"
+            && check
+                .detail
+                .contains("managed Python executable is missing")
+        {
+            check.status = "pending".to_string();
+            check.detail = "managed Python runtime will be prepared by the installer".to_string();
+        }
+    }
     if let Some(message) = appkey_setup_warning {
         report.checks.push(DoctorCheck {
             name: "vsefm.appkey".to_string(),
@@ -2111,7 +2133,7 @@ pub fn write_package_layout(
     })?;
     write_text(
         &package_dir.join(&manifest.python.runtime).join("README"),
-        "This local development package uses the host python3 runtime when a bundled Python runtime is not present.\n",
+        "The installer creates Loom's managed Python runtime in this directory.\n",
     )?;
 
     copy_required(
@@ -3207,8 +3229,11 @@ fn check_python_worker(env: &SetupEnvironment) -> DoctorCheck {
     if !python.exists() {
         return DoctorCheck {
             name: "python.worker".to_string(),
-            status: "skipped".to_string(),
-            detail: "bundled python executable is not present in this package".to_string(),
+            status: "failed".to_string(),
+            detail: format!(
+                "managed Python executable is missing at {}; rerun the Loom installer",
+                python.display()
+            ),
         };
     }
     let smoke = json!({

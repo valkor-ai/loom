@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Game Director"
+  short_description: "Orchestrate complete Three.js games"
+  default_prompt: "Use $threejs-game-director to build or improve this game, preserve my scope, and route the relevant specialists automatically."
