@@ -51,6 +51,8 @@ For a single agent, Windows, or a local checkout, see [Quick Start](#quick-start
 
 Loom runs beside the coding agent you already use and turns a larger change into a delivery loop: clarify the scope, plan the work, build it, run checks, repair failures, preview the result, and leave a handoff.
 
+Loom applies recursive self-improvement (RSI) to this loop: test and review findings guide the next repair, and the updated result is checked again.
+
 The project-local `.loom/` directory keeps requirements, task progress, results, runtime facts, and repair history. A new session can pick up the actual state of the work instead of reconstructing it from chat history.
 
 Loom is for work that needs more than a generated first pass: a feature, a review, a deployment, a repair, or a change someone else must be able to inspect and continue.

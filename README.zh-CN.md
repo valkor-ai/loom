@@ -52,6 +52,8 @@ curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh
 
 Loom 运行在你已经使用的 coding agent 旁边，把较大的改动推进成一条交付循环：澄清范围、规划任务、实现、运行检查、修复失败、预览结果、完成交接。
 
+Loom 将递归式自我改进（Recursive Self-Improvement, RSI）用于这条交付循环：测试和 review 的发现会指导下一轮修复，修改后的结果再接受验证。
+
 项目本地的 `.loom/` 会保存需求、任务进度、执行结果、运行时事实和修复记录。新的会话可以直接接着真实工作状态推进，不必从聊天记录里重新拼出上下文。
 
 它适合不止需要生成第一版代码的工作：功能开发、review、部署、修复，或任何需要让他人能够检查和继续的改动。
