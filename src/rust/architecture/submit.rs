@@ -408,8 +408,14 @@ where
             } else {
                 None
             };
-        let architecture_quality_seed =
-            build_architecture_quality_seed(next_section, architecture_candidate_plan.as_ref());
+        let architecture_quality_seed = build_architecture_quality_seed(
+            next_section,
+            architecture_candidate_plan.as_ref(),
+            request_root
+                .pointer("/contextProjection/workflowProfile")
+                .and_then(Value::as_str)
+                == Some("explicit_maintenance"),
+        );
         apply_architecture_quality_seed(&mut request_root, &architecture_quality_seed);
         if let Some(candidate_plan) = architecture_candidate_plan.as_ref() {
             next_output.result_template["content"]["architectureQuality"] =
@@ -3856,6 +3862,9 @@ fn update_request_for_next_section(
         &frontend_experience_source,
         &api_quality_seed,
         &security_profile_seed,
+        root.pointer("/contextProjection/workflowProfile")
+            .and_then(Value::as_str)
+            == Some("explicit_maintenance"),
     );
     Ok(root)
 }
