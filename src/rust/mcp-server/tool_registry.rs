@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+use crate::delivery_graph::DeliveryGraph;
 use brainstorm::BrainstormConfirmBlockInput;
 use delivery_core::{
     normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestSummary,
@@ -58,9 +59,18 @@ pub enum ToolOutputKind {
     ActionResult,
     InspectRequest,
     ReadFieldGroup,
+    DeliveryGraph,
 }
 
 pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
+    ToolRegistration {
+        name: "deliveryGraph",
+        description: "Read the latest delivery's explicit requirement, task, verification, and review links as a graph and Mermaid diagram. On-demand only; does not change delivery state.",
+        target_batch: 4,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::DeliveryGraph,
+        implemented: true,
+    },
     ToolRegistration {
         name: "initProject",
         description: "Initialize Loom project state for the current project.",
@@ -538,6 +548,7 @@ fn output_schema(kind: ToolOutputKind) -> JsonObject {
         ToolOutputKind::ActionResult => schema_json_object::<LoomMcpActionResult>(),
         ToolOutputKind::InspectRequest => schema_json_object::<InspectRequestSummary>(),
         ToolOutputKind::ReadFieldGroup => schema_json_object::<ReadFieldGroupResult>(),
+        ToolOutputKind::DeliveryGraph => schema_json_object::<DeliveryGraph>(),
     }
 }
 

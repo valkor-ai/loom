@@ -13,6 +13,10 @@ path = "lib.rs"
 name = "loom-mcp-server"
 path = "main.rs"
 
+[[bin]]
+name = "loom-delivery-graph"
+path = "delivery_graph_main.rs"
+
 [dependencies]
 anyhow.workspace = true
 architecture = { path = "../architecture" }

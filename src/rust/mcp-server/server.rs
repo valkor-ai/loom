@@ -161,6 +161,9 @@ fn call_tool(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let result = match tool_name.as_str() {
+        "deliveryGraph" => structured(crate::delivery_graph::read(parse_args::<ProjectToolInput>(
+            request.arguments,
+        )?)),
         "initProject" => action_result(init_project_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
