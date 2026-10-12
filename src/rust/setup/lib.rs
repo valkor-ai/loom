@@ -33,6 +33,8 @@ const SHARED_LOOM_REFERENCES: &str = "plugins/shared/loom/references";
 const SHARED_LOOM_SKILLS: &str = "plugins/shared/loom/skills";
 const SHARED_DEPLOY_REFERENCES: &str = "plugins/shared/loom-deploy/references";
 const REQUIRED_SHARED_SKILL_FILES: &[&str] = &[
+    "plugins/shared/loom/skills/project-architecture/SKILL.md",
+    "plugins/shared/loom/skills/project-architecture/references/pr-lens.md",
     "plugins/shared/loom/skills/godot/SKILL.md",
     "plugins/shared/loom/skills/godot/godot-api/SKILL.md",
     "plugins/shared/loom/skills/godot/godot-e2e/SKILL.md",

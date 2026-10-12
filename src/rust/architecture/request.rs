@@ -241,7 +241,12 @@ fn build_request_root(
             .as_ref(),
         Some(technical_baseline),
     );
-    let architecture_quality_seed = build_architecture_quality_seed(current_output.section, None);
+    let architecture_quality_seed = build_architecture_quality_seed(
+        current_output.section,
+        None,
+        planning_contract.workflow_profile
+            == contracts::DeliveryWorkflowProfile::ExplicitMaintenance,
+    );
     let runtime_dependency_seed = runtime_dependency_seed(technical_baseline);
     let security_profile_seed = security_profile_seed(
         &planning_contract.technical_baseline.security_requirement,
@@ -332,7 +337,9 @@ fn build_request_root(
                 &source_refs,
                 frontend_experience_source,
                 api_quality_seed,
-                &security_profile_seed
+                &security_profile_seed,
+                planning_contract.workflow_profile
+                    == contracts::DeliveryWorkflowProfile::ExplicitMaintenance,
             )
         }
     });
@@ -351,6 +358,7 @@ pub(crate) fn architecture_read_groups(
     frontend_experience_source: &Value,
     api_quality_seed: &Value,
     security_profile_seed: &Value,
+    compact: bool,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -383,32 +391,53 @@ pub(crate) fn architecture_read_groups(
             core_fields.push("repairContext.sourceRef");
         }
     }
-    core_fields.extend([
-        "contextProjection.phaseScopeSummary.phaseName",
-        "contextProjection.phaseScopeSummary.phaseGoal",
-        "contextProjection.phaseScopeSummary.includedIds",
-        "contextProjection.phaseScopeSummary.includedLabels",
-        "contextProjection.phaseScopeSummary.includedItems",
-        "contextProjection.phaseScopeSummary.deferredIds",
-        "contextProjection.phaseScopeSummary.deferredLabels",
-        "contextProjection.phaseScopeSummary.deferredItems",
-        "contextProjection.phaseScopeSummary.excludedIds",
-        "contextProjection.phaseScopeSummary.excludedLabels",
-        "contextProjection.phaseScopeSummary.excludedItems",
-        "contextProjection.phaseId",
-        "contextProjection.planningContractId",
-        "contextProjection.technicalBaseline.technicalBaselineId",
-        "contextProjection.technicalBaseline.status",
-        "contextProjection.technicalBaseline.scope",
-        "contextProjection.technicalBaseline.summary",
-        "contextProjection.technicalBaseline.mustFollow",
-        "architectureQualitySeed.required",
-        "architectureQualitySeed.qualityLevel",
-        "architectureQualitySeed.section",
-        "architectureQualitySeed.techReferenceProfile.loadMode",
-        "architectureQualitySeed.techReferenceProfile.groups.arch",
-        "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
-    ]);
+    if compact {
+        core_fields.extend([
+            "contextProjection.phaseScopeSummary.phaseName",
+            "contextProjection.phaseScopeSummary.phaseGoal",
+            "contextProjection.phaseScopeSummary.includedIds",
+            "contextProjection.phaseScopeSummary.includedItems",
+            "contextProjection.phaseScopeSummary.deferredIds",
+            "contextProjection.phaseScopeSummary.excludedIds",
+            "contextProjection.phaseId",
+            "contextProjection.planningContractId",
+            "contextProjection.workflowProfile",
+            "contextProjection.technicalBaseline.technicalBaselineId",
+            "contextProjection.technicalBaseline.status",
+            "contextProjection.technicalBaseline.summary",
+            "architectureQualitySeed.required",
+            "architectureQualitySeed.qualityLevel",
+            "architectureQualitySeed.section",
+            "architectureQualitySeed.techReferenceProfile.groups.arch",
+        ]);
+    } else {
+        core_fields.extend([
+            "contextProjection.phaseScopeSummary.phaseName",
+            "contextProjection.phaseScopeSummary.phaseGoal",
+            "contextProjection.phaseScopeSummary.includedIds",
+            "contextProjection.phaseScopeSummary.includedLabels",
+            "contextProjection.phaseScopeSummary.includedItems",
+            "contextProjection.phaseScopeSummary.deferredIds",
+            "contextProjection.phaseScopeSummary.deferredLabels",
+            "contextProjection.phaseScopeSummary.deferredItems",
+            "contextProjection.phaseScopeSummary.excludedIds",
+            "contextProjection.phaseScopeSummary.excludedLabels",
+            "contextProjection.phaseScopeSummary.excludedItems",
+            "contextProjection.phaseId",
+            "contextProjection.planningContractId",
+            "contextProjection.technicalBaseline.technicalBaselineId",
+            "contextProjection.technicalBaseline.status",
+            "contextProjection.technicalBaseline.scope",
+            "contextProjection.technicalBaseline.summary",
+            "contextProjection.technicalBaseline.mustFollow",
+            "architectureQualitySeed.required",
+            "architectureQualitySeed.qualityLevel",
+            "architectureQualitySeed.section",
+            "architectureQualitySeed.techReferenceProfile.loadMode",
+            "architectureQualitySeed.techReferenceProfile.groups.arch",
+            "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
+        ]);
+    }
     if matches!(section, ArchitectureSectionGroup::Coverage) {
         core_fields.push("architectureQualitySeed.candidatePlan");
     }
@@ -829,8 +858,13 @@ fn security_profile_seed(
 pub(crate) fn build_architecture_quality_seed(
     section: ArchitectureSectionGroup,
     candidate_plan: Option<&Value>,
+    compact: bool,
 ) -> Value {
-    let arch_groups = architecture_reference_groups(section);
+    let arch_groups = if compact {
+        vec!["core"]
+    } else {
+        architecture_reference_groups(section)
+    };
     let mut seed = json!({
         "required": true,
         "qualityLevel": "production_delivery_architecture",
@@ -960,6 +994,7 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
     json!({
         "phaseId": planning_contract.source.phase_id,
         "planningContractId": planning_contract.planning_contract_id,
+        "workflowProfile": planning_contract.workflow_profile,
         "phaseScopeSummary": phase_scope_summary(planning_contract),
         "technicalBaseline": planning_contract.technical_baseline,
         "requirementDetailTransfer": {
@@ -2618,6 +2653,7 @@ mod tests {
             }),
             &Value::Null,
             &json!({}),
+            false,
         );
 
         assert!(!groups
@@ -2641,6 +2677,7 @@ mod tests {
             &json!({}),
             &seed,
             &json!({}),
+            false,
         );
         let group = groups
             .as_array()
@@ -2667,6 +2704,7 @@ mod tests {
             &json!({}),
             &json!({}),
             &json!({"securityRequirement": {"applies": "required"}, "profiles": []}),
+            false,
         );
         let core = groups
             .as_array()
@@ -2754,10 +2792,14 @@ mod tests {
     #[test]
     fn architecture_reference_profiles_are_section_scoped() {
         let foundation =
-            build_architecture_quality_seed(ArchitectureSectionGroup::Foundation, None);
-        let frontend =
-            build_architecture_quality_seed(ArchitectureSectionGroup::FrontendExperience, None);
-        let coverage = build_architecture_quality_seed(ArchitectureSectionGroup::Coverage, None);
+            build_architecture_quality_seed(ArchitectureSectionGroup::Foundation, None, false);
+        let frontend = build_architecture_quality_seed(
+            ArchitectureSectionGroup::FrontendExperience,
+            None,
+            false,
+        );
+        let coverage =
+            build_architecture_quality_seed(ArchitectureSectionGroup::Coverage, None, false);
 
         assert_eq!(
             foundation["techReferenceProfile"]["groups"]["arch"],

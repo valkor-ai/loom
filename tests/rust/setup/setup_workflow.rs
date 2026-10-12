@@ -558,6 +558,10 @@ fn install_projects_shared_references_to_agent_read_paths() {
             .join("skills/threejs/threejs-qa-release/SKILL.md")
             .exists());
         assert!(root.join("skills/threejs/UPSTREAM_LICENSE").exists());
+        assert!(root.join("skills/project-architecture/SKILL.md").exists());
+        assert!(root
+            .join("skills/project-architecture/references/pr-lens.md")
+            .exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -2793,6 +2797,8 @@ impl Fixture {
 
     fn write_shared_skills(&self) {
         for path in [
+            "project-architecture/SKILL.md",
+            "project-architecture/references/pr-lens.md",
             "godot/SKILL.md",
             "godot/godot-api/SKILL.md",
             "godot/godot-e2e/SKILL.md",

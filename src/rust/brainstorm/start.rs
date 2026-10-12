@@ -293,12 +293,18 @@ fn classify_clarification_profile(
         "fix",
         "bug",
         "regression",
+        "issue",
+        "require",
         "crash",
         "exception",
         "incorrect",
         "wrong",
         "fails",
         "failure",
+        "does not work",
+        "not work",
+        "raise",
+        "valueerror",
         "should return",
         "should handle",
     ]
@@ -312,7 +318,11 @@ fn classify_clarification_profile(
         || request_text.contains(".go")
         || normalized.contains("function")
         || normalized.contains("method")
-        || normalized.contains("test");
+        || normalized.contains("test")
+        || normalized.contains("constructor")
+        || normalized.contains("class ")
+        || normalized.contains("blueprint")
+        || normalized.contains("valueerror");
     let has_broad_or_sensitive_intent = [
         " ui ",
         "frontend",
@@ -594,6 +604,18 @@ mod tests {
             "Fix `django.utils.numberformat.format()` so None returns unchanged and add a regression test in tests/utils_tests/test_numberformat.py. Keep the existing repository stack and security boundary.",
         );
         assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        std::fs::remove_dir_all(path).expect("remove test project");
+    }
+
+    #[test]
+    fn recognizes_issue_report_maintenance_language() {
+        let path = repo_path("issue-report");
+        let (profile, reason) = classify_clarification_profile(
+            &path,
+            "Resolve this issue: Require a non-empty name for Blueprints. Things do not work correctly if a Blueprint is given an empty name. Raise ValueError and add a focused regression test.",
+        );
+        assert_eq!(profile, ClarificationProfile::ExplicitMaintenance);
+        assert!(reason.is_some());
         std::fs::remove_dir_all(path).expect("remove test project");
     }
 }
