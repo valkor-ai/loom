@@ -7,6 +7,7 @@ mod task_execution;
 mod task_plan;
 mod task_result;
 mod templates;
+mod verification_source;
 pub mod vsefm;
 
 use delivery_core::{
@@ -156,6 +157,7 @@ fn execution_repair_origin(action: &RouteAction) -> &'static str {
         .and_then(|details| details.get("origin"))
         .and_then(Value::as_str);
     match (action.source.as_str(), detail_origin) {
+        (_, Some("verification_source_changed")) => "verification_source_changed",
         ("external_validation_feedback", _) | (_, Some("external_validation")) => {
             "external_validation"
         }

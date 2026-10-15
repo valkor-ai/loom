@@ -310,6 +310,7 @@ pub enum ExecutionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RepairOrigin {
+    VerificationSourceChanged,
     TaskFailure,
     ExternalValidation,
     ReviewResult,

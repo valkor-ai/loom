@@ -813,6 +813,9 @@ fn build_repair_execution_request(
     if source_ref.is_some() {
         repair_core_fields.push("repairContext.sourceRef");
     }
+    if matches!(repair_origin, RepairOrigin::VerificationSourceChanged) {
+        repair_core_fields.push("repairContext.sourceChanges");
+    }
     if source_task_execution_request_ref.is_some() {
         repair_core_fields.push("source.taskExecutionRequestRef");
     }
@@ -924,6 +927,14 @@ fn build_repair_execution_request(
         repair_context["attemptCount"] = json!(attempt_count);
     }
     if let Some(source_ref) = source_ref {
+        if matches!(repair_origin, RepairOrigin::VerificationSourceChanged) {
+            let evidence = from_project_relative(project_root, &source_ref)
+                .ok()
+                .and_then(|path| state::store::read_json_value(&path).ok());
+            repair_context["sourceChanges"] = evidence.unwrap_or_else(|| json!({
+                "reason": "Verification source freshness is unconfirmed; inspect current source and rerun affected checks."
+            }));
+        }
         repair_context["sourceRef"] = json!(source_ref);
     }
     if !finding_refs.is_empty() {
@@ -2984,6 +2995,7 @@ fn safe_id(value: &str) -> String {
 
 fn repair_origin(origin: &str) -> RepairOrigin {
     match origin {
+        "verification_source_changed" => RepairOrigin::VerificationSourceChanged,
         "external_validation" => RepairOrigin::ExternalValidation,
         "review_result" => RepairOrigin::ReviewResult,
         "manual_review_resolution" => RepairOrigin::ManualReviewResolution,

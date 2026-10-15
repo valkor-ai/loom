@@ -276,6 +276,7 @@ where
     );
     let canonical_value =
         canonical_task_result_value(&normalized_result, &result, &required_top_level_fields)?;
+    crate::verification_source::capture(root, &persisted, &result)?;
     state::store::write_json_atomic(&persisted, &canonical_value)?;
     let persisted_value = state::store::read_json_value(&persisted)?;
     let _: TaskResult = serde_json::from_value(persisted_value.clone()).map_err(|error| {
