@@ -103,6 +103,9 @@ fn materialize_review_request_inner(
             ))
         })?;
     let task_results = load_task_results(root, &locator, &task_plan, &run)?;
+    if let Some(action) = refresh_verification_sources(root, &locator, &run, &task_results)? {
+        return Ok(action);
+    }
     if let Some(existing_request_ref) = phase.latest_refs.get("reviewRequestRef").cloned() {
         if state::inspect_request(delivery_core::InspectRequestInput {
             project_root: project_root.to_string(),
@@ -233,6 +236,55 @@ fn review_request_matches_current_task_results(
         .and_then(|field| field.value.as_str())
         .is_some_and(|actual| actual == task_plan_projection_fingerprint(task_plan));
     summaries_match && fingerprint_match && task_plan_match
+}
+
+fn refresh_verification_sources(
+    root: &Path,
+    locator: &DeliveryPhaseLocator,
+    run: &TaskPlanRun,
+    results: &[TaskResult],
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let mut changes = BTreeMap::new();
+    for result in results {
+        let file = task_result_file(
+            root,
+            locator,
+            &run.run_id,
+            &result.task_id,
+            &result.task_result_id,
+        );
+        let paths = crate::verification_source::changes(root, &file, result)?;
+        if !paths.is_empty() {
+            changes.insert(result.task_id.clone(), paths);
+        }
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    let file = delivery_dir(root, &locator.delivery_id)
+        .join("verification-invalidations")
+        .join(format!(
+            "{}_{}.json",
+            locator.phase_id,
+            state::store::now_millis()
+        ));
+    state::store::write_json_atomic(
+        &file,
+        &json!({
+            "reason": "Source changed after TaskResult acceptance. Rerun affected checks and submit fresh evidence before approval.",
+            "changedSourcesByTask": changes
+        }),
+    )?;
+    let source_ref = to_project_relative(root, &file)?;
+    Ok(Some(crate::repair::materialize_delivery_execution_repair(
+        &root.to_string_lossy(),
+        &locator.delivery_id,
+        &locator.phase_id,
+        "verification_source_changed",
+        Some(source_ref),
+        vec![],
+        changes.into_keys().collect(),
+    )))
 }
 
 fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
@@ -1177,6 +1229,11 @@ where
             )
         }
     };
+    if let Some(action) =
+        refresh_verification_sources(root, &locator, &current_run, &current_task_results)?
+    {
+        return Ok(action);
+    }
     if let Some(handoff) =
         normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
     {
@@ -2581,6 +2638,20 @@ where
             "manual_review_resolution_candidate_only",
         ));
     }
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.clone(),
+        phase_id: phase_id.clone(),
+    };
+    if matches!(
+        resolution.decision.as_str(),
+        "approve_override" | "approve_quality_waiver"
+    ) {
+        let (task_plan, run) = load_current_plan_and_run(root, &locator)?;
+        let task_results = load_task_results(root, &locator, &task_plan, &run)?;
+        if let Some(action) = refresh_verification_sources(root, &locator, &run, &task_results)? {
+            return Ok(action);
+        }
+    }
     let approved_next_phase = if matches!(
         resolution.decision.as_str(),
         "approve_override" | "approve_quality_waiver"
@@ -2612,10 +2683,6 @@ where
             "manual_review_resolution_candidate_only",
         ));
     }
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.clone(),
-        phase_id: phase_id.clone(),
-    };
     let persisted =
         manual_review_resolution_file(root, &locator, &resolution.manual_review_resolution_id);
     state::store::write_json_atomic(&persisted, &resolution)?;

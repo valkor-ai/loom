@@ -6685,6 +6685,67 @@ fn blocked_task_result_routes_to_architecture_repair() {
 }
 
 #[test]
+fn review_source_change_requires_fresh_task_evidence_before_completion() {
+    let fixture = Fixture::new("review-source-change");
+    let review_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(&fixture, &review_ref, "approved", "done", vec![]);
+    std::fs::write(
+        fixture.root.join("src/main.tsx"),
+        "// changed after verification\n",
+    )
+    .expect("change accepted source");
+    let repair = call_submit("loom.reviewAcceptFile", &review_ref, fixture.root_str());
+    assert_eq!(repair["state"], "auto_runnable", "{repair:#}");
+    assert_eq!(repair["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(
+        repair["next"]["repairOrigin"],
+        "verification_source_changed"
+    );
+    let repair_ref = repair["next"]["requestRef"].as_str().expect("repair ref");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["next"]["requestRef"], repair_ref, "{resumed:#}");
+    let fields = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_ref.to_string(),
+        group_id: "repair_execution_core".to_string(),
+    })
+    .expect("read source change repair context")
+    .fields;
+    assert!(
+        fields["repairContext.sourceChanges"].value["changedSourcesByTask"]
+            .as_object()
+            .expect("changed sources by task")
+            .values()
+            .any(|paths| paths
+                .as_array()
+                .is_some_and(|paths| paths.contains(&json!("src/main.tsx"))))
+    );
+    // The action must expose the invalidation cause through its required groups.
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_ref.to_string(),
+    })
+    .expect("inspect source repair");
+    assert!(
+        inspected
+            .read_groups
+            .iter()
+            .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+            .any(|field| field == "repairContext.sourceChanges"),
+        "{fields:?}"
+    );
+    let fresh_review_ref = complete_execution_requests_to_review(&fixture, repair_ref.to_string());
+    assert_ne!(fresh_review_ref, review_ref);
+    write_review_result_candidate(&fixture, &fresh_review_ref, "approved", "done", vec![]);
+    let done = call_submit(
+        "loom.reviewAcceptFile",
+        &fresh_review_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(done["state"], "done", "{done:#}");
+}
+
+#[test]
 fn review_accept_approved_marks_delivery_done() {
     let fixture = Fixture::new("review-approved");
     let review_request_ref = complete_task_execution_to_review(&fixture);
@@ -8228,6 +8289,15 @@ fn manual_review_resolution_routes_to_execution_repair() {
 
 #[test]
 fn manual_review_approval_materializes_next_phase_from_preview() {
+    check_manual_review_approval_source_freshness(false);
+}
+
+#[test]
+fn manual_review_source_change_cannot_activate_next_phase() {
+    check_manual_review_approval_source_freshness(true);
+}
+
+fn check_manual_review_approval_source_freshness(change_source: bool) {
     let fixture = Fixture::new("manual-review-approval-next-phase");
     let review_request_ref = complete_task_execution_to_review_with_candidate(
         &fixture,
@@ -8266,11 +8336,45 @@ fn manual_review_approval_materializes_next_phase_from_preview() {
         .to_string();
     write_manual_review_approval_candidate(&fixture, &manual_request_ref, "continue_to_next_phase");
 
+    if change_source {
+        std::fs::write(
+            fixture.root.join("src/main.tsx"),
+            "// changed after review\n",
+        )
+        .expect("change source before manual approval");
+    }
+
     let result = call_submit(
         "loom.reviewResolveFile",
         &manual_request_ref,
         fixture.root_str(),
     );
+
+    if change_source {
+        assert_eq!(
+            result["next"]["repairOrigin"], "verification_source_changed",
+            "{result:#}"
+        );
+        let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+        assert_eq!(active_phase_id(fixture.root_str(), &delivery_id), "phase-1");
+        let index: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                fixture
+                    .root
+                    .join(".loom/deliveries")
+                    .join(delivery_id)
+                    .join("index.json"),
+            )
+            .expect("read delivery index"),
+        )
+        .expect("parse delivery index");
+        assert!(!index["phases"]
+            .as_array()
+            .expect("phases")
+            .iter()
+            .any(|phase| phase["phaseId"] == "phase-2"));
+        return;
+    }
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
     assert_eq!(
