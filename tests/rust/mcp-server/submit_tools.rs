@@ -6686,14 +6686,42 @@ fn blocked_task_result_routes_to_architecture_repair() {
 
 #[test]
 fn review_source_change_requires_fresh_task_evidence_before_completion() {
+    check_review_source_change_recovery("source", "src/main.tsx");
+}
+
+#[test]
+fn review_config_change_requires_fresh_task_evidence_before_completion() {
+    check_review_source_change_recovery("config", "package.json");
+}
+
+#[test]
+fn review_source_directory_replacement_can_recover_and_complete() {
+    check_review_source_change_recovery("directory", "src/main.tsx");
+}
+
+fn check_review_source_change_recovery(change: &str, expected_path: &str) {
     let fixture = Fixture::new("review-source-change");
     let review_ref = complete_task_execution_to_review(&fixture);
     write_review_result_candidate(&fixture, &review_ref, "approved", "done", vec![]);
-    std::fs::write(
-        fixture.root.join("src/main.tsx"),
-        "// changed after verification\n",
-    )
-    .expect("change accepted source");
+    match change {
+        "config" => std::fs::write(fixture.root.join("package.json"), "{\"private\":true}")
+            .expect("change verification config"),
+        "directory" => {
+            std::fs::rename(
+                fixture.root.join("src"),
+                fixture.root.join(".loom/source-backup"),
+            )
+            .expect("preserve source directory");
+            std::fs::write(fixture.root.join("src"), "directory replaced by file")
+                .expect("replace source directory");
+        }
+        "source" => std::fs::write(
+            fixture.root.join("src/main.tsx"),
+            "// changed after verification\n",
+        )
+        .expect("change accepted source"),
+        _ => panic!("unknown source change scenario"),
+    }
     let repair = call_submit("loom.reviewAcceptFile", &review_ref, fixture.root_str());
     assert_eq!(repair["state"], "auto_runnable", "{repair:#}");
     assert_eq!(repair["next"]["executionKind"], "delivery_execution_repair");
@@ -6718,7 +6746,7 @@ fn review_source_change_requires_fresh_task_evidence_before_completion() {
             .values()
             .any(|paths| paths
                 .as_array()
-                .is_some_and(|paths| paths.contains(&json!("src/main.tsx"))))
+                .is_some_and(|paths| paths.contains(&json!(expected_path))))
     );
     // The action must expose the invalidation cause through its required groups.
     let inspected = state::inspect_request(InspectRequestInput {
@@ -6734,6 +6762,14 @@ fn review_source_change_requires_fresh_task_evidence_before_completion() {
             .any(|field| field == "repairContext.sourceChanges"),
         "{fields:?}"
     );
+    if change == "directory" {
+        std::fs::remove_file(fixture.root.join("src")).expect("remove replacement file");
+        std::fs::rename(
+            fixture.root.join(".loom/source-backup"),
+            fixture.root.join("src"),
+        )
+        .expect("restore source for fresh verification");
+    }
     let fresh_review_ref = complete_execution_requests_to_review(&fixture, repair_ref.to_string());
     assert_ne!(fresh_review_ref, review_ref);
     write_review_result_candidate(&fixture, &fresh_review_ref, "approved", "done", vec![]);
@@ -6784,6 +6820,125 @@ fn review_accept_approved_marks_delivery_done() {
     assert_eq!(status["deliveries"][0]["status"], "completed");
     let continued = continue_delivery(fixture.root_str());
     assert_eq!(continued["state"], "done", "{continued:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_runtime_state_does_not_loop_execution_or_block_review() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new("linked-runtime-state-review");
+    let execution_ref =
+        start_planned_task_execution_with_candidate(&fixture, valid_candidate_json());
+    std::fs::create_dir_all(fixture.root.join(".cache")).expect("create cache");
+    symlink("../.loom", fixture.root.join("src/control")).expect("link control state");
+    symlink("../.cache", fixture.root.join("src/runtime")).expect("link cache");
+    let review_ref = complete_execution_requests_to_review(&fixture, execution_ref);
+    std::fs::write(fixture.root.join(".loom/local-notes.json"), "{}").expect("update local notes");
+    std::fs::write(fixture.root.join(".cache/output.log"), "runtime output").expect("update cache");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["next"]["requestRef"], review_ref, "{resumed:#}");
+    write_review_result_candidate(&fixture, &review_ref, "approved", "done", vec![]);
+    let done = call_submit("loom.reviewAcceptFile", &review_ref, fixture.root_str());
+    assert_eq!(done["state"], "done", "{done:#}");
+}
+
+#[test]
+fn later_task_source_change_reverifies_only_stale_task_and_preserves_history() {
+    let fixture = Fixture::new("multi-task-source-freshness");
+    let first_ref = start_planned_task_execution_with_candidate(&fixture, valid_candidate_json());
+    let fields = execution_result_fields(&fixture, &first_ref);
+    let first_task_id = fields["source.taskId"]
+        .value
+        .as_str()
+        .expect("first task ID")
+        .to_string();
+    write_task_result_candidate(&fixture, &first_ref);
+    let mut action = call_submit("loom.recordTaskResultFile", &first_ref, fixture.root_str());
+    let first_evidence = capture_project_snapshot(&fixture, first_ref.clone())
+        .files
+        .into_iter()
+        .filter(|(path, _)| {
+            path.parent()
+                .and_then(|p| p.file_name())
+                .is_some_and(|name| name == first_task_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        first_evidence.len() >= 2,
+        "accepted result and source snapshot must exist"
+    );
+    let mut changed_source = false;
+    let mut later_task_ids = BTreeSet::new();
+    for _ in 0..8 {
+        action = resume_browser_runtime_action(&fixture, action);
+        if action["next"]["executionKind"] == "delivery_execution_repair" {
+            break;
+        }
+        assert_eq!(action["next"]["kind"], "execute_task", "{action:#}");
+        let request_ref = action["next"]["requestRef"]
+            .as_str()
+            .expect("next task request")
+            .to_string();
+        let fields = execution_result_fields(&fixture, &request_ref);
+        let task_id = fields["source.taskId"]
+            .value
+            .as_str()
+            .expect("later task ID")
+            .to_string();
+        assert_ne!(task_id, first_task_id);
+        later_task_ids.insert(task_id);
+        if !changed_source {
+            std::fs::write(
+                fixture.root.join("src/main.tsx"),
+                "// shared source changed by later task\n",
+            )
+            .expect("change shared implementation");
+            changed_source = true;
+        }
+        write_task_result_candidate(&fixture, &request_ref);
+        action = call_submit(
+            "loom.recordTaskResultFile",
+            &request_ref,
+            fixture.root_str(),
+        );
+    }
+    assert!(changed_source && !later_task_ids.is_empty());
+    assert_eq!(
+        action["next"]["repairOrigin"], "verification_source_changed",
+        "{action:#}"
+    );
+    let repair_ref = action["next"]["requestRef"]
+        .as_str()
+        .expect("repair request")
+        .to_string();
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["next"]["requestRef"], repair_ref, "{resumed:#}");
+    let fields = execution_result_fields(&fixture, &repair_ref);
+    assert_eq!(fields["source.taskId"].value, first_task_id);
+    let context = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_ref.clone(),
+        group_id: "repair_execution_core".to_string(),
+    })
+    .expect("read invalidation context")
+    .fields;
+    let changes = context["repairContext.sourceChanges"].value["changedSourcesByTask"]
+        .as_object()
+        .expect("changed tasks");
+    assert_eq!(
+        changes.keys().cloned().collect::<Vec<_>>(),
+        vec![first_task_id]
+    );
+    let review_ref = complete_execution_requests_to_review(&fixture, repair_ref);
+    write_review_result_candidate(&fixture, &review_ref, "approved", "done", vec![]);
+    let done = call_submit("loom.reviewAcceptFile", &review_ref, fixture.root_str());
+    assert_eq!(done["state"], "done", "{done:#}");
+    for (path, bytes) in first_evidence {
+        assert_eq!(
+            std::fs::read(fixture.root.join(path)).expect("old evidence preserved"),
+            bytes
+        );
+    }
 }
 
 #[test]
