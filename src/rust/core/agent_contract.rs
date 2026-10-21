@@ -261,7 +261,7 @@ pub fn finalize_output_contract(
                 &[]
             },
             field_policies,
-            Some(&legacy_shape_rules),
+            (key == "schemaShape").then_some(&legacy_shape_rules),
         );
         if key == "schemaShape" {
             apply_shape_rule_constraints(&mut field_contract, &legacy_shape_rules);
@@ -367,12 +367,23 @@ fn add_shared_write_contract_metadata(
     let mut required = BTreeSet::new();
     let mut not_applicable = BTreeSet::new();
     let mut preserve_on_repair = BTreeSet::new();
-    if let Some(field_contract) = contract
-        .get("schemaProjection")
-        .and_then(Value::as_object)
+    let projection = contract.get("schemaProjection").and_then(Value::as_object);
+    let grouped =
+        projection.is_some_and(|projection| projection.contains_key("fieldContractByTarget"));
+    let field_contracts = projection
         .and_then(|projection| projection.get("fieldContract"))
         .filter(|value| value.is_object())
-    {
+        .into_iter()
+        .chain(
+            projection
+                .and_then(|projection| projection.get("fieldContractByTarget"))
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|targets| targets.values())
+                .filter(|value| value.is_object()),
+        )
+        .collect::<Vec<_>>();
+    for field_contract in &field_contracts {
         collect_contract_paths(
             field_contract,
             "",
@@ -388,13 +399,10 @@ fn add_shared_write_contract_metadata(
         // policy when the current candidate schema actually declares the path.
         // Otherwise an unrelated policy can instruct an agent to write a field
         // that this artifact will correctly reject.
-        if !field_contract_declares_path(
-            contract
-                .get("schemaProjection")
-                .and_then(Value::as_object)
-                .and_then(|projection| projection.get("fieldContract")),
-            path,
-        ) {
+        if !field_contracts
+            .iter()
+            .any(|field_contract| field_contract_declares_path(Some(field_contract), path))
+        {
             continue;
         }
         if policy.owner == AgentFieldOwner::Mcp
@@ -436,8 +444,8 @@ fn add_shared_write_contract_metadata(
     contract.insert(
         "semanticRules".to_string(),
         json!({
-            "schemaAuthority": "outputContract.schemaProjection.fieldContract",
-            "agentOwnedRule": "Agent writes only agentOwnedPaths and omits notApplicablePaths.",
+            "schemaAuthority": if grouped { "outputContract.schemaProjection.fieldContractByTarget" } else { "outputContract.schemaProjection.fieldContract" },
+            "agentOwnedRule": if grouped { "Path lists summarize all targets. For each write target, write only Agent-owned fields declared by its fieldContractByTarget entry; omit not-applicable fields. Create the authorized output files when absent." } else { "Agent writes only agentOwnedPaths and omits notApplicablePaths." },
             "mcpOwnedRule": "MCP derives and persists mcpOwnedPaths after structural validation.",
             "repairRule": "Repair preserves preserveOnRepair paths and changes only the returned target and failed paths."
         }),
@@ -1601,6 +1609,54 @@ fn canonical_json(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grouped_contract_exposes_optional_proposals_and_target_field_ownership() {
+        let mut contract = json!({
+            "outlineSchemaShape": {
+                "type": "object", "required": ["status"],
+                "properties": {
+                    "status": {"type": "string"},
+                    "groups": {"type": "array", "items": {"type": "object"}}
+                }
+            },
+            "groupSchemaShape": {
+                "type": "object", "required": ["status", "group"],
+                "properties": {
+                    "status": {"type": "string"},
+                    "group": {"type": "object"},
+                    "tasks": {"type": "array", "items": {"type": "object"}}
+                }
+            }
+        });
+        finalize_output_contract(&mut contract, &BTreeMap::new());
+        for (target, field) in [("outline", "groups"), ("group", "tasks")] {
+            assert!(contract
+                .pointer(&format!(
+                    "/schemaProjection/fieldContractByTarget/{target}/properties/{field}"
+                ))
+                .is_some());
+            assert!(contract["agentOwnedPaths"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field)));
+        }
+        assert!(contract["requiredPaths"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("status")));
+        assert_eq!(
+            contract["semanticRules"]["schemaAuthority"],
+            json!("outputContract.schemaProjection.fieldContractByTarget")
+        );
+        assert!(contract["semanticRules"]["agentOwnedRule"]
+            .as_str()
+            .unwrap()
+            .contains("each write target"));
+        let original = contract.clone();
+        finalize_output_contract(&mut contract, &BTreeMap::new());
+        assert_eq!(contract, original);
+    }
 
     #[test]
     fn nullable_manual_shapes_accept_null_without_relaxing_object_values() {
