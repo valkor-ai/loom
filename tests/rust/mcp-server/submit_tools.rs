@@ -9275,6 +9275,28 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         ));
     write_taskplan_grouped_candidates(&fixture, &repair_action_ref);
 
+    let repair_write = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        group_id: "taskplan_repair_write_contract".to_string(),
+    })
+    .expect("read grouped repair ownership");
+    let owned = repair_write.fields["outputContract.agentOwnedPaths"]
+        .value
+        .as_array()
+        .unwrap();
+    assert!(owned.contains(&json!("groups")), "{owned:?}");
+    assert!(owned.contains(&json!("tasks")), "{owned:?}");
+    assert_eq!(
+        repair_write.fields["outputContract.semanticRules"].value["schemaAuthority"],
+        json!("outputContract.schemaProjection.fieldContractByTarget")
+    );
+    let targets = repair_write.fields["outputContract.writeTargets"]
+        .value
+        .as_array()
+        .unwrap();
+    assert_eq!(targets.len(), 2);
+
     let result = call_submit(
         "loom.repairSubmitFile",
         &repair_action_ref,

@@ -1356,6 +1356,7 @@ fn materialize_taskplan_repair_action(
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
+        "outputContract.writeTargets",
         "outputContract.outlineResultTemplate",
         "outputContract.groupResultTemplate",
     ];

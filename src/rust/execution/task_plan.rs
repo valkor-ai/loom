@@ -876,12 +876,12 @@ where
     normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
     assign_single_owner_architecture_quality_refs(&aac, &mut tasks);
     let engineering_quality_requirements =
-        normalize_engineering_quality_requirements(&baseline, &mut tasks);
+        normalize_engineering_quality_requirements(&baseline, &aac, &mut tasks);
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements =
         normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs, &baseline);
-    normalize_structured_verification_intents(&aac, &mut tasks);
+    normalize_structured_verification_intents(&baseline, &aac, &mut tasks);
     normalize_maintenance_behavior_verification_intents(&mut tasks, &pgc);
     normalize_task_verification_detail_refs(&mut tasks, &pgc, &aac);
     normalize_implementation_obligations(&baseline, &aac, &mut tasks);
@@ -4767,7 +4767,8 @@ fn task_requires_explicit_browser_owner(task: &TaskDefinition) -> bool {
             .chain(intent.acceptable_evidence.iter())
             .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
     });
-    let owns_browser_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
+    let owns_browser_suite_setup = task_requires_browser_verification(task)
+        && matches!(task.task_kind, TaskKind::VerificationIncrement)
         && task.implementation_actions.iter().any(|action| {
             matches!(
                 action,
@@ -6891,10 +6892,7 @@ fn normalize_implementation_obligations(
     tasks: &mut [TaskDefinition],
 ) {
     let stack_signals = stack_signals_from_baseline(&baseline.stack);
-    let persistence_selected = has_persistence_quality_signal(&stack_signals)
-        && !stack_signals
-            .get("persistence")
-            .is_some_and(|value| selection_is_absent(value));
+    let persistence_selected = phase_uses_persistence(baseline, aac);
     for task in tasks {
         let mut obligations = Vec::new();
         let artifacts = &task.write_boundary.artifact_refs;
@@ -6952,7 +6950,7 @@ fn normalize_implementation_obligations(
             );
         }
 
-        if task_directly_owns_persistence_mapping(task) {
+        if persistence_selected && task_directly_owns_persistence_mapping(task) {
             push_task_implementation_obligation(
                 &mut obligations,
                 task,
@@ -7462,12 +7460,17 @@ fn artifact_refs_for(artifacts: &TaskArtifactRefs, field: &str) -> TaskArtifactR
 }
 
 fn normalize_structured_verification_intents(
+    baseline: &contracts::TechnicalBaselineContract,
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) {
-    let persistence_task_ids = persistence_quality_task_ids(tasks)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    let persistence_task_ids = if phase_uses_persistence(baseline, aac) {
+        persistence_quality_task_ids(tasks)
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
     for task in tasks.iter_mut() {
         let interface_refs = task_interface_refs_for_verification(task);
         let interfaces = aac
@@ -8026,10 +8029,11 @@ fn api_contract_verification_obligations() -> Vec<String> {
 
 fn normalize_engineering_quality_requirements(
     baseline: &contracts::TechnicalBaselineContract,
+    aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) -> Vec<EngineeringQualityRequirement> {
     let stack_signals = stack_signals_from_baseline(&baseline.stack);
-    if !has_persistence_quality_signal(&stack_signals) {
+    if !phase_uses_persistence(baseline, aac) {
         for task in tasks {
             task.engineering_quality_requirement_refs.clear();
         }
@@ -8170,6 +8174,21 @@ fn has_persistence_quality_signal(signals: &BTreeMap<String, String>) -> bool {
     signals.contains_key("persistence")
         || signals.contains_key("dataAccess")
         || signals.contains_key("migrationTool")
+}
+
+fn phase_uses_persistence(
+    baseline: &contracts::TechnicalBaselineContract,
+    aac: &ArchitectureArtifactContract,
+) -> bool {
+    if aac
+        .data_model
+        .pointer("/dataArchitecture/persistenceMode")
+        .and_then(Value::as_str)
+        == Some("no_persistence")
+    {
+        return false;
+    }
+    has_persistence_quality_signal(&stack_signals_from_baseline(&baseline.stack))
 }
 
 fn persistence_quality_task_ids(tasks: &[TaskDefinition]) -> Vec<String> {
@@ -9402,6 +9421,69 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_entities_keep_domain_checks_without_storage_obligations() {
+        for (stack, mode, persistence_expected) in [
+            (json!({}), "no_persistence", false),
+            (json!({"database": "postgres"}), "no_persistence", false),
+            (json!({"database": "postgres"}), "selected_stack", true),
+        ] {
+            let baseline: contracts::TechnicalBaselineContract = serde_json::from_value(json!({
+                "schemaVersion": "1.0", "technicalBaselineId": "tbr-memory",
+                "deliveryId": "delivery-memory", "phaseId": "phase-1", "status": "confirmed",
+                "source": "detected_from_repo", "projectKind": "existing_project", "scope": "project",
+                    "stack": stack, "approval": {"type": "policy_auto_accept", "reason": "Repository facts"},
+                "confidence": "high", "createdAt": "0", "updatedAt": "0"
+            })).expect("baseline");
+            let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+                "schemaVersion": "1.0", "architectureArtifactContractId": "aac-memory",
+                "deliveryId": "delivery-memory", "phaseId": "phase-1", "status": "ready",
+                "source": {"planningGenerationContractId": "pgc-memory", "technicalBaselineId": "tbr-memory"},
+                "engineeringBoundary": {},
+                "dataModel": {"entities": [{"entityId": "entity-job"}], "dataArchitecture": {"persistenceMode": mode}},
+                "architectureQuality": {"decisions": [], "nfrs": [], "risks": []},
+                "handoff": {"readyForTaskPlan": true, "blockingReasons": [], "nextNode": "task_plan"},
+                "createdAt": "0", "updatedAt": "0"
+            })).expect("architecture");
+            let mut task = browser_task(0);
+            task.task_kind = TaskKind::FeatureIncrement;
+            task.frontend_experience_requirement = None;
+            task.implementation_actions = vec![ImplementationAction::CreateOrUpdateBusinessRule];
+            task.write_boundary.artifact_refs.entities = vec!["entity-job".to_string()];
+            let mut tasks = vec![task];
+            let requirements =
+                normalize_engineering_quality_requirements(&baseline, &aac, &mut tasks);
+            normalize_structured_verification_intents(&baseline, &aac, &mut tasks);
+            normalize_implementation_obligations(&baseline, &aac, &mut tasks);
+            assert_eq!(!requirements.is_empty(), persistence_expected);
+            assert_eq!(
+                !tasks[0].engineering_quality_requirement_refs.is_empty(),
+                persistence_expected
+            );
+            assert_eq!(
+                tasks[0].verification_intents.iter().any(|intent| intent
+                    .verification_id
+                    .starts_with("verify-persistence-restart-")),
+                persistence_expected
+            );
+            assert_eq!(
+                tasks[0]
+                    .implementation_obligations
+                    .iter()
+                    .any(|obligation| obligation.kind == "persistence_mapping"),
+                persistence_expected
+            );
+            assert!(tasks[0]
+                .implementation_obligations
+                .iter()
+                .any(|obligation| obligation.kind == "entity_contract"));
+            assert!(tasks[0]
+                .implementation_obligations
+                .iter()
+                .any(|obligation| obligation.kind == "business_rule"));
+        }
+    }
+
+    #[test]
     fn implementation_obligations_use_structured_verification_refs_not_behavior_keywords() {
         let task = TaskDefinition {
             task_id: "task-owned".to_string(),
@@ -9581,6 +9663,22 @@ mod tests {
             issues.is_empty(),
             "business UI tasks are closed by the MCP browser task"
         );
+    }
+
+    #[test]
+    fn verification_tasks_require_browser_evidence_only_for_owned_browser_scope() {
+        let mut task = browser_task(2);
+        task.task_kind = TaskKind::VerificationIncrement;
+        task.implementation_actions = vec![ImplementationAction::AddOrUpdateTests];
+        let mut tasks = vec![task.clone()];
+        assert_eq!(validate_browser_verification_assignments(&tasks).len(), 1);
+        task.frontend_experience_requirement = None;
+        tasks[0] = task;
+        normalize_browser_verification_assignments(&mut tasks);
+        assert!(validate_browser_verification_assignments(&tasks).is_empty());
+        assert!(tasks[0].verification_intents.iter().all(|intent| !intent
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation)));
     }
 
     #[test]
