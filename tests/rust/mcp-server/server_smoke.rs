@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 #[test]
 fn stdio_server_initializes_and_lists_batch_2_surface() {
-    let mut client = McpProcess::start();
+    let fixture = TestProject::new("tool-surface");
+    let mut client = McpProcess::start_with_loom_home(&fixture.loom_home);
 
     let initialize = client.request(json!({
         "jsonrpc": "2.0",
@@ -76,19 +77,13 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
     assert!(template_uris
         .contains(&"loom://projects/{projectId}/requests/{requestId}/field-groups/{groupId}"));
 
-    let project_root = std::env::current_dir()
-        .expect("current dir")
-        .canonicalize()
-        .expect("canonical current dir")
-        .to_string_lossy()
-        .into_owned();
     let status = client.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
         "params": {
             "name": "loom.status",
-            "arguments": { "projectRoot": project_root }
+            "arguments": { "projectRoot": fixture.project_root }
         }
     }));
     assert_eq!(status["result"]["structuredContent"]["state"], "failed");
@@ -211,10 +206,6 @@ struct McpProcess {
 }
 
 impl McpProcess {
-    fn start() -> Self {
-        Self::start_with_loom_home(Path::new(""))
-    }
-
     fn start_with_loom_home(loom_home: &Path) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_loom-mcp-server"));
         if !loom_home.as_os_str().is_empty() {
