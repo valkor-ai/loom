@@ -415,6 +415,8 @@ pub struct TaskDefinitionProposalAgentWritable {
     pub objective: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Use verification_increment for inspection or verification without planned
+    /// source changes. An omitted hint defaults to feature_increment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_kind_hint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
