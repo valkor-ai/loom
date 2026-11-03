@@ -887,6 +887,7 @@ where
     normalize_implementation_obligations(&baseline, &aac, &mut tasks);
     let code_quality_requirements =
         normalize_code_quality_requirements(&baseline, &aac, &mut tasks);
+    normalize_verification_task_intents(&mut tasks);
     issues.extend(validate_quality_requirement_ownership(
         &tasks,
         &engineering_quality_requirements,
@@ -6279,7 +6280,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "First write outputContract.outlineFile.",
             "Then write one group file per outline.groups[].groupId using outputContract.groupFilePattern.",
             "Do not write the accepted final TaskPlan artifact.",
-            "The outline and group files are semantic proposals only; Loom materializes canonical task and group ids after submission."
+            "The outline and group files are semantic proposals only; Loom materializes canonical task and group ids after submission.",
+            "Set taskKindHint=verification_increment for tasks that only inspect existing implementation, rerun tests, or verify delivery without planned code changes. Omitted hints default to feature_increment; do not use that default for a verification-only task."
         ],
         "scopeAndReferenceRules": [
             "Use the transferred detail and architecture context to describe task intent, but do not copy scope refs, acceptance refs, artifact refs, implementation actions, verification ids, or quality fields into proposals.",
@@ -7605,6 +7607,31 @@ fn normalize_structured_verification_intents(
     }
 }
 
+fn normalize_verification_task_intents(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        if task.task_kind != TaskKind::VerificationIncrement
+            || !task.verification_intents.is_empty()
+        {
+            continue;
+        }
+        // A verification task need not own implementation artifacts or an API.
+        // Its declared objective still requires evidence before completion.
+        task.verification_intents.push(VerificationIntent {
+            verification_id: format!("verify-{}-objective", normalized_identifier(&task.task_id)),
+            acceptance_refs: task.acceptance_refs.clone(),
+            requirement_detail_refs: task.requirement_detail_refs.clone(),
+            behavior: task.objective.clone(),
+            preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+            acceptable_evidence: vec![
+                VerificationEvidence::AutomatedTest,
+                VerificationEvidence::RuntimeApiCheck,
+                VerificationEvidence::ManualCommandOutput,
+                VerificationEvidence::StaticCheck,
+            ],
+        });
+    }
+}
+
 fn normalize_maintenance_behavior_verification_intents(
     tasks: &mut [TaskDefinition],
     pgc: &contracts::PlanningGenerationContract,
@@ -8896,6 +8923,40 @@ mod tests {
             "updatedAt": "2026-09-13T00:00:00Z"
         }))
         .expect("maintenance planning contract")
+    }
+
+    #[test]
+    fn verification_objectives_get_evidence_without_inventing_artifact_ownership() {
+        let mut task = browser_task(0);
+        task.task_kind = TaskKind::VerificationIncrement;
+        task.frontend_experience_requirement = None;
+        task.implementation_actions = vec![ImplementationAction::AddOrUpdateTests];
+        task.objective = "Rerun existing library regressions without editing source.".to_string();
+        let mut unrelated = task.clone();
+        unrelated.task_kind = TaskKind::ConfigurationSupport;
+        let mut scoped = task.clone();
+        scoped.verification_intents = browser_task(1).verification_intents;
+        let original_scoped = scoped.verification_intents.clone();
+        let mut tasks = vec![task, unrelated, scoped];
+
+        normalize_verification_task_intents(&mut tasks);
+        normalize_verification_task_intents(&mut tasks);
+
+        assert_eq!(tasks[0].verification_intents.len(), 1);
+        assert_eq!(
+            tasks[0].verification_intents[0].behavior,
+            tasks[0].objective
+        );
+        assert!(tasks[0].write_boundary.artifact_refs.modules.is_empty());
+        assert!(tasks[0].implementation_obligations.is_empty());
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::AgentReviewExplanation));
+        assert!(tasks[1].verification_intents.is_empty());
+        assert_eq!(tasks[2].verification_intents, original_scoped);
     }
 
     #[test]

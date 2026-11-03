@@ -2376,16 +2376,31 @@ fn validate_verification_provenance(
         }
         if let Some(provenance) = verification.provenance.as_ref() {
             for reference in &provenance.test_case_refs {
-                if reference.contains('/') || reference.contains('\\') {
-                    if !is_safe_project_relative_path(reference)
-                        || !from_project_relative(project_root, reference)
+                let selector = reference.split_once("::");
+                let file = selector.map_or(reference.as_str(), |(file, _)| file);
+                // Rust module::test names are identifiers, while pytest node ids
+                // carry a file path before :: and may contain slashes after it.
+                if file.contains('/')
+                    || file.contains('\\')
+                    || (selector.is_some()
+                        && (Path::new(file).extension().is_some()
+                            || project_root.join(file).exists()))
+                {
+                    if !is_safe_project_relative_path(file)
+                        || !from_project_relative(project_root, file)
                             .ok()
-                            .is_some_and(|path| path.exists())
+                            .and_then(|path| path.canonicalize().ok())
+                            .is_some_and(|path| {
+                                path.is_file()
+                                    && project_root
+                                        .canonicalize()
+                                        .is_ok_and(|root| path.starts_with(root))
+                            })
                     {
                         issues.push(issue(
                             "TASK_RESULT_VERIFICATION_PROVENANCE_INVALID",
                             "verificationResults[].provenance.testCaseRefs",
-                            "Test case file references must point to existing project files.",
+                            "Test case file references must point to existing files inside the project. Use a project-relative file path, optionally followed by ::test_name; keep the command in provenance.command.",
                         ));
                     }
                 }
@@ -6824,6 +6839,119 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_only_completion_still_requires_passed_evidence() {
+        let mut task = compact_projection_task();
+        task.task_kind = TaskKind::VerificationIncrement;
+        task.verification_intents = vec![contracts::VerificationIntent {
+            verification_id: "verify-existing-objective".to_string(),
+            acceptance_refs: vec![],
+            requirement_detail_refs: vec![],
+            behavior: "Verify existing behavior.".to_string(),
+            preferred_evidence: vec![VerificationEvidence::AutomatedTest],
+            acceptable_evidence: vec![VerificationEvidence::AutomatedTest],
+        }];
+        let mut result = completed_result_with_verification_history();
+        result.changed_files.clear();
+        result.no_change_reason = Some(contracts::TaskResultNoChangeReason {
+            code: "VERIFICATION_ONLY_TASK".to_string(),
+            summary: "No edits required.".to_string(),
+        });
+        let mut raw = serde_json::to_value(&result).unwrap();
+        normalize_verification_result_machine_fields(raw.as_object_mut().unwrap(), &task, None);
+        let result: TaskResult = serde_json::from_value(raw).unwrap();
+        assert!(allows_empty_changed_files(&task, &result));
+        let mut issues = vec![];
+        validate_verification_results(&result, &task, &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TASK_RESULT_STATUS_INCONSISTENT"));
+    }
+
+    #[test]
+    fn verification_provenance_accepts_test_selectors_without_weakening_file_checks() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-test-case-refs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("tests/test_api.py"), "def test_upload(): pass").unwrap();
+        std::fs::write(root.join("test_api.py"), "def test_upload(): pass").unwrap();
+        let mut result = completed_result_with_verification_history();
+        result.verification_results = vec![contracts::VerificationResult {
+            verification_id: "verify-upload".to_string(),
+            status: "passed".to_string(),
+            evidence_type: Some(VerificationEvidence::AutomatedTest),
+            summary: "Upload regression passed.".to_string(),
+            provenance: None,
+            browser_checks: vec![],
+        }];
+        let mut outcomes = Vec::new();
+        for (reference, valid) in [
+            ("tests/test_api.py", true),
+            (
+                "tests/test_api.py::TestUpload::test_upload[image/png]",
+                true,
+            ),
+            ("test_api.py::test_upload", true),
+            ("upload-check", true),
+            ("upload::tests::test_upload", true),
+            ("tests/missing.py::test_upload", false),
+            ("missing.py::test_upload", false),
+            ("tests::test_upload", false),
+            ("../test_api.py::test_upload", false),
+            ("/tests/test_api.py::test_upload", false),
+            ("tests\\test_api.py::test_upload", false),
+            (".loom/result.json::test_upload", false),
+        ] {
+            result.verification_results[0].provenance = Some(contracts::VerificationProvenance {
+                test_case_refs: vec![reference.to_string()],
+                command: Some("pytest tests/test_api.py".to_string()),
+                exit_code: Some(0),
+                ..Default::default()
+            });
+            let mut issues = Vec::new();
+            validate_verification_provenance(&root, &result, &mut issues);
+            outcomes.push((reference, valid, issues));
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                std::env::current_exe().unwrap(),
+                root.join("tests/external.py"),
+            )
+            .unwrap();
+            result.verification_results[0]
+                .provenance
+                .as_mut()
+                .unwrap()
+                .test_case_refs = vec!["tests/external.py::test_upload".to_string()];
+            let mut issues = Vec::new();
+            validate_verification_provenance(&root, &result, &mut issues);
+            outcomes.push(("tests/external.py::test_upload", false, issues));
+        }
+        result.verification_results[0]
+            .provenance
+            .as_mut()
+            .unwrap()
+            .test_case_refs
+            .clear();
+        let mut missing_refs = Vec::new();
+        validate_verification_provenance(&root, &result, &mut missing_refs);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        for (reference, valid, issues) in outcomes {
+            assert_eq!(issues.is_empty(), valid, "{reference}: {issues:#?}");
+        }
+        assert!(missing_refs.iter().any(|issue| {
+            issue.field_path.as_deref() == Some("verificationResults[].provenance.testCaseRefs")
+        }));
+    }
 
     fn browser_profile() -> BrowserVerificationProfile {
         BrowserVerificationProfile {

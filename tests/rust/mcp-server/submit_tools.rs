@@ -6685,6 +6685,140 @@ fn blocked_task_result_routes_to_architecture_repair() {
 }
 
 #[test]
+fn standalone_verification_task_retains_test_evidence_without_source_changes() {
+    let fixture = Fixture::new("standalone-verification-evidence");
+    let architecture_ref = start_existing_project_architecture_flow(&fixture);
+    let planned = complete_architecture_sections_with(
+        &fixture,
+        &architecture_ref,
+        architecture_section_candidate_without_interfaces_json,
+    );
+    let plan_ref = planned["next"]["requestRef"].as_str().expect("plan ref");
+    let delivery_id = request_delivery_id(fixture.root_str(), plan_ref);
+    write_taskplan_grouped_candidates(&fixture, plan_ref);
+    let group_path = fixture
+        .root
+        .join(first_taskplan_group_file(&fixture, plan_ref));
+    let mut group: Value = serde_json::from_slice(&std::fs::read(&group_path).unwrap()).unwrap();
+    group["tasks"].as_array_mut().unwrap().push(json!({
+        "proposalId": "verify-existing",
+        "title": "Verify existing behavior",
+        "objective": "Run the existing regression tests and record observed results without modifying source.",
+        "taskKindHint": "verification_increment",
+        "dependsOn": ["task-account-001"]
+    }));
+    write_json_atomic(&group_path, &group).unwrap();
+    let mut action = call_submit("loom.taskPlanAcceptFile", plan_ref, fixture.root_str());
+    assert_eq!(action["next"]["kind"], "execute_task", "{action:#}");
+    let plan_path = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let plan: Value =
+        serde_json::from_slice(&std::fs::read(fixture.root.join(plan_path)).unwrap()).unwrap();
+    let verification = plan["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["taskId"] == "verify-existing")
+        .expect("verification task");
+    assert_eq!(verification["taskKind"], "verification_increment");
+    assert!(
+        !verification["verificationIntents"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "verification task must have an evidence contract: {verification:#}"
+    );
+
+    let mut verified = false;
+    for _ in 0..8 {
+        action = resume_browser_runtime_action(&fixture, action);
+        if action["next"]["artifactKind"] == "review_result" {
+            break;
+        }
+        assert_eq!(action["next"]["kind"], "execute_task", "{action:#}");
+        let request_ref = action["next"]["requestRef"].as_str().unwrap().to_string();
+        let fields = state::read_request_fields(ReadRequestFieldsInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: request_ref.clone(),
+            fields: vec!["source.taskId".to_string()],
+        })
+        .unwrap()
+        .fields;
+        let is_verification = fields["source.taskId"].value == "verify-existing";
+        write_task_result_candidate(&fixture, &request_ref);
+        if is_verification {
+            std::fs::create_dir_all(fixture.root.join("tests")).unwrap();
+            std::fs::write(
+                fixture.root.join("tests/test_existing.py"),
+                "def test_existing(): pass\n",
+            )
+            .unwrap();
+            mutate_task_result_candidate(&fixture, &request_ref, |result| {
+                result["changedFiles"] = json!([]);
+                result["noChangeReason"] = json!({"code": "VERIFICATION_ONLY_TASK", "summary": "Existing tests were run; no source changes required."});
+                for check in result["verificationResults"].as_array_mut().unwrap() {
+                    check["provenance"] = json!({
+                        "testCaseRefs": ["tests/test_existing.py::test_existing"],
+                        "command": "pytest tests/test_existing.py::test_existing", "exitCode": 0
+                    });
+                }
+            });
+        }
+        action = call_submit(
+            "loom.recordTaskResultFile",
+            &request_ref,
+            fixture.root_str(),
+        );
+        assert_ne!(
+            action["next"]["artifactKind"], "task_result_repair",
+            "{action:#}"
+        );
+        if is_verification {
+            let result_ref =
+                latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
+            let result: Value =
+                serde_json::from_slice(&std::fs::read(fixture.root.join(result_ref)).unwrap())
+                    .unwrap();
+            assert_eq!(result["changedFiles"], json!([]));
+            assert_eq!(
+                result["verificationResults"][0]["provenance"]["testCaseRefs"],
+                json!(["tests/test_existing.py::test_existing"])
+            );
+            assert_eq!(
+                result["verificationResults"][0]["provenance"]["exitCode"],
+                0
+            );
+            verified = true;
+        }
+    }
+    assert!(verified, "verification task must execute");
+    let review_ref = action["next"]["requestRef"].as_str().unwrap();
+    assert_eq!(
+        action["next"]["artifactKind"], "review_result",
+        "{action:#}"
+    );
+    write_review_result_candidate(&fixture, review_ref, "approved", "done", vec![]);
+    std::fs::write(
+        fixture.root.join("tests/test_existing.py"),
+        "def test_existing(): assert False\n",
+    )
+    .unwrap();
+    let repair = call_submit("loom.reviewAcceptFile", review_ref, fixture.root_str());
+    assert_eq!(
+        repair["next"]["repairOrigin"], "verification_source_changed",
+        "{repair:#}"
+    );
+    let repair_ref = repair["next"]["requestRef"].as_str().unwrap().to_string();
+    std::fs::write(
+        fixture.root.join("tests/test_existing.py"),
+        "def test_existing(): pass\n",
+    )
+    .unwrap();
+    let review_ref = complete_execution_requests_to_review(&fixture, repair_ref);
+    write_review_result_candidate(&fixture, &review_ref, "approved", "done", vec![]);
+    let done = call_submit("loom.reviewAcceptFile", &review_ref, fixture.root_str());
+    assert_eq!(done["state"], "done", "{done:#}");
+}
+
+#[test]
 fn review_source_change_requires_fresh_task_evidence_before_completion() {
     check_review_source_change_recovery("source", "src/main.tsx");
 }

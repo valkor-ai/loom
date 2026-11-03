@@ -307,7 +307,7 @@ pub(crate) fn task_result_schema_shape(
         "noChangeReason".to_string(),
         json!({
             "shape": "object or null",
-            "code": "string",
+            "code": "NO_CODE_CHANGE_REQUIRED | VERIFICATION_ONLY_TASK | ENVIRONMENT_CHECK_ONLY",
             "summary": "string"
         }),
     );
@@ -318,7 +318,7 @@ pub(crate) fn task_result_schema_shape(
         "provenance": {
             "evidenceRefs": ["project-relative test report, command output, or other concrete evidence ref"],
             "changedFiles": ["project-relative path changed by the task"],
-            "testCaseRefs": ["test file, test case, or check id"],
+            "testCaseRefs": ["project-relative test file, file::test_name (for example tests/test_api.py::test_upload), or named test/check id; required for passed automated_test evidence"],
             "command": "exact command when a command was run, otherwise null",
             "exitCode": "integer when a command was run, otherwise null"
         }
