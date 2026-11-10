@@ -447,10 +447,10 @@ fn write_groups_receive_shared_contract_metadata_without_reading_private_schema(
     assert!(field(&fields, "outputContract.contractFingerprint")
         .as_str()
         .is_some_and(|value| value.starts_with("sha256:")));
-    assert!(field(&fields, "outputContract.agentOwnedPaths").is_array());
-    assert!(field(&fields, "outputContract.mcpOwnedPaths")
+    assert!(field(&fields, "outputContract.agentOwnedPaths")
         .as_array()
-        .is_some_and(|paths| paths.contains(&json!("source"))));
+        .is_some_and(|paths| paths.contains(&json!("reasoningSummary"))));
+    assert_eq!(field(&fields, "outputContract.mcpOwnedPaths"), &json!([]));
     assert!(field(&fields, "outputContract.requiredPaths").is_array());
     assert!(field(&fields, "outputContract.notApplicablePaths").is_array());
     assert!(field(&fields, "outputContract.preserveOnRepair").is_array());

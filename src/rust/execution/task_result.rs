@@ -197,6 +197,17 @@ where
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
+    let submission_issues = submitted_verification_result_issues(&raw_result, &task);
+    if !submission_issues.is_empty() {
+        return repair_task_result_or_error(
+            input,
+            authorized,
+            target.path.clone(),
+            submission_issues,
+            repair_submit,
+            None,
+        );
+    }
     let normalized_result = normalize_task_result_machine_fields(
         raw_result.clone(),
         &authorized.request_id,
@@ -1830,6 +1841,24 @@ fn ordered_machine_item(
     }
 }
 
+fn submitted_verification_result_issues(
+    raw_result: &Value,
+    task: &TaskDefinition,
+) -> Vec<delivery_core::RepairIssue> {
+    if raw_result
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .is_some_and(|results| results.len() > task.verification_intents.len())
+    {
+        return vec![issue(
+            "TASK_RESULT_VERIFICATION_RESULTS_EXCEED_INTENTS",
+            "verificationResults",
+            "Submit one result per canonical verification intent. Extra results cannot be matched and would lose evidence. Preserve additional command evidence in the matching result's provenance and summary; never invent verification intents or ids.",
+        )];
+    }
+    Vec::new()
+}
+
 fn normalize_verification_result_machine_fields(
     object: &mut serde_json::Map<String, Value>,
     task: &TaskDefinition,
@@ -2054,6 +2083,13 @@ fn normalize_requirement_detail_evidence_machine_fields(
                         .and_then(Value::as_array)
                         .into_iter()
                         .flatten()
+                        .chain(
+                            verification
+                                .pointer("/provenance/testCaseRefs")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten(),
+                        )
                         .chain(
                             verification
                                 .pointer("/provenance/changedFiles")
@@ -4719,6 +4755,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         .cloned();
 
     let raw_result = read_project_json_value(root, &target_file)?;
+    let submission_issues = submitted_verification_result_issues(&raw_result, &hydrated_task);
     let normalized_result = normalize_task_result_machine_fields(
         raw_result,
         &request_id,
@@ -4727,7 +4764,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         &hydrated_task,
         browser_profile.as_ref(),
     );
-    let (issues, previous_changed_files) =
+    let (mut issues, previous_changed_files) =
         match serde_json::from_value::<TaskResult>(normalized_result.clone()) {
             Ok(result) => {
                 let previous_changed_files =
@@ -4758,6 +4795,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
                 Vec::new(),
             ),
         };
+    issues.extend(submission_issues);
     if issues.is_empty() {
         return Ok(None);
     }

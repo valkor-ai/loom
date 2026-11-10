@@ -30,7 +30,7 @@ use crate::{
 
 // Bump this whenever the agent-facing write shape or its validation boundary changes.
 // Existing requests are refreshed instead of handing an agent a stale producer contract.
-const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.1";
+const TECHNICAL_BASELINE_PROTOCOL_VERSION: &str = "2.2";
 
 struct TechnicalBaselineSelectionProjections {
     recommendation_context: Value,

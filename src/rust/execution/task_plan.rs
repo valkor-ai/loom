@@ -1830,10 +1830,19 @@ fn canonicalize_task_ownership(
         };
         let owner = &mut tasks[owner_index];
         push_unique(&mut owner.requirement_detail_refs, detail.detail_id.clone());
-        merge_detail_artifact_refs(
-            &mut owner.write_boundary.artifact_refs,
-            &coverage.artifact_refs,
-        );
+        if is_business_owner_task(owner) {
+            merge_detail_artifact_refs(
+                &mut owner.write_boundary.artifact_refs,
+                &coverage.artifact_refs,
+            );
+        } else {
+            for interface_ref in &coverage.artifact_refs.interfaces {
+                push_unique(
+                    &mut owner.write_boundary.artifact_refs.consumed_interfaces,
+                    interface_ref.clone(),
+                );
+            }
+        }
         for scope_ref in &detail.scope_refs {
             push_unique(&mut owner.scope_refs, scope_ref.clone());
         }
@@ -2032,6 +2041,7 @@ fn derive_consumed_interface_ownership(
 }
 
 fn canonicalize_group_ownership(groups: &mut [TaskPlanGroup], tasks: &[TaskDefinition]) {
+    let verification_only = plan_is_verification_only(tasks);
     for group in groups {
         let group_tasks = tasks
             .iter()
@@ -2039,14 +2049,14 @@ fn canonicalize_group_ownership(groups: &mut [TaskPlanGroup], tasks: &[TaskDefin
             .collect::<Vec<_>>();
         group.scope_refs = group_tasks
             .iter()
-            .filter(|task| is_business_owner_task(task))
+            .filter(|task| is_business_owner_task(task) || verification_only)
             .flat_map(|task| task.scope_refs.iter().cloned())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         group.acceptance_refs = group_tasks
             .iter()
-            .filter(|task| is_business_owner_task(task))
+            .filter(|task| is_business_owner_task(task) || verification_only)
             .flat_map(|task| task.acceptance_refs.iter().cloned())
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -2063,10 +2073,11 @@ fn canonicalize_acceptance_owners(
         return;
     }
 
+    let verification_only = plan_is_verification_only(tasks);
     let detail_acceptance_owners = tasks
         .iter()
         .enumerate()
-        .filter(|(_, task)| is_business_owner_task(task))
+        .filter(|(_, task)| is_business_owner_task(task) || verification_only)
         .flat_map(|(index, task)| {
             task.requirement_detail_refs
                 .iter()
@@ -2111,6 +2122,7 @@ fn choose_acceptance_owner(
     tasks: &[TaskDefinition],
     acceptance: &contracts::AcceptanceCandidate,
 ) -> Option<usize> {
+    let verification_only = plan_is_verification_only(tasks);
     let source_refs = acceptance
         .source_refs
         .iter()
@@ -2124,7 +2136,7 @@ fn choose_acceptance_owner(
     let mut candidates = tasks
         .iter()
         .enumerate()
-        .filter(|(_, task)| is_business_owner_task(task))
+        .filter(|(_, task)| is_business_owner_task(task) || verification_only)
         .map(|(index, task)| {
             let mut score = task_owner_rank(task);
             score += task
@@ -2165,6 +2177,15 @@ fn is_business_owner_task(task: &TaskDefinition) -> bool {
     )
 }
 
+fn plan_is_verification_only(tasks: &[TaskDefinition]) -> bool {
+    // Explicit verification plans own evidence coverage, never implementation.
+    // Mixed plans keep their implementation owners and separate closure tasks.
+    !tasks.is_empty()
+        && tasks
+            .iter()
+            .all(|task| task.task_kind == TaskKind::VerificationIncrement)
+}
+
 fn merge_detail_artifact_refs(
     task_refs: &mut TaskArtifactRefs,
     detail_refs: &contracts::architecture::DetailCoverageArtifactRefs,
@@ -2191,10 +2212,11 @@ fn choose_unique_owner(
     detail: &RequirementDetailItem,
     coverage: &ArchitectureDetailCoverageEntry,
 ) -> Option<usize> {
+    let verification_only = plan_is_verification_only(tasks);
     let mut candidates = tasks
         .iter()
         .enumerate()
-        .filter(|(_, task)| is_business_owner_task(task))
+        .filter(|(_, task)| is_business_owner_task(task) || verification_only)
         .map(|(index, task)| {
             (
                 index,
@@ -2209,7 +2231,7 @@ fn choose_unique_owner(
         return tasks
             .iter()
             .enumerate()
-            .filter(|(_, task)| task_can_own_requirement_detail(task))
+            .filter(|(_, task)| task_can_own_requirement_detail(task) || verification_only)
             .max_by(|left, right| {
                 task_owner_rank(left.1)
                     .cmp(&task_owner_rank(right.1))
@@ -4363,14 +4385,14 @@ fn validate_requirement_detail_assignments(
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].requirementDetailRefs",
-                "Every covered current-phase requirement detail must have exactly one MCP-derived implementation owner.",
+                "Every covered current-phase requirement detail must have exactly one MCP-derived owner: an implementation task, or a verification task in a verification-only plan.",
                 Some(&detail.detail_id),
             ));
         } else if owners.len() != 1 {
             issues.push(issue(
                 "DETAIL_TASK_OWNERSHIP_CONFLICT",
                 "tasks[].requirementDetailRefs",
-                "A requirement detail must be owned by exactly one implementation task; verification and closure tasks must not duplicate the business owner.",
+                "A requirement detail must have exactly one accountable task; verification and closure tasks in mixed plans must not duplicate the implementation owner.",
                 Some(&detail.detail_id),
             ));
         }
@@ -4391,7 +4413,7 @@ fn validate_requirement_detail_assignments(
             issues.push(issue(
                 "DETAIL_TASK_ASSIGNMENT_MISSING",
                 "tasks[].verificationIntents[].requirementDetailRefs",
-                "The owning implementation task must include each covered detail in an assigned verification intent.",
+                "The accountable task must include each covered detail in an assigned verification intent.",
                 Some(&detail.detail_id),
             ));
         }
@@ -6299,7 +6321,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "detailOwnershipRules": {
             "source": "accepted AAC detail coverage, module ownership, interface provider/consumer relations, and semantic proposal kind hints",
             "assignmentRule": "The agent proposes semantic task slices only. Loom assigns every covered detail, module, entity, interface, flow, and state artifact to one canonical implementation owner before creating the final TaskPlan.",
-            "ownerTaskBoundary": "Business requirements belong to implementation owner tasks; verification, runtime closure, and browser closure tasks receive only consumed inputs and derived verification scope.",
+            "ownerTaskBoundary": "In mixed plans, business requirements belong to implementation owner tasks; verification and closure tasks receive consumed inputs and derived verification scope. In an explicit verification-only plan, verification tasks own requirement and acceptance evidence coverage without gaining implementation artifact ownership.",
             "verificationRule": "Loom derives verification intents after ownership assignment; agents do not repeat detail or artifact ids.",
             "acceptNormalization": "loom.taskPlanAcceptFile creates canonical task ids, artifact refs, scope refs, acceptance refs, implementation actions, obligations, and verification intents from accepted contracts and proposal boundaries.",
             "artifactOwnershipNormalization": "No candidate artifact refs are accepted or discarded. The canonical owner projection is created once from AAC ownership facts."
@@ -6579,14 +6601,23 @@ fn normalize_architecture_quality_artifact_refs(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) {
+    let verification_only = plan_is_verification_only(tasks);
     for task in tasks {
-        let task_modules = task
+        let mut task_modules = task
             .write_boundary
             .artifact_refs
             .modules
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+        if verification_only {
+            task_modules.extend(
+                aac.detail_coverage
+                    .iter()
+                    .filter(|coverage| task.requirement_detail_refs.contains(&coverage.detail_id))
+                    .flat_map(|coverage| coverage.artifact_refs.modules.iter().cloned()),
+            );
+        }
         let task_interfaces = task
             .write_boundary
             .artifact_refs
@@ -6664,17 +6695,18 @@ fn normalize_architecture_quality_artifact_refs(
     }
 }
 
-// A small phase can have one implementation task even when its requirement details do not
-// carry module coverage. In that case, the single business owner is the only valid owner for
-// the phase's accepted architecture-quality obligations.
+// A single accountable task also covers phase quality when details lack module
+// coverage. In a verification-only plan it verifies the decisions without
+// acquiring ownership of their implementation modules.
 fn assign_single_owner_architecture_quality_refs(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) {
+    let verification_only = plan_is_verification_only(tasks);
     let owner_indices = tasks
         .iter()
         .enumerate()
-        .filter(|(_, task)| is_business_owner_task(task))
+        .filter(|(_, task)| is_business_owner_task(task) || verification_only)
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let [owner_index] = owner_indices.as_slice() else {
