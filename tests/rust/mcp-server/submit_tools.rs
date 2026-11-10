@@ -741,7 +741,7 @@ fn continue_refreshes_a_technical_baseline_request_when_protocol_fingerprint_is_
     let new_request_ref = technical_baseline_request_ref(&refreshed);
     assert_ne!(new_request_ref, old_request_ref);
     let root = read_request_root_value(fixture.root_str(), &new_request_ref);
-    assert_eq!(root["requestProtocol"]["version"], json!("2.1"));
+    assert_eq!(root["requestProtocol"]["version"], json!("2.2"));
     assert!(root["requestProtocol"]["fingerprint"].is_string());
 }
 
@@ -786,6 +786,24 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         request_ref: baseline_request_ref.clone(),
     })
     .expect("inspect technical baseline request");
+    let write_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: baseline_request_ref.clone(),
+        group_id: "technical_baseline_write_contract".to_string(),
+    })
+    .expect("read technical baseline write contract");
+    for field in ["projectKind", "source"] {
+        assert!(write_contract.fields["outputContract.agentOwnedPaths"]
+            .value
+            .as_array()
+            .expect("agent-owned paths")
+            .contains(&json!(field)));
+        assert!(!write_contract.fields["outputContract.mcpOwnedPaths"]
+            .value
+            .as_array()
+            .expect("MCP-owned paths")
+            .contains(&json!(field)));
+    }
     let repo_evidence_group = inspected_baseline
         .read_groups
         .iter()
@@ -827,6 +845,39 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         .as_array()
         .expect("frameworks")
         .contains(&json!("React")));
+    let mut incomplete_baseline =
+        technical_baseline_candidate_json("existing_project", "policy_auto_accept");
+    for field in ["projectKind", "source"] {
+        incomplete_baseline.as_object_mut().unwrap().remove(field);
+    }
+    write_candidate_target(&fixture, &baseline_request_ref, &incomplete_baseline);
+    let rejected = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(rejected["state"], "repairable_error");
+    for field in ["projectKind", "source"] {
+        assert!(rejected["issues"].as_array().unwrap().iter().any(|issue| {
+            issue["code"] == "WRITE_CONTRACT_FIELD_REQUIRED"
+                && issue["fieldPath"] == format!("candidate.{field}")
+        }));
+    }
+    incomplete_baseline["projectKind"] = json!("invented_project_kind");
+    incomplete_baseline["source"] = json!("invented_source");
+    write_candidate_target(&fixture, &baseline_request_ref, &incomplete_baseline);
+    let rejected = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(rejected["state"], "repairable_error");
+    for field in ["projectKind", "source"] {
+        assert!(rejected["issues"].as_array().unwrap().iter().any(|issue| {
+            issue["code"] == "WRITE_CONTRACT_ENUM_INVALID"
+                && issue["fieldPath"] == format!("candidate.{field}")
+        }));
+    }
     write_candidate_target(
         &fixture,
         &baseline_request_ref,
@@ -2337,11 +2388,18 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         frontend_template_refs["brainstormFrontendExperienceRef"],
         json!(frontend_authority_ref)
     );
-    write_candidate_target(
-        &fixture,
-        &architecture_request_ref,
-        &architecture_section_candidate_json(&fixture, &architecture_request_ref),
-    );
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    for field in [
+        "schemaVersion",
+        "requestId",
+        "deliveryId",
+        "phaseId",
+        "section",
+        "createdAt",
+    ] {
+        candidate.as_object_mut().unwrap().remove(field);
+    }
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
 
     let result = call_submit(
         "loom.architectureSectionSubmitFile",
@@ -6686,12 +6744,72 @@ fn blocked_task_result_routes_to_architecture_repair() {
 
 #[test]
 fn standalone_verification_task_retains_test_evidence_without_source_changes() {
-    let fixture = Fixture::new("standalone-verification-evidence");
-    let architecture_ref = start_existing_project_architecture_flow(&fixture);
+    check_verification_task_evidence(false);
+}
+
+#[test]
+fn task_result_rejects_extra_verification_results_without_losing_evidence() {
+    let fixture = Fixture::new("extra-verification-results");
+    let request_ref = start_planned_task_execution(&fixture);
+    write_task_result_candidate(&fixture, &request_ref);
+    mutate_task_result_candidate(&fixture, &request_ref, |result| {
+        let checks = result["verificationResults"].as_array_mut().unwrap();
+        let mut extra = checks[0].clone();
+        extra["summary"] = json!("Additional independently executed command evidence.");
+        checks.push(extra);
+    });
+    let rejected = call_submit(
+        "loom.recordTaskResultFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(rejected["state"], "repairable_error", "{rejected:#}");
+    assert!(rejected["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| { issue["code"] == "TASK_RESULT_VERIFICATION_RESULTS_EXCEED_INTENTS" }));
+    mutate_task_result_candidate(&fixture, &request_ref, |result| {
+        let checks = result["verificationResults"].as_array_mut().unwrap();
+        let extra = checks.pop().unwrap();
+        assert_eq!(
+            extra["summary"],
+            "Additional independently executed command evidence."
+        );
+        checks[0]["summary"] = extra["summary"].clone();
+    });
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+}
+
+#[test]
+fn verification_only_plan_covers_requirements_without_implementation_ownership() {
+    check_verification_task_evidence(true);
+}
+
+fn check_verification_task_evidence(verification_only: bool) {
+    let fixture = Fixture::new(if verification_only {
+        "verification-only-plan-evidence"
+    } else {
+        "standalone-verification-evidence"
+    });
+    let architecture_ref = if verification_only {
+        start_existing_project_architecture_flow_with_candidate(&fixture, valid_candidate_json())
+    } else {
+        start_existing_project_architecture_flow(&fixture)
+    };
     let planned = complete_architecture_sections_with(
         &fixture,
         &architecture_ref,
-        architecture_section_candidate_without_interfaces_json,
+        if verification_only {
+            architecture_section_candidate_for_verification_json
+        } else {
+            architecture_section_candidate_without_interfaces_json
+        },
     );
     let plan_ref = planned["next"]["requestRef"].as_str().expect("plan ref");
     let delivery_id = request_delivery_id(fixture.root_str(), plan_ref);
@@ -6700,12 +6818,15 @@ fn standalone_verification_task_retains_test_evidence_without_source_changes() {
         .root
         .join(first_taskplan_group_file(&fixture, plan_ref));
     let mut group: Value = serde_json::from_slice(&std::fs::read(&group_path).unwrap()).unwrap();
+    if verification_only {
+        group["tasks"] = json!([]);
+    }
     group["tasks"].as_array_mut().unwrap().push(json!({
         "proposalId": "verify-existing",
         "title": "Verify existing behavior",
         "objective": "Run the existing regression tests and record observed results without modifying source.",
         "taskKindHint": "verification_increment",
-        "dependsOn": ["task-account-001"]
+        "dependsOn": if verification_only { json!([]) } else { json!(["task-account-001"]) }
     }));
     write_json_atomic(&group_path, &group).unwrap();
     let mut action = call_submit("loom.taskPlanAcceptFile", plan_ref, fixture.root_str());
@@ -6720,6 +6841,36 @@ fn standalone_verification_task_retains_test_evidence_without_source_changes() {
         .find(|task| task["taskId"] == "verify-existing")
         .expect("verification task");
     assert_eq!(verification["taskKind"], "verification_increment");
+    if verification_only {
+        assert_eq!(plan["tasks"].as_array().unwrap().len(), 1);
+        for field in [
+            "modules",
+            "entities",
+            "interfaces",
+            "userFlows",
+            "stateMachines",
+        ] {
+            assert!(verification["writeBoundary"]["artifactRefs"][field]
+                .as_array()
+                .is_none_or(Vec::is_empty));
+        }
+        assert!(verification["implementationObligations"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+        assert!(!verification["acceptanceRefs"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+        assert!(!verification["requirementDetailRefs"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+    } else {
+        assert!(verification["acceptanceRefs"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+        assert!(verification["requirementDetailRefs"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+    }
     assert!(
         !verification["verificationIntents"]
             .as_array()
@@ -6767,10 +6918,16 @@ fn standalone_verification_task_retains_test_evidence_without_source_changes() {
             &request_ref,
             fixture.root_str(),
         );
-        assert_ne!(
-            action["next"]["artifactKind"], "task_result_repair",
-            "{action:#}"
-        );
+        if action["next"]["artifactKind"] == "task_result_repair" {
+            let repair = read_request_root_value(
+                fixture.root_str(),
+                action["next"]["requestRef"].as_str().unwrap(),
+            );
+            panic!(
+                "unexpected verification repair: {}",
+                repair["repairContract"]
+            );
+        }
         if is_verification {
             let result_ref =
                 latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
@@ -6786,6 +6943,15 @@ fn standalone_verification_task_retains_test_evidence_without_source_changes() {
                 result["verificationResults"][0]["provenance"]["exitCode"],
                 0
             );
+            if verification_only {
+                for detail in result["requirementDetailEvidence"].as_array().unwrap() {
+                    assert_eq!(detail["status"], "satisfied");
+                    assert!(detail["evidenceRefs"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("tests/test_existing.py::test_existing")));
+                }
+            }
             verified = true;
         }
     }
@@ -13362,6 +13528,27 @@ fn architecture_section_candidate_without_interfaces_json(
         "coverage" => {
             candidate["content"]["architectureQuality"]["risks"][0]["ownerArtifactRefs"]
                 ["interfaces"] = json!([]);
+        }
+        _ => {}
+    }
+    candidate
+}
+
+fn architecture_section_candidate_for_verification_json(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> Value {
+    let mut candidate =
+        architecture_section_candidate_without_interfaces_json(fixture, request_ref);
+    match candidate["section"].as_str().unwrap_or_default() {
+        "frontend_experience" => {
+            candidate["content"]["frontendExperience"] = json!({"required": false});
+        }
+        "runtime_delivery" => {
+            candidate["content"]["runtimeDelivery"] = json!({
+                "status": "not_applicable",
+                "reason": "Verification runs existing local tests without a runtime preview."
+            });
         }
         _ => {}
     }

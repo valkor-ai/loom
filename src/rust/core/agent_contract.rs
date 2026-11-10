@@ -857,7 +857,9 @@ fn mcp_owned_paths_for_artifact(artifact_kind: &str) -> &'static [&'static str] 
             "nextAction.findingRefs",
             "nextAction.targetPhaseId",
         ],
-        "technical_baseline_candidate" => &["projectKind", "source"],
+        // Baseline candidates declare the project classification and decision
+        // source; acceptance persists these values rather than deriving them.
+        "technical_baseline_candidate" => &[],
         "deploy_execution_repair_result" => &["schemaVersion", "repairId", "deploymentFailureRef"],
         _ => &[],
     }
@@ -1086,7 +1088,9 @@ fn validate_contract_node(
     ) {
         if let Some(required) = contract.get("required").and_then(Value::as_array) {
             for field in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(field) {
+                if !object.contains_key(field)
+                    && !is_mcp_owned_path(&format!("{path}.{field}"), mcp_owned_paths)
+                {
                     issues.push(RepairIssue {
                         code: "WRITE_CONTRACT_FIELD_REQUIRED".to_string(),
                         message: format!(
@@ -1609,6 +1613,29 @@ fn canonical_json(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_mcp_fields_are_derived_after_agent_validation() {
+        let mut contract = json!({
+            "artifactKind": "architecture_section_candidate",
+            "schemaShape": {
+                "type": "object",
+                "required": ["section", "content"],
+                "properties": {
+                    "section": {"type": "string"},
+                    "content": {"type": "object", "additionalProperties": true}
+                }
+            }
+        });
+        finalize_output_contract(&mut contract, &BTreeMap::new());
+        assert!(
+            validate_agent_write_contract(&contract, "candidate", &json!({"content": {}}))
+                .is_empty()
+        );
+        let issues = validate_agent_write_contract(&contract, "candidate", &json!({}));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].field_path.as_deref(), Some("candidate.content"));
+    }
 
     #[test]
     fn grouped_contract_exposes_optional_proposals_and_target_field_ownership() {

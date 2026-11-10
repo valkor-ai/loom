@@ -9,6 +9,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(extend("enum" = ["new_project", "greenfield", "existing_project", "unknown"]))]
 pub enum ProjectKind {
     #[serde(rename = "new_project", alias = "greenfield")]
     NewProject,
@@ -29,6 +30,11 @@ pub enum TechnicalBaselineStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(extend("enum" = [
+    "user_specified", "user_confirmed", "detected_from_repo",
+    "agent_inferred_from_repo_signals", "agent_recommended_for_new_project",
+    "agent_recommended_for_greenfield"
+]))]
 pub enum TechnicalBaselineSource {
     UserSpecified,
     UserConfirmed,
