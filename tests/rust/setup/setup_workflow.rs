@@ -559,6 +559,35 @@ fn install_projects_shared_references_to_agent_read_paths() {
             .exists());
         assert!(root.join("skills/threejs/UPSTREAM_LICENSE").exists());
         assert!(root.join("skills/project-architecture/SKILL.md").exists());
+        for path in [
+            "SKILL.md",
+            "references/data-migration.md",
+            "references/consumer-compatibility.md",
+            "references/rollout-and-recovery.md",
+            "templates/verification-matrix.md",
+        ] {
+            assert!(
+                root.join("skills/migration-verification")
+                    .join(path)
+                    .is_file(),
+                "{path}"
+            );
+        }
+        for path in [
+            "SKILL.md",
+            "references/scope-and-coverage.md",
+            "references/access-control.md",
+            "references/data-lifecycle.md",
+            "references/release-integrity.md",
+            "references/agent-permissions.md",
+            "references/evidence-and-review.md",
+            "templates/report.md",
+        ] {
+            assert!(
+                root.join("skills/security-review").join(path).is_file(),
+                "{path}"
+            );
+        }
         assert!(root
             .join("skills/project-architecture/references/pr-lens.md")
             .exists());
@@ -2799,6 +2828,19 @@ impl Fixture {
         for path in [
             "project-architecture/SKILL.md",
             "project-architecture/references/pr-lens.md",
+            "migration-verification/SKILL.md",
+            "migration-verification/references/data-migration.md",
+            "migration-verification/references/consumer-compatibility.md",
+            "migration-verification/references/rollout-and-recovery.md",
+            "migration-verification/templates/verification-matrix.md",
+            "security-review/SKILL.md",
+            "security-review/references/scope-and-coverage.md",
+            "security-review/references/access-control.md",
+            "security-review/references/data-lifecycle.md",
+            "security-review/references/release-integrity.md",
+            "security-review/references/agent-permissions.md",
+            "security-review/references/evidence-and-review.md",
+            "security-review/templates/report.md",
             "godot/SKILL.md",
             "godot/godot-api/SKILL.md",
             "godot/godot-e2e/SKILL.md",
