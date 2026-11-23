@@ -49,6 +49,15 @@ Check state/time/random/order/global environment cleanup and parallel safety. Ar
 
 For regression fixes, evidence should reproduce the old failure or assert the exact invariant that was broken.
 
+## Regression Sensitivity Review
+
+- Check why the regression failed before the fix. An assertion at the affected boundary is evidence; a missing dependency, setup exception, or unrelated timeout is not.
+- Where a safe pre-fix comparison was executed, verify the same test and relevant environment were used on both versions. Otherwise inspect whether the assertion distinguishes the old behavior and record that the pre-fix run was not performed. Do not require destructive checkout changes to obtain proof.
+- Confirm expected results come from the requirement, a trusted fixture, or an independent oracle, not the same production calculation. A test that repeats the bug in its expected-value helper can stay green on both versions.
+- Inspect whether mocks intercept the changed branch or replace the provider behavior being claimed. Prefer an affected-boundary check over extra tests that only verify calls to mocks.
+- For timing or state-dependent failures, look for controlled synchronization, reproducible state, and cleanup. Passing after arbitrary sleeps or retries does not establish that the race or state leak was repaired.
+- Match follow-up checks to the blast radius. A local parser fix may need an input matrix; a shared authorization or persistence fix needs affected integration paths. Neither test count nor a blanket full-suite rule establishes sensitivity.
+
 ## Layer Selection
 
 Use unit tests for local logic, integration tests for boundary contracts, provider/runtime checks for infrastructure semantics, and browser/device tests for rendering/interaction/platform behavior.
